@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "repo-pulse",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    "NODE_ENV": "production",
+    "LOG_LEVEL": "info",
+    "WEBHOOK_MAX_BODY_BYTES": "1048576",
+    "DELIVERY_MAX_ATTEMPTS": "5",
+    "DELIVERY_RETRY_BASE_DELAY_MS": "30000",
+    "DELIVERY_RETRY_MAX_DELAY_MS": "900000",
+    "DELIVERY_SUCCEEDED_RETENTION_DAYS": "14",
+    "DELIVERY_PROCESSING_LEASE_MS": "300000",
+    "DELIVERY_DRAIN_BATCH_SIZE": "25"
+  },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "repo-pulse",
+      "database_id": "4cc40b77-5edd-42d1-b119-a2ab3dd6ddf5",
+      // `npm exec wrangler d1 create repo-pulse` before remote migrations or deployment.
+      "migrations_dir": "migrations"
+    }
+  ]
+}
