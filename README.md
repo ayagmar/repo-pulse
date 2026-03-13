@@ -1,10 +1,6 @@
 # Repo Pulse
 
 <div align="center">
-  <img src="docs/images/repo-pulse.png" alt="Repo Pulse overview" width="900" />
-</div>
-
-<div align="center">
 
 [![CI](https://github.com/ayagmar/repo-pulse/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ayagmar/repo-pulse/actions/workflows/ci.yml)
 [![Codecov](https://codecov.io/gh/ayagmar/repo-pulse/branch/master/graph/badge.svg)](https://codecov.io/gh/ayagmar/repo-pulse)
@@ -20,6 +16,10 @@
 </div>
 
 Repo Pulse is a Cloudflare Workers service for GitHub repository activity. It verifies raw webhook signatures, normalizes supported events into a strict internal model, persists accepted deliveries in D1, deduplicates on GitHub delivery ID, and dispatches Discord notifications asynchronously.
+
+<div align="center">
+  <img src="docs/images/repo-pulse.png" alt="Repo Pulse overview" width="760" />
+</div>
 
 ## Why it exists
 
