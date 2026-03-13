@@ -1,0 +1,52 @@
+name: Code Quality
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Weekly on Monday
+  workflow_dispatch:
+
+jobs:
+  knip:
+    name: Knip Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Knip with annotations
+        run: npm run knip -- --reporter json > knip-report.json || true
+
+      - name: Upload Knip report
+        uses: actions/upload-artifact@v4
+        with:
+          name: knip-report
+          path: knip-report.json
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run production dependency audit
+        run: npm run audit:prod -- --audit-level=moderate
+
+      - name: Run full dependency audit
+        run: npm run audit:full -- --audit-level=moderate

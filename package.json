@@ -1,0 +1,65 @@
+{
+  "name": "repo-pulse",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers webhook service for GitHub repository events",
+  "packageManager": "npm@11.6.2",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run",
+    "typegen": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply repo-pulse --local",
+    "db:migrate:remote": "wrangler d1 migrations apply repo-pulse --remote",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "check": "biome check --apply .",
+    "check:ci": "biome check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "knip": "knip",
+    "knip:fix": "knip --fix",
+    "audit:prod": "npm audit --omit=dev",
+    "audit:full": "npm audit",
+    "clean": "rm -rf dist coverage .wrangler",
+    "prepare": "husky || true",
+    "verify": "run-s typegen typecheck lint check:ci test knip build",
+    "verify:ci": "run-s typegen typecheck lint check:ci test:coverage knip build"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@commitlint/cli": "^19.5.0",
+    "@commitlint/config-conventional": "^19.5.0",
+    "@eslint/js": "^9.39.4",
+    "@types/better-sqlite3": "7.6.13",
+    "@vitest/coverage-v8": "^4.0.18",
+    "better-sqlite3": "12.6.2",
+    "eslint": "^9.11.0",
+    "globals": "^15.9.0",
+    "husky": "^9.1.0",
+    "knip": "^5.30.0",
+    "lint-staged": "^15.2.0",
+    "npm-run-all2": "^6.2.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.7.0",
+    "vitest": "^4.0.18",
+    "wrangler": "4.71.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": ["biome check --apply --no-errors-on-unmatched", "eslint --fix"],
+    "*.{json,md,yml,yaml}": ["biome format --write --no-errors-on-unmatched"]
+  },
+  "commitlint": {
+    "extends": ["@commitlint/config-conventional"]
+  }
+}

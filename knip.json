@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "project": ["src/**/*.ts"],
+  "rules": {
+    "classMembers": "warn",
+    "enumMembers": "error",
+    "exports": "error",
+    "nsExports": "error",
+    "nsTypes": "error",
+    "types": "error",
+    "duplicates": "error"
+  }
+}
