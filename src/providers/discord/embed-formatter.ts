@@ -2,6 +2,8 @@ import type {
   ForkEvent,
   IssueEvent,
   PullRequestEvent,
+  PushEvent,
+  ReleaseEvent,
   RepoEvent,
   StarEvent,
 } from '../../core/models/repo-event.js';
@@ -41,161 +43,204 @@ interface DiscordWebhookPayload {
   embeds: DiscordEmbed[];
 }
 
-// Color palette for different event types
-const COLORS: Record<'star' | 'issue' | 'pullRequest' | 'fork' | 'merged' | 'closed', number> = {
-  star: 0xffd700, // Gold
-  issue: 0x28a745, // Green
-  pullRequest: 0x6f42c1, // Purple
-  fork: 0x0366d6, // Blue
-  merged: 0x6f42c1, // Purple
-  closed: 0xcb2431, // Red
+// Discord embed limits: https://discord.com/developers/docs/resources/message#embed-object-embed-limits
+const TITLE_LIMIT = 256;
+const FIELD_VALUE_LIMIT = 1024;
+const EXCERPT_LIMIT = 300;
+const COMMIT_SUBJECT_LIMIT = 72;
+const LISTED_COMMITS = 5;
+
+// GitHub's state colors, so a message reads like the badge it links to.
+const COLORS = {
+  open: 0x2da44e,
+  draft: 0x6e7781,
+  merged: 0x8250df,
+  closed: 0xcf222e,
+  star: 0xe3b341,
+  fork: 0x0969da,
+  push: 0x0969da,
+  forcePush: 0xbc4c00,
+  release: 0x2da44e,
+  prerelease: 0xbf8700,
 } as const;
+
+const GITHUB_ICON_URL = 'https://github.githubassets.com/favicons/favicon.png';
 
 function truncate(str: string, maxLength: number): string {
   if (str.length <= maxLength) return str;
   return `${str.slice(0, maxLength - 3)}...`;
 }
 
-function formatRepoName(event: RepoEvent): string {
+function plural(count: number, noun: string): string {
+  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * A short, readable excerpt of a Markdown body. Issue and pull-request
+ * templates are mostly HTML comments, which Discord would show verbatim.
+ */
+function excerpt(body: string | null, maxLength = EXCERPT_LIMIT): string | null {
+  if (body === null) return null;
+  const text = body
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text === '' ? null : truncate(text, maxLength);
+}
+
+function repoLink(event: RepoEvent): string {
   return `[${event.repository.fullName}](${event.repository.url})`;
 }
 
-function createBaseEmbed(event: RepoEvent): Pick<DiscordEmbed, 'timestamp' | 'footer' | 'author'> {
+function senderLink(event: RepoEvent): string {
+  return `[${event.sender.login}](${event.sender.url})`;
+}
+
+function createEmbed(
+  event: RepoEvent,
+  embed: Omit<DiscordEmbed, 'timestamp' | 'footer' | 'author'>
+): DiscordWebhookPayload {
   return {
-    timestamp: event.timestamp.toISOString(),
-    footer: {
-      text: event.repository.fullName,
-    },
-    author: {
-      name: event.sender.login,
-      url: event.sender.url,
-      icon_url: event.sender.avatarUrl,
-    },
+    embeds: [
+      {
+        ...embed,
+        title: truncate(embed.title, TITLE_LIMIT),
+        timestamp: event.timestamp.toISOString(),
+        footer: { text: event.repository.fullName, icon_url: GITHUB_ICON_URL },
+        author: {
+          name: event.sender.login,
+          url: event.sender.url,
+          icon_url: event.sender.avatarUrl,
+        },
+      },
+    ],
   };
 }
 
 function formatStarEvent(event: StarEvent): DiscordWebhookPayload {
-  const isStarRemoved = event.type === REPO_EVENT_TYPES.STAR_DELETED;
-  const embed: DiscordEmbed = {
-    ...createBaseEmbed(event),
-    title: isStarRemoved ? '💫 Star Removed' : '⭐ New Star',
-    description: `${formatRepoName(event)} now has **${String(event.star.count)}** stars!`,
+  const removed = event.type === REPO_EVENT_TYPES.STAR_DELETED;
+  return createEmbed(event, {
+    title: removed ? '💫 Star removed' : '⭐ New star',
+    url: event.repository.url,
+    description: `${senderLink(event)} ${removed ? 'unstarred' : 'starred'} ${repoLink(event)}\n⭐ **${String(event.star.count)}** total`,
     color: COLORS.star,
-    thumbnail: {
-      url: 'https://github.githubassets.com/images/icons/emoji/unicode/2b50.png',
-    },
-  };
-
-  return { embeds: [embed] };
+  });
 }
 
 function formatIssueEvent(event: IssueEvent): DiscordWebhookPayload {
   const { issue } = event;
+  const [verb, color] =
+    event.type === REPO_EVENT_TYPES.ISSUE_CLOSED
+      ? ['🔒 Closed', COLORS.merged]
+      : event.type === REPO_EVENT_TYPES.ISSUE_REOPENED
+        ? ['🔓 Reopened', COLORS.open]
+        : ['🐛 Opened', COLORS.open];
 
-  let title = '🐛 New Issue';
-  let color = COLORS.issue;
-
-  if (event.type === REPO_EVENT_TYPES.ISSUE_CLOSED) {
-    title = '🔒 Issue Closed';
-    color = COLORS.closed;
-  } else if (event.type === REPO_EVENT_TYPES.ISSUE_REOPENED) {
-    title = '🔓 Issue Reopened';
+  const fields: DiscordEmbed['fields'] = [];
+  if (issue.labels.length > 0) {
+    fields.push({
+      name: 'Labels',
+      value: truncate(issue.labels.map((label) => `\`${label}\``).join(' '), FIELD_VALUE_LIMIT),
+      inline: true,
+    });
   }
 
-  const embed: DiscordEmbed = {
-    ...createBaseEmbed(event),
-    title: `${title} #${String(issue.number)}`,
-    description: `**${issue.title}**\n\n${truncate(issue.body ?? 'No description provided.', 200)}`,
+  const description = event.type === REPO_EVENT_TYPES.ISSUE_OPENED ? excerpt(issue.body) : null;
+  return createEmbed(event, {
+    title: `${verb} issue #${String(issue.number)}: ${issue.title}`,
     url: issue.url,
+    ...(description !== null ? { description } : {}),
     color,
-    fields: [
-      {
-        name: 'Labels',
-        value: issue.labels.length > 0 ? truncate(issue.labels.join(', '), 1024) : 'None',
-        inline: true,
-      },
-      {
-        name: 'State',
-        value: issue.state,
-        inline: true,
-      },
-    ],
-  };
-
-  return { embeds: [embed] };
+    ...(fields.length > 0 ? { fields } : {}),
+  });
 }
 
 function formatPullRequestEvent(event: PullRequestEvent): DiscordWebhookPayload {
   const { pullRequest: pr } = event;
+  const [verb, color] =
+    event.type === REPO_EVENT_TYPES.PULL_REQUEST_MERGED
+      ? ['🔀 Merged', COLORS.merged]
+      : event.type === REPO_EVENT_TYPES.PULL_REQUEST_CLOSED
+        ? ['❌ Closed', COLORS.closed]
+        : event.type === REPO_EVENT_TYPES.PULL_REQUEST_REOPENED
+          ? ['🔄 Reopened', COLORS.open]
+          : pr.draft
+            ? ['📝 Opened draft', COLORS.draft]
+            : ['📥 Opened', COLORS.open];
 
-  let title = '📥 New Pull Request';
-  let color = COLORS.pullRequest;
-
-  if (event.type === REPO_EVENT_TYPES.PULL_REQUEST_MERGED) {
-    title = '🔀 Pull Request Merged';
-    color = COLORS.merged;
-  } else if (event.type === REPO_EVENT_TYPES.PULL_REQUEST_CLOSED) {
-    title = '❌ Pull Request Closed';
-    color = COLORS.closed;
-  } else if (event.type === REPO_EVENT_TYPES.PULL_REQUEST_REOPENED) {
-    title = '🔄 Pull Request Reopened';
-  }
-
-  const fields: DiscordEmbed['fields'] = [
+  const fields: NonNullable<DiscordEmbed['fields']> = [
     {
       name: 'Branch',
-      value: truncate(`${pr.headBranch} → ${pr.baseBranch}`, 1024),
+      value: truncate(`\`${pr.headBranch}\` → \`${pr.baseBranch}\``, FIELD_VALUE_LIMIT),
       inline: true,
     },
   ];
-
-  if (pr.draft) {
-    fields.push({
-      name: 'Status',
-      value: 'Draft',
-      inline: true,
-    });
-  }
-
   if (pr.additions !== undefined && pr.deletions !== undefined) {
+    const files = pr.changedFiles === undefined ? '' : ` in ${plural(pr.changedFiles, 'file')}`;
     fields.push({
       name: 'Changes',
-      value: `+${String(pr.additions)} -${String(pr.deletions)}`,
+      value: `+${String(pr.additions)} −${String(pr.deletions)}${files}`,
       inline: true,
     });
   }
 
-  const embed: DiscordEmbed = {
-    ...createBaseEmbed(event),
-    title: `${title} #${String(pr.number)}`,
-    description: `**${pr.title}**${pr.draft ? ' (Draft)' : ''}\n\n${truncate(pr.body ?? 'No description provided.', 200)}`,
+  const description = event.type === REPO_EVENT_TYPES.PULL_REQUEST_OPENED ? excerpt(pr.body) : null;
+  return createEmbed(event, {
+    title: `${verb} PR #${String(pr.number)}: ${pr.title}`,
     url: pr.url,
+    ...(description !== null ? { description } : {}),
     color,
     fields,
-  };
-
-  return { embeds: [embed] };
+  });
 }
 
 function formatForkEvent(event: ForkEvent): DiscordWebhookPayload {
   const { fork } = event;
-
-  const embed: DiscordEmbed = {
-    ...createBaseEmbed(event),
-    title: '🍴 New Fork',
-    description: `**${event.sender.login}** forked ${formatRepoName(event)} to **[${fork.fullName}](${fork.url})**`,
-    color: COLORS.fork,
+  return createEmbed(event, {
+    title: '🍴 New fork',
     url: fork.url,
-    fields: [
-      {
-        name: 'Default Branch',
-        value: fork.defaultBranch,
-        inline: true,
-      },
-    ],
-  };
+    description: `${senderLink(event)} forked ${repoLink(event)} → [${fork.fullName}](${fork.url})\n🍴 **${String(event.repository.forks)}** total`,
+    color: COLORS.fork,
+  });
+}
 
-  return { embeds: [embed] };
+function formatPushEvent(event: PushEvent): DiscordWebhookPayload {
+  const { push } = event;
+  const count = push.commits.length;
+  const listed = push.commits.slice(-LISTED_COMMITS);
+  const lines = listed.map(
+    (commit) =>
+      `[\`${commit.id.slice(0, 7)}\`](${commit.url}) ${truncate(commit.message, COMMIT_SUBJECT_LIMIT)} — ${commit.author}`
+  );
+  if (count > listed.length) {
+    lines.unshift(`_…and ${plural(count - listed.length, 'earlier commit')}_`);
+  }
+
+  return createEmbed(event, {
+    title: push.forced
+      ? `⚠️ Force-pushed ${plural(count, 'commit')} to ${push.branch}`
+      : `📌 ${plural(count, 'new commit')} on ${push.branch}`,
+    url: push.compareUrl,
+    description: lines.join('\n'),
+    color: push.forced ? COLORS.forcePush : COLORS.push,
+  });
+}
+
+function formatReleaseEvent(event: ReleaseEvent): DiscordWebhookPayload {
+  const { release } = event;
+  const notes = excerpt(release.body, 600);
+  const name = release.name ?? release.tagName;
+
+  return createEmbed(event, {
+    title: `${release.prerelease ? '🧪 Pre-release' : '🚀 Released'} ${name}`,
+    url: release.url,
+    ...(notes !== null ? { description: notes } : {}),
+    color: release.prerelease ? COLORS.prerelease : COLORS.release,
+    ...(name !== release.tagName
+      ? { fields: [{ name: 'Tag', value: `\`${release.tagName}\``, inline: true }] }
+      : {}),
+  });
 }
 
 /**
@@ -220,5 +265,11 @@ export function formatDiscordEmbed(event: RepoEvent): DiscordWebhookPayload {
 
     case REPO_EVENT_TYPES.FORK_CREATED:
       return formatForkEvent(event);
+
+    case REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH:
+      return formatPushEvent(event);
+
+    case REPO_EVENT_TYPES.RELEASE_PUBLISHED:
+      return formatReleaseEvent(event);
   }
 }

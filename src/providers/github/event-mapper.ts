@@ -9,6 +9,8 @@ import {
   mapPullRequestMerged,
   mapPullRequestOpened,
   mapPullRequestReopened,
+  mapPush,
+  mapReleasePublished,
   mapStarCreated,
   mapStarDeleted,
 } from './mappers/index.js';
@@ -88,6 +90,21 @@ export function mapGitHubEvent(
           throw new EventMappingError('Missing fork data');
         }
         return mapForkCreated(repository, sender, payload.forkee);
+      }
+
+      case 'push':
+        return mapPush(repository, sender, payload);
+
+      case 'release': {
+        // `published` covers releases and pre-releases; `released`/`prereleased`
+        // would announce the same release twice.
+        if (action !== 'published') {
+          return null;
+        }
+        if (!payload.release) {
+          throw new EventMappingError('Missing release data');
+        }
+        return mapReleasePublished(repository, sender, payload.release);
       }
 
       default:

@@ -14,6 +14,7 @@ export interface GitHubRepository {
   stargazers_count: number;
   forks_count: number;
   language: string | null;
+  default_branch?: string;
 }
 
 export interface GitHubUser {
@@ -21,6 +22,7 @@ export interface GitHubUser {
   login: string;
   avatar_url: string;
   html_url: string;
+  type?: string;
 }
 
 export interface GitHubIssue {
@@ -57,6 +59,25 @@ export interface GitHubFork {
   default_branch: string;
 }
 
+export interface GitHubCommit {
+  id: string;
+  message: string;
+  url: string;
+  distinct: boolean;
+  author: {
+    name: string;
+    username?: string;
+  };
+}
+
+export interface GitHubRelease {
+  tag_name: string;
+  name: string | null;
+  html_url: string;
+  body: string | null;
+  prerelease: boolean;
+}
+
 export interface GitHubWebhookPayload {
   action?: string;
   repository: GitHubRepository;
@@ -69,4 +90,12 @@ export interface GitHubWebhookPayload {
   issue?: GitHubIssue;
   pull_request?: GitHubPullRequest;
   forkee?: GitHubFork;
+  release?: GitHubRelease;
+
+  // push
+  ref?: string;
+  deleted?: boolean;
+  forced?: boolean;
+  compare?: string;
+  commits?: GitHubCommit[];
 }

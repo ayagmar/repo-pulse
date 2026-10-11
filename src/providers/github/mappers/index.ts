@@ -10,4 +10,6 @@ export {
   mapPullRequestOpened,
   mapPullRequestReopened,
 } from './pull-request.js';
+export { mapPush } from './push.js';
+export { mapReleasePublished } from './release.js';
 export { mapStarCreated, mapStarDeleted } from './star.js';
