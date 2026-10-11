@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -6,18 +5,19 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
-    exclude: ['node_modules', 'dist', 'coverage'],
+    exclude: ['node_modules', 'dist', 'coverage', 'src/__tests__/workers/**'],
     coverage: {
       provider: 'v8',
+      include: ['src/**/*.ts'],
       reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
       exclude: [
-        'node_modules/',
-        'dist/',
+        'node_modules/**',
+        'dist/**',
         '**/*.d.ts',
         '**/*.config.*',
-        'src/**/__tests__/',
-        'src/**/__mocks__/',
+        'src/**/__tests__/**',
+        'src/**/__mocks__/**',
       ],
       thresholds: {
         lines: 70,
@@ -31,15 +31,5 @@ export default defineConfig({
     setupFiles: ['./src/__tests__/setup.ts'],
     testTimeout: 10000,
     hookTimeout: 10000,
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-      '@core': path.resolve(__dirname, './src/core'),
-      '@providers': path.resolve(__dirname, './src/providers'),
-      '@config': path.resolve(__dirname, './src/config'),
-      '@http': path.resolve(__dirname, './src/http'),
-      '@use-cases': path.resolve(__dirname, './src/use-cases'),
-    },
   },
 });

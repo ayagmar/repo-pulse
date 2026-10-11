@@ -2,8 +2,8 @@
 
 ## Prerequisites
 
-- Node.js 22+
-- npm
+- Node 24 LTS recommended; Node 22.22.2+ is also supported (see `package.json` engines)
+- npm 12.2.0 recommended
 - Cloudflare account with Wrangler access for remote migrations or deployment
 
 ## Local Development
@@ -35,7 +35,7 @@ npm run dev
 
 ## Production Deployment
 
-1. Ensure [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc) points at the correct D1 database for the Cloudflare account you are deploying to. If you are deploying this repo to a different account than the current one, replace the committed `database_id` first.
+1. Ensure [`wrangler.jsonc`](../wrangler.jsonc) points at the correct D1 database for the Cloudflare account you are deploying to. If you are deploying this repo to a different account than the current one, replace the committed `database_id` first.
 
 2. Set secrets:
 
@@ -71,13 +71,14 @@ Use:
 
 ## Runtime Configuration
 
-Worker runtime baseline in [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc):
+Worker runtime baseline in [`wrangler.jsonc`](../wrangler.jsonc):
 
-- Current `compatibility_date`
+- Preserved `compatibility_date: "2026-03-10"`
 - `compatibility_flags: ["nodejs_compat"]`
-- Workers observability logs with `head_sampling_rate: 1`
+- Workers logs at 100% and traces at 5% sampling
+- Uploaded source maps for [on-demand production profiling](profiling.md)
 
-Values configured in [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc):
+Values configured in [`wrangler.jsonc`](../wrangler.jsonc):
 
 - `NODE_ENV`
 - `LOG_LEVEL`
@@ -98,9 +99,14 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 ## Operational Behavior
 
 - Accepted supported deliveries are persisted before `POST /webhook` returns `202`.
-- Duplicate delivery IDs return `200` and do not resend notifications.
+- Duplicate retained delivery IDs return `200` without enqueueing new work.
+- Provider sends remain at-least-once: interruption between sending and persisting success can repeat a send.
+- Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
+- Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.
+- Discord requests time out after ten seconds and are classified as transient failures.
 - Immediate processing is kicked off with `ctx.waitUntil()`.
-- Durable retries and stale lease recovery are driven by D1 state plus the cron trigger in [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc).
+- Durable retries and stale lease recovery are driven by D1 state plus the cron trigger in [`wrangler.jsonc`](../wrangler.jsonc).
+- If persisting an outcome fails, processing remains leased and cron recovers it instead of making it permanently failed.
 - Retention pruning runs on the cron-driven drain path instead of every accepted webhook.
 
 ## Admin Endpoints
@@ -128,6 +134,7 @@ npm run typecheck
 npm run lint
 npm run check:ci
 npm run test
+npm run test:workers
 npm run knip
 npm run build
 ```

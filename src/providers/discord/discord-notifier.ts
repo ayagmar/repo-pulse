@@ -20,7 +20,7 @@ function isDiscordWebhookUrl(value: string): boolean {
 
 function parseRetryDelayMs(headers: Headers): number | undefined {
   const retryAfterHeader = headers.get('retry-after');
-  if (retryAfterHeader) {
+  if (retryAfterHeader !== null && retryAfterHeader !== '') {
     const numericValue = Number.parseFloat(retryAfterHeader);
     if (Number.isFinite(numericValue) && numericValue >= 0) {
       return Math.ceil(numericValue * 1000);
@@ -33,7 +33,7 @@ function parseRetryDelayMs(headers: Headers): number | undefined {
   }
 
   const resetAfterHeader = headers.get('x-ratelimit-reset-after');
-  if (!resetAfterHeader) {
+  if (resetAfterHeader === null || resetAfterHeader === '') {
     return undefined;
   }
 
@@ -60,10 +60,10 @@ class DiscordNotifier implements Notifier {
   async notify(event: RepoEvent): Promise<NotificationResult> {
     const payload = formatDiscordEmbed(event);
 
-    if (this.cfg.username) {
+    if (this.cfg.username !== undefined && this.cfg.username !== '') {
       payload.username = this.cfg.username;
     }
-    if (this.cfg.avatarUrl) {
+    if (this.cfg.avatarUrl !== undefined && this.cfg.avatarUrl !== '') {
       payload.avatar_url = this.cfg.avatarUrl;
     }
 
@@ -71,6 +71,7 @@ class DiscordNotifier implements Notifier {
     try {
       response = await fetch(this.cfg.webhookUrl, {
         method: 'POST',
+        signal: AbortSignal.timeout(10_000),
         headers: {
           'Content-Type': 'application/json',
         },
@@ -94,7 +95,7 @@ class DiscordNotifier implements Notifier {
     }
 
     const errorText = await response.text().catch(() => 'Unknown error');
-    const error = `Discord API error: ${response.status} ${errorText}`;
+    const error = `Discord API error: ${String(response.status)} ${errorText}`;
 
     if (response.status === 429 || response.status >= 500) {
       const retryAfterMs = parseRetryDelayMs(response.headers);
@@ -120,7 +121,7 @@ class DiscordNotifier implements Notifier {
  * Factory function to create a Discord notifier from environment config
  */
 export function createDiscordNotifier(webhookUrl: string | undefined): DiscordNotifier | null {
-  if (!webhookUrl) {
+  if (webhookUrl === undefined || webhookUrl === '') {
     return null;
   }
 

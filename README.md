@@ -5,7 +5,7 @@
 [![CI](https://github.com/ayagmar/repo-pulse/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ayagmar/repo-pulse/actions/workflows/ci.yml)
 [![Codecov](https://codecov.io/gh/ayagmar/repo-pulse/branch/master/graph/badge.svg)](https://codecov.io/gh/ayagmar/repo-pulse)
 [![License](https://img.shields.io/github/license/ayagmar/repo-pulse)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D22-111827?logo=node.js&logoColor=white)](./package.json)
+[![Node](https://img.shields.io/badge/node-24%20LTS-111827?logo=node.js&logoColor=white)](./package.json)
 [![Cloudflare Workers](https://img.shields.io/badge/runtime-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![Hono](https://img.shields.io/badge/framework-Hono-0F172A)](https://hono.dev/)
 [![Storage](https://img.shields.io/badge/storage-D1-4F46E5)](https://developers.cloudflare.com/d1/)
@@ -39,7 +39,7 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 ```
 
 <div align="center">
-  <img src="docs/images/readme-flow.svg" alt="Repo Pulse request and retry flow" width="100%" />
+  <img src="docs/images/repo-pulse.png" alt="Repo Pulse webhook and delivery architecture" width="100%" />
 </div>
 
 ## UI preview
@@ -149,10 +149,14 @@ Related docs:
 - [System design](docs/system-design.md)
 - [Setup guide](SETUP.md)
 - [Operations guide](docs/operations.md)
+- [Production CPU and heap profiling](docs/profiling.md)
 
 ## Quick start
 
 ### 1. Install
+
+Use Node 24 LTS (`nvm use`) and npm 12.2.0. Node 22.22.2+ is also supported;
+see `engines` in `package.json` for the exact ranges.
 
 ```bash
 npm ci
@@ -228,6 +232,7 @@ npm run typecheck
 npm run lint
 npm run check:ci
 npm run test
+npm run test:workers
 npm run knip
 npm run build
 ```
@@ -235,8 +240,8 @@ npm run build
 ## Guarantees
 
 - supported deliveries are persisted before `POST /webhook` returns `202 Accepted`
-- duplicate delivery IDs return `200` and do not resend notifications
-- notification dispatch is asynchronous and recoverable
+- duplicate delivery IDs return `200` and do not enqueue a second delivery while the ledger row is retained
+- notification dispatch is asynchronous and recoverable; provider sends are at-least-once when an invocation is interrupted
 - retries and stale-processing recovery are driven from D1 state plus cron
 - admin routes stay protected by bearer auth
 

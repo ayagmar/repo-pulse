@@ -25,11 +25,11 @@ interface DiscordEmbed {
     url?: string;
     icon_url?: string;
   };
-  fields?: Array<{
+  fields?: {
     name: string;
     value: string;
     inline?: boolean;
-  }>;
+  }[];
   thumbnail?: {
     url: string;
   };
@@ -79,7 +79,7 @@ function formatStarEvent(event: StarEvent): DiscordWebhookPayload {
   const embed: DiscordEmbed = {
     ...createBaseEmbed(event),
     title: isStarRemoved ? '💫 Star Removed' : '⭐ New Star',
-    description: `${formatRepoName(event)} now has **${event.star.count}** stars!`,
+    description: `${formatRepoName(event)} now has **${String(event.star.count)}** stars!`,
     color: COLORS.star,
     thumbnail: {
       url: 'https://github.githubassets.com/images/icons/emoji/unicode/2b50.png',
@@ -104,14 +104,14 @@ function formatIssueEvent(event: IssueEvent): DiscordWebhookPayload {
 
   const embed: DiscordEmbed = {
     ...createBaseEmbed(event),
-    title: `${title} #${issue.number}`,
+    title: `${title} #${String(issue.number)}`,
     description: `**${issue.title}**\n\n${truncate(issue.body ?? 'No description provided.', 200)}`,
     url: issue.url,
     color,
     fields: [
       {
         name: 'Labels',
-        value: issue.labels.length > 0 ? issue.labels.join(', ') : 'None',
+        value: issue.labels.length > 0 ? truncate(issue.labels.join(', '), 1024) : 'None',
         inline: true,
       },
       {
@@ -144,7 +144,7 @@ function formatPullRequestEvent(event: PullRequestEvent): DiscordWebhookPayload 
   const fields: DiscordEmbed['fields'] = [
     {
       name: 'Branch',
-      value: `${pr.headBranch} → ${pr.baseBranch}`,
+      value: truncate(`${pr.headBranch} → ${pr.baseBranch}`, 1024),
       inline: true,
     },
   ];
@@ -160,14 +160,14 @@ function formatPullRequestEvent(event: PullRequestEvent): DiscordWebhookPayload 
   if (pr.additions !== undefined && pr.deletions !== undefined) {
     fields.push({
       name: 'Changes',
-      value: `+${pr.additions} -${pr.deletions}`,
+      value: `+${String(pr.additions)} -${String(pr.deletions)}`,
       inline: true,
     });
   }
 
   const embed: DiscordEmbed = {
     ...createBaseEmbed(event),
-    title: `${title} #${pr.number}`,
+    title: `${title} #${String(pr.number)}`,
     description: `**${pr.title}**${pr.draft ? ' (Draft)' : ''}\n\n${truncate(pr.body ?? 'No description provided.', 200)}`,
     url: pr.url,
     color,

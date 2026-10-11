@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  GitHubWebhookRequestError,
   extractGitHubRepositoryFullName,
+  GitHubWebhookRequestError,
   parseGitHubWebhookRequest,
 } from '../providers/github/webhook-request.js';
 
@@ -26,7 +26,7 @@ describe('parseGitHubWebhookRequest', () => {
         deliveryId: 'delivery-1',
         secret,
       })
-    ).rejects.toThrowError(new GitHubWebhookRequestError(401, 'Invalid signature'));
+    ).rejects.toThrow(new GitHubWebhookRequestError(401, 'Invalid signature'));
   });
 
   it('rejects missing event headers', async () => {
@@ -42,7 +42,7 @@ describe('parseGitHubWebhookRequest', () => {
         deliveryId: 'delivery-1',
         secret,
       })
-    ).rejects.toThrowError(new GitHubWebhookRequestError(400, 'Missing X-GitHub-Event header'));
+    ).rejects.toThrow(new GitHubWebhookRequestError(400, 'Missing X-GitHub-Event header'));
   });
 
   it('rejects missing delivery headers', async () => {
@@ -58,7 +58,7 @@ describe('parseGitHubWebhookRequest', () => {
         deliveryId: undefined,
         secret,
       })
-    ).rejects.toThrowError(new GitHubWebhookRequestError(400, 'Missing X-GitHub-Delivery header'));
+    ).rejects.toThrow(new GitHubWebhookRequestError(400, 'Missing X-GitHub-Delivery header'));
   });
 
   it('parses valid requests and extracts canonical repository identity', async () => {

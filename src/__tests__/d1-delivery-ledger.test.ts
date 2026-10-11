@@ -69,6 +69,7 @@ describe('D1DeliveryLedger', () => {
       event,
       maxAttempts: 5,
     });
+    await ledger.claimNextPendingDelivery(new Date(), 300_000);
     await ledger.recordProviderAttempts('delivery-details', 1, [
       {
         provider: 'discord',
@@ -81,7 +82,8 @@ describe('D1DeliveryLedger', () => {
       'delivery-details',
       new Date('2026-03-09T10:00:01.000Z'),
       'discord: Webhook failed',
-      FAILURE_CLASSIFICATIONS.PERMANENT
+      FAILURE_CLASSIFICATIONS.PERMANENT,
+      1
     );
 
     await expect(ledger.getDelivery('delivery-details')).resolves.toMatchObject({

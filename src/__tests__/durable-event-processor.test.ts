@@ -137,9 +137,11 @@ describe('DurableEventProcessor', () => {
       event,
       maxAttempts: 5,
     });
+    await ledger.claimNextPendingDelivery(new Date(), 300_000);
     await ledger.markDeliverySucceeded(
       'delivery-old-succeeded',
-      new Date('2026-02-01T00:00:00.000Z')
+      new Date('2026-02-01T00:00:00.000Z'),
+      1
     );
 
     await ledger.persistAcceptedDelivery({
@@ -149,7 +151,8 @@ describe('DurableEventProcessor', () => {
       event,
       maxAttempts: 5,
     });
-    await ledger.markDeliverySucceeded('delivery-recent-succeeded', new Date());
+    await ledger.claimNextPendingDelivery(new Date(), 300_000);
+    await ledger.markDeliverySucceeded('delivery-recent-succeeded', new Date(), 1);
 
     const dispatcher = new NotificationDispatcher();
     dispatcher.add(
@@ -189,9 +192,11 @@ describe('DurableEventProcessor', () => {
       event,
       maxAttempts: 5,
     });
+    await ledger.claimNextPendingDelivery(new Date(), 300_000);
     await ledger.markDeliverySucceeded(
       'delivery-old-succeeded',
-      new Date('2026-02-01T00:00:00.000Z')
+      new Date('2026-02-01T00:00:00.000Z'),
+      1
     );
 
     const dispatcher = new NotificationDispatcher();

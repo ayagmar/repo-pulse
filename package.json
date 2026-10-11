@@ -2,10 +2,11 @@
   "name": "repo-pulse",
   "version": "1.0.0",
   "description": "Cloudflare Workers webhook service for GitHub repository events",
-  "packageManager": "npm@11.6.2",
+  "packageManager": "npm@12.2.0",
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
+    "npm": ">=10"
   },
   "scripts": {
     "dev": "wrangler dev",
@@ -15,51 +16,65 @@
     "db:migrate:local": "wrangler d1 migrations apply repo-pulse --local",
     "db:migrate:remote": "wrangler d1 migrations apply repo-pulse --remote",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts --fix",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "check": "biome check --apply .",
+    "check": "biome check --write .",
     "check:ci": "biome check .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
+    "benchmark:ledger": "vitest run --config benchmarks/vitest.config.ts",
     "knip": "knip",
     "knip:fix": "knip --fix",
     "audit:prod": "npm audit --omit=dev",
     "audit:full": "npm audit",
     "clean": "rm -rf dist coverage .wrangler",
     "prepare": "husky || true",
-    "verify": "run-s typegen typecheck lint check:ci test knip build",
-    "verify:ci": "run-s typegen typecheck lint check:ci test:coverage knip build"
+    "verify": "run-s typegen typecheck lint check:ci test test:workers knip build",
+    "verify:ci": "run-s typegen typecheck lint check:ci test:coverage test:workers knip build"
   },
   "dependencies": {
-    "hono": "^4.6.0"
+    "hono": "^4.13.13"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
-    "@commitlint/cli": "^19.5.0",
-    "@commitlint/config-conventional": "^19.5.0",
-    "@eslint/js": "^9.39.4",
-    "@types/better-sqlite3": "7.6.13",
-    "@vitest/coverage-v8": "^4.0.18",
-    "better-sqlite3": "12.6.2",
-    "eslint": "^9.11.0",
-    "globals": "^15.9.0",
-    "husky": "^9.1.0",
-    "knip": "^5.30.0",
-    "lint-staged": "^15.2.0",
-    "npm-run-all2": "^6.2.0",
-    "typescript": "^5.6.0",
-    "typescript-eslint": "^8.7.0",
-    "vitest": "^4.0.18",
-    "wrangler": "4.71.0"
+    "@biomejs/biome": "^2.5.15",
+    "@cloudflare/vitest-plugin": "^1.4.0",
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@vitest/coverage-v8": "^5.0.3",
+    "better-sqlite3": "^13.0.3",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "husky": "^9.1.7",
+    "knip": "^6.41.0",
+    "lint-staged": "^17.6.0",
+    "npm-run-all2": "^9.0.3",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.149.0"
   },
   "lint-staged": {
-    "*.{ts,tsx}": ["biome check --apply --no-errors-on-unmatched", "eslint --fix"],
-    "*.{json,md,yml,yaml}": ["biome format --write --no-errors-on-unmatched"]
+    "*.{ts,tsx}": "biome check --write --no-errors-on-unmatched",
+    "src/**/*.{ts,tsx}": "eslint --fix",
+    "*.{json,md,yml,yaml}": [
+      "biome format --write --no-errors-on-unmatched"
+    ]
   },
   "commitlint": {
-    "extends": ["@commitlint/config-conventional"]
+    "extends": [
+      "@commitlint/config-conventional"
+    ]
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261006.1": true,
+    "better-sqlite3": false
   }
 }

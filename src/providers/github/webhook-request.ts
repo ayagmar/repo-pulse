@@ -4,7 +4,7 @@ import { verifyGitHubSignature } from './signature.js';
 import type { GitHubWebhookPayload } from './types.js';
 
 interface ParseGitHubWebhookInput {
-  rawBody: string;
+  rawBody: string | Uint8Array;
   signature: string | undefined;
   eventType: string | undefined;
   deliveryId: string | undefined;
@@ -34,11 +34,11 @@ export class GitHubWebhookRequestError extends AppError {
 export async function parseGitHubWebhookRequest(
   input: ParseGitHubWebhookInput
 ): Promise<ParsedGitHubWebhook> {
-  if (!input.eventType) {
+  if (input.eventType === undefined || input.eventType === '') {
     throw new GitHubWebhookRequestError(400, 'Missing X-GitHub-Event header');
   }
 
-  if (!input.deliveryId) {
+  if (input.deliveryId === undefined || input.deliveryId === '') {
     throw new GitHubWebhookRequestError(400, 'Missing X-GitHub-Delivery header');
   }
 
@@ -49,7 +49,11 @@ export async function parseGitHubWebhookRequest(
   let payload: unknown;
 
   try {
-    payload = JSON.parse(input.rawBody);
+    const bodyText =
+      typeof input.rawBody === 'string'
+        ? input.rawBody
+        : new TextDecoder('utf-8', { fatal: true }).decode(input.rawBody);
+    payload = JSON.parse(bodyText);
   } catch {
     throw new GitHubWebhookRequestError(400, 'Invalid JSON payload');
   }
@@ -66,7 +70,7 @@ export function extractGitHubRepositoryFullName(payload: unknown): string {
   const repository = getObjectField(payload, 'repository');
   const fullName = getStringField(repository, 'full_name');
 
-  if (fullName) {
+  if (fullName !== undefined && fullName !== '') {
     return normalizeRepositoryIdentity(fullName);
   }
 
@@ -74,7 +78,7 @@ export function extractGitHubRepositoryFullName(payload: unknown): string {
   const ownerLogin = getStringField(owner, 'login');
   const name = getStringField(repository, 'name');
 
-  if (!(ownerLogin && name)) {
+  if (ownerLogin === undefined || ownerLogin === '' || name === undefined || name === '') {
     throw new GitHubWebhookRequestError(400, 'Missing repository identity');
   }
 

@@ -73,20 +73,6 @@ export const REPO_EVENT_TYPES = {
   FORK_CREATED: 'fork.created',
 } as const;
 
-const STAR_EVENT_TYPES = [REPO_EVENT_TYPES.STAR_CREATED, REPO_EVENT_TYPES.STAR_DELETED] as const;
-const ISSUE_EVENT_TYPES = [
-  REPO_EVENT_TYPES.ISSUE_OPENED,
-  REPO_EVENT_TYPES.ISSUE_CLOSED,
-  REPO_EVENT_TYPES.ISSUE_REOPENED,
-] as const;
-const PULL_REQUEST_EVENT_TYPES = [
-  REPO_EVENT_TYPES.PULL_REQUEST_OPENED,
-  REPO_EVENT_TYPES.PULL_REQUEST_CLOSED,
-  REPO_EVENT_TYPES.PULL_REQUEST_MERGED,
-  REPO_EVENT_TYPES.PULL_REQUEST_REOPENED,
-] as const;
-const FORK_EVENT_TYPES = [REPO_EVENT_TYPES.FORK_CREATED] as const;
-
 interface RepoEventPayloadMap {
   [REPO_EVENT_TYPES.STAR_CREATED]: {
     action: typeof REPO_EVENT_ACTIONS.CREATED;
@@ -150,10 +136,12 @@ export type RepoEvent = {
 }[RepoEventType];
 
 export type RepoEventOf<TType extends RepoEventType> = Extract<RepoEvent, { type: TType }>;
-export type StarEvent = RepoEventOf<(typeof STAR_EVENT_TYPES)[number]>;
-export type IssueEvent = RepoEventOf<(typeof ISSUE_EVENT_TYPES)[number]>;
-export type PullRequestEvent = RepoEventOf<(typeof PULL_REQUEST_EVENT_TYPES)[number]>;
-export type ForkEvent = RepoEventOf<(typeof FORK_EVENT_TYPES)[number]>;
+export type StarEvent = RepoEventOf<'star.created' | 'star.deleted'>;
+export type IssueEvent = RepoEventOf<'issue.opened' | 'issue.closed' | 'issue.reopened'>;
+export type PullRequestEvent = RepoEventOf<
+  'pull_request.opened' | 'pull_request.closed' | 'pull_request.merged' | 'pull_request.reopened'
+>;
+export type ForkEvent = RepoEventOf<'fork.created'>;
 export type RepoEventInput<TType extends RepoEventType> = Omit<
   RepoEventOf<TType>,
   'timestamp' | 'type'

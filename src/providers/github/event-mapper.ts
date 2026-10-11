@@ -12,6 +12,7 @@ import {
   mapStarCreated,
   mapStarDeleted,
 } from './mappers/index.js';
+import { requireBoolean } from './mappers/validation.js';
 import type { GitHubWebhookPayload } from './types.js';
 
 export class EventMappingError extends AppError {
@@ -26,7 +27,10 @@ export class EventMappingError extends AppError {
  * @returns RepoEvent or null if event type is not supported
  * @throws EventMappingError if payload is invalid
  */
-export function mapGitHubEvent(eventType: string, payload: GitHubWebhookPayload): RepoEvent | null {
+export function mapGitHubEvent(
+  eventType: string,
+  payload: Partial<GitHubWebhookPayload>
+): RepoEvent | null {
   if (!(payload.repository && payload.sender)) {
     throw new EventMappingError('Missing required fields: repository or sender');
   }
@@ -69,7 +73,7 @@ export function mapGitHubEvent(eventType: string, payload: GitHubWebhookPayload)
           case 'opened':
             return mapPullRequestOpened(repository, sender, pr);
           case 'closed':
-            return pr.merged
+            return requireBoolean(pr.merged, 'pull_request.merged')
               ? mapPullRequestMerged(repository, sender, pr)
               : mapPullRequestClosed(repository, sender, pr);
           case 'reopened':

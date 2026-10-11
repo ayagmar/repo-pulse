@@ -1,13 +1,13 @@
-export { mapStarCreated, mapStarDeleted } from './star.js';
+export { mapForkCreated } from './fork.js';
 export {
-  mapIssueOpened,
   mapIssueClosed,
+  mapIssueOpened,
   mapIssueReopened,
 } from './issue.js';
 export {
-  mapPullRequestOpened,
   mapPullRequestClosed,
   mapPullRequestMerged,
+  mapPullRequestOpened,
   mapPullRequestReopened,
 } from './pull-request.js';
-export { mapForkCreated } from './fork.js';
+export { mapStarCreated, mapStarDeleted } from './star.js';

@@ -1,14 +1,14 @@
 import type { ForkEvent } from '../../../core/models/repo-event.js';
 import {
+  createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
-  createRepoEvent,
 } from '../../../core/models/repo-event.js';
 import type { GitHubFork, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';
 import { requireObject, requireString } from './validation.js';
 
-function mapFork(fork: GitHubFork) {
+function mapFork(fork: GitHubFork): ForkEvent['fork'] {
   const forkData = requireObject(fork, 'forkee');
 
   return {

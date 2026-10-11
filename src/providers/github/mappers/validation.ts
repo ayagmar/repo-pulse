@@ -27,7 +27,7 @@ export function requireNullableString(value: unknown, field: string): string | n
 }
 
 export function requireNumber(value: unknown, field: string): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
     invalidField(field);
   }
 

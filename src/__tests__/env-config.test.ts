@@ -17,6 +17,16 @@ describe('createConfig', () => {
     tempDatabase.cleanup();
   });
 
+  it('rejects overflowing integers instead of accepting unusable retry budgets', () => {
+    expect(() =>
+      createConfig({
+        GITHUB_WEBHOOK_SECRET: 'test',
+        ADMIN_API_TOKEN: 'test',
+        DELIVERY_MAX_ATTEMPTS: '9007199254740992',
+      })
+    ).toThrow('Invalid DELIVERY_MAX_ATTEMPTS');
+  });
+
   it('rejects retry max values smaller than the base delay', () => {
     const tempDatabase = createTempDatabasePath();
     const env = createTestEnv(tempDatabase.databasePath, {

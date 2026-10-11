@@ -1,323 +1,123 @@
 # Setup Guide
 
-This guide covers a clean `repo-pulse` deployment on Cloudflare Workers with D1, GitHub webhooks, and Discord notifications.
+Deploy Repo Pulse on Cloudflare Workers with D1, GitHub webhooks, and Discord notifications.
 
-## 1. Prerequisites
+## Prerequisites
 
 - Cloudflare account with Workers and D1 enabled
-- GitHub repository admin access for the repositories that will send webhooks
-- Discord webhook URL for the target channel
-- Node.js 22 or newer
-- npm 11 or newer
+- GitHub repository admin access
+- Discord webhook URL for the destination channel
+- Node 24 LTS recommended (`nvm use`); supported ranges are in `package.json`
+- npm 12.2.0 recommended (`npm install --global npm@12.2.0`)
 
-This repository is npm-only. Bun is not part of the supported workflow.
-
-Verify tooling:
-
-```bash
-node --version
-npm --version
-```
-
-Wrangler is already pinned in [`package.json`](/home/ayagmar/Projects/Personal/repo-pulse/package.json), so the simplest path is to use `npm exec` or the npm scripts:
-
-```bash
-npm exec wrangler --version
-```
-
-If you want a global install anyway:
-
-```bash
-npm install -g wrangler
-```
-
-Install project dependencies:
+The project uses npm, not Bun. Wrangler is a project dependency; use npm scripts or
+`npm exec -- wrangler ...` rather than an unrelated global version.
 
 ```bash
 npm ci
+npm exec -- wrangler --version
 ```
 
-## 2. Cloudflare Account Setup
+npm 12 restricts dependency install scripts. `allowScripts` approves the installed
+esbuild and workerd versions and denies the unnecessary SQLite source-build script
+(the package ships prebuilt binaries). Review approvals when upgrading these packages;
+do not approve all dependency scripts indiscriminately.
 
-Authenticate Wrangler against the target Cloudflare account:
-
-```bash
-npm exec wrangler login
-```
-
-Confirm the active account:
-
-```bash
-npm exec wrangler whoami
-```
-
-If your organization uses multiple Cloudflare accounts, make sure you are deploying to the account that should own both the Worker and the D1 database.
-
-## 3. D1 Database Binding
-
-The committed migration scripts expect the D1 database name to be `repo-pulse`.
-
-The repository currently contains a concrete `database_id` in [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc).
-
-If you are deploying this repo into a different Cloudflare account, create a new D1 database first:
-
-```bash
-npm exec wrangler d1 create repo-pulse
-```
-
-Wrangler will print a new `database_id`.
-
-## 4. Bind D1 to the Worker
-
-Ensure [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc) points `DB` at the correct database for your account:
-
-```jsonc
-"d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "repo-pulse",
-    "database_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "migrations_dir": "migrations"
-  }
-]
-```
-
-Notes:
-
-- Replace `database_id` if you are deploying to a different Cloudflare account.
-- If you want a separate preview database, also set `preview_database_id`.
-- If you rename the database, also update the hard-coded migration scripts in [`package.json`](/home/ayagmar/Projects/Personal/repo-pulse/package.json).
-
-## 5. Generate Worker Types
-
-After changing bindings, regenerate Worker types:
-
-```bash
-npm run typegen
-```
-
-This refreshes [`worker-configuration.d.ts`](/home/ayagmar/Projects/Personal/repo-pulse/worker-configuration.d.ts).
-
-## 6. Set Secrets
-
-Set the required Worker secrets:
-
-```bash
-npm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-npm exec wrangler secret put ADMIN_API_TOKEN
-npm exec wrangler secret put DISCORD_WEBHOOK_URL
-```
-
-Meaning:
-
-- `GITHUB_WEBHOOK_SECRET`: shared secret GitHub uses to sign webhook payloads
-- `ADMIN_API_TOKEN`: bearer token required for `/admin/*`
-- `DISCORD_WEBHOOK_URL`: Discord incoming webhook endpoint
-
-## 7. Set Runtime Variables
-
-The committed [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc) already defines these defaults:
-
-- `NODE_ENV=production`
-- `LOG_LEVEL=info`
-- `WEBHOOK_MAX_BODY_BYTES=1048576`
-- retry, lease, and retention defaults for the delivery ledger
-
-## 8. Run Migrations
-
-Apply the remote schema:
-
-```bash
-npm run db:migrate:remote
-```
-
-For local development, apply the local D1 schema:
-
-```bash
-npm run db:migrate:local
-```
-
-## 9. Run Locally
-
-Create the local secrets file:
+## Local development
 
 ```bash
 cp .dev.vars.example .dev.vars
-```
-
-Edit `.dev.vars` and fill in real local values.
-
-Recommended local overrides:
-
-```dotenv
-NODE_ENV=development
-LOG_LEVEL=debug
-```
-
-The committed [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc) sets `NODE_ENV=production`, so without a local override `wrangler dev` behaves like production for logging and error-detail purposes.
-
-Start the Worker:
-
-```bash
+npm run db:migrate:local
+npm run typegen
 npm run dev
 ```
 
-Equivalent direct command:
+Fill in `.dev.vars` with local test secrets. Use `NODE_ENV=development` and
+`LOG_LEVEL=debug` for development; the committed Wrangler variables default to production.
+Keep `.dev.vars` out of git. Use a test Discord channel, not your production channel.
+
+Wrangler serves `http://127.0.0.1:8787`. The local D1 database is separate from remote data.
+
+## Account and database
 
 ```bash
-npm exec wrangler dev
+npm exec -- wrangler login
+npm exec -- wrangler whoami
 ```
 
-Wrangler serves the Worker on `http://127.0.0.1:8787` by default.
-
-Useful local verification:
+Confirm the intended account before any remote operation. The committed
+[`wrangler.jsonc`](wrangler.jsonc) contains a concrete database ID. If deploying into
+another account, create your own database and update that ID first:
 
 ```bash
-npm run typegen
-npm run typecheck
-npm run lint
-npm run check:ci
-npm run test
-npm run build
+npm exec -- wrangler d1 create repo-pulse
 ```
 
-## 10. Deploy
+The binding name must remain `DB`. If changing `database_name`, update the migration
+scripts in `package.json` too. Regenerate types after changing bindings.
 
-Deploy the Worker:
+## Secrets and deploy
+
+These commands affect the deployed Worker. `wrangler secret put` deploys a new version;
+use `wrangler versions secret put` instead if the secret change must be staged.
 
 ```bash
+npm exec -- wrangler secret put GITHUB_WEBHOOK_SECRET
+npm exec -- wrangler secret put ADMIN_API_TOKEN
+npm exec -- wrangler secret put DISCORD_WEBHOOK_URL
+npm run db:migrate:remote
 npm run deploy
 ```
 
-Equivalent direct command:
+Migration `0003` adds two delivery-list indexes without deleting data. Apply migrations
+before deploying the optimized query. Source maps and sampled traces are enabled in
+Wrangler configuration; deployment is required for those settings to reach production.
+
+## GitHub webhooks
+
+For each repository, open **Settings → Webhooks → Add webhook**:
+
+- Payload URL: `https://<your-worker>.workers.dev/webhook`
+- Content type: `application/json`
+- Secret: the value of `GITHUB_WEBHOOK_SECRET`
+- Events: Stars, Issues, Pull requests, Forks
+
+Use GitHub's delivery tester against a test destination first. Supported deliveries
+return `202` after persistence, not after Discord delivery. Duplicate retained delivery
+IDs return `200`; unsupported events are acknowledged and ignored.
+
+## Verify
 
 ```bash
-npm exec wrangler deploy
+npm run verify:ci
+npm run audit:full
 ```
 
-After deployment, Wrangler prints the Worker URL, typically:
+Node tests use disposable SQLite data and controlled network fakes. `test:workers`
+runs separately in local workerd with real simulated D1 bindings, no remote bindings,
+and test-only credentials. `benchmark:ledger` is an opt-in local SQLite measurement.
 
-```text
-https://repo-pulse.<subdomain>.workers.dev
-```
-
-Endpoints:
-
-- Webhook: `https://repo-pulse.<subdomain>.workers.dev/webhook`
-- Admin: `https://repo-pulse.<subdomain>.workers.dev/admin/*`
-
-## 11. Configure GitHub Webhooks
-
-For each repository that should send events:
-
-1. Open `Settings` -> `Webhooks` -> `Add webhook`.
-2. Set `Payload URL` to your deployed Worker:
-
-```text
-https://repo-pulse.<subdomain>.workers.dev/webhook
-```
-
-3. Set `Content type` to `application/json`.
-4. Set `Secret` to the same value stored in `GITHUB_WEBHOOK_SECRET`.
-5. Select the events this service supports:
-
-- `Stars`
-- `Issues`
-- `Pull requests`
-- `Forks`
-
-6. Save the webhook.
-7. Use GitHub's delivery tester to send a sample event.
-
-Notes:
-
-- Unsupported events are acknowledged but ignored.
-- Deliveries are accepted asynchronously. A `202 Accepted` response means the event was persisted and queued, not that Discord has already received it.
-
-## 12. Discord Notification Examples
-
-Use these screenshot references from the rollout thread to verify Discord formatting after deployment:
-
-| Event | Discord example |
-| --- | --- |
-| Star notification | `Image #1` |
-| Issue opened / closed | `Image #2` |
-| Fork notification | `Image #3` |
-| Pull request merged | `Image #4` |
-
-## 13. Verify the Deployment
-
-Check status:
+After deployment, use your admin token through a protected environment variable:
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-  https://repo-pulse.<subdomain>.workers.dev/admin/status
-```
-
-Check health:
-
-```bash
+  https://<your-worker>.workers.dev/admin/status
 curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-  https://repo-pulse.<subdomain>.workers.dev/admin/health
+  https://<your-worker>.workers.dev/admin/health
 ```
 
-Open the authenticated docs:
+`/admin/docs` and `/admin/openapi.json` also require the bearer header. Opening the docs
+URL directly in a browser without an authentication header will return `401`.
 
-```text
-https://repo-pulse.<subdomain>.workers.dev/admin/docs
-```
+## Troubleshooting
 
-Remember:
+- **Missing environment variable:** configure the required local or deployed secrets.
+- **D1 error:** verify the account, database binding, and applied migrations.
+- **Webhook 401:** check the shared secret and exact request-body signature.
+- **Webhook 400:** check required headers and supported event payload fields.
+- **No notification providers:** configure a valid Discord webhook URL.
+- **No retries:** check the every-minute cron trigger and delivery statuses.
+- **Repeated sends after interruption:** provider sends are at-least-once; see
+  [architecture guarantees](ARCHITECTURE.md).
 
-- `/admin/openapi.json` is authenticated.
-- `/admin/docs` is authenticated too, so opening it directly in a browser requires an auth header.
-
-## 14. Runtime Behavior to Know Before Production
-
-- Accepted supported deliveries are written to D1 before GitHub receives `202 Accepted`.
-- Duplicate GitHub delivery IDs are deduplicated by `delivery_id`.
-- Immediate processing runs in `waitUntil()`.
-- Retries, stale-processing recovery, and succeeded-delivery pruning depend on the cron trigger in [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc), currently every minute.
-
-## 15. Troubleshooting
-
-### `Missing required environment variable`
-
-One or more required secrets were not set. Re-run:
-
-```bash
-npm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-npm exec wrangler secret put ADMIN_API_TOKEN
-npm exec wrangler secret put DISCORD_WEBHOOK_URL
-```
-
-### `D1_ERROR` or migration failures
-
-- Confirm [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc) contains the correct `database_id`
-- Confirm the database is named `repo-pulse`, or update the scripts in [`package.json`](/home/ayagmar/Projects/Personal/repo-pulse/package.json)
-- Re-run `npm run db:migrate:remote`
-
-### GitHub deliveries return `401`
-
-- The GitHub webhook secret and `GITHUB_WEBHOOK_SECRET` do not match
-- GitHub is not sending the request to `/webhook`
-
-### GitHub deliveries return `400`
-
-- The webhook is not using `application/json`
-- Required GitHub headers are missing
-
-### GitHub deliveries return `500 No notification providers configured`
-
-- `DISCORD_WEBHOOK_URL` is missing or invalid
-
-### No retry processing happens
-
-- Confirm the cron trigger is still present in [`wrangler.jsonc`](/home/ayagmar/Projects/Personal/repo-pulse/wrangler.jsonc)
-- Confirm the Worker was redeployed after the cron trigger was added
-- Check `/admin/deliveries` for `processing` or `failed` rows
-
-### Local development does not see remote D1 data
-
-- `wrangler dev` uses the local D1 database by default
-- Run `npm run db:migrate:local` before local testing
+Further guidance: [operations](docs/operations.md) and [production profiling](docs/profiling.md).

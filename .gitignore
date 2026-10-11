@@ -11,6 +11,8 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+*.pprof
+*.cpuprofile
 
 # =============================================================================
 # Environment Variables

@@ -1,8 +1,10 @@
 import { createApp, drainDueDeliveries } from './app.js';
 
+const app = createApp();
+
 const worker = {
   fetch(request: Request, env: Env, executionCtx: ExecutionContext): Response | Promise<Response> {
-    return createApp(env).fetch(request, env, executionCtx);
+    return app.fetch(request, env, executionCtx);
   },
   scheduled(_controller: ScheduledController, env: Env, executionCtx: ExecutionContext): void {
     executionCtx.waitUntil(drainDueDeliveries(env, { pruneSucceededDeliveries: true }));
