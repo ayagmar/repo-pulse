@@ -5,9 +5,9 @@ import type {
   RepoEventOf,
 } from '../../../core/models/repo-event.js';
 import {
+  createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
-  createRepoEvent,
 } from '../../../core/models/repo-event.js';
 import type { GitHubPullRequest, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';
@@ -29,7 +29,7 @@ function mapPullRequest(pr: GitHubPullRequest, merged = pr.merged): PullRequest 
     title: requireString(pullRequestData.title, 'pull_request.title'),
     url: requireString(pullRequestData.html_url, 'pull_request.html_url'),
     state: requireState(pullRequestData.state, 'pull_request.state'),
-    merged,
+    merged: requireBoolean(merged, 'pull_request.merged'),
     body: requireNullableString(pullRequestData.body, 'pull_request.body'),
     draft: requireBoolean(pullRequestData.draft, 'pull_request.draft'),
     headBranch: requireString(head.ref, 'pull_request.head.ref'),

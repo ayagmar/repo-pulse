@@ -1,9 +1,7 @@
 import { Hono } from 'hono';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { DELIVERY_STATUS_VALUES, type DeliveryStatus } from '../../core/models/delivery-ledger.js';
-import type { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
-import type { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
-import type { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
+import type { HttpEnv } from '../app-env.js';
 import { jsonError } from '../error-response.js';
 import { createOpenApiDocument, renderSwaggerUiPage } from '../openapi.js';
 
@@ -32,31 +30,29 @@ function parseStatuses(rawValue: string | null): DeliveryStatus[] {
   return statuses as DeliveryStatus[];
 }
 
-export function createAdminRoutes(
-  dispatcher: NotificationDispatcher,
-  deliveryLedger: D1DeliveryLedger,
-  eventProcessor: DurableEventProcessor
-): Hono {
-  const router = new Hono();
+export function createAdminRoutes(): Hono<HttpEnv> {
+  const router = new Hono<HttpEnv>();
 
   router.get('/status', async (c) => {
+    const { deliveryLedger, notificationDispatcher } = c.get('runtime');
     const stats = await deliveryLedger.getStats();
 
     return c.json({
       name: 'repo-pulse',
       version: '1.0.0',
       status: 'running',
-      providers: dispatcher.getNotifiers().map((notifier) => notifier.name),
+      providers: notificationDispatcher.getNotifiers().map((notifier) => notifier.name),
       deliveryLedger: stats,
     });
   });
 
   router.get('/health', async (c) => {
+    const { deliveryLedger, notificationDispatcher } = c.get('runtime');
     const stats = await deliveryLedger.getStats();
 
     return c.json({
       status: 'ok',
-      providers: dispatcher.getNotifiers().map((notifier) => notifier.name),
+      providers: notificationDispatcher.getNotifiers().map((notifier) => notifier.name),
       trackedDeliveries: stats.total,
     });
   });
@@ -74,14 +70,14 @@ export function createAdminRoutes(
       throw error;
     }
 
-    const deliveries = await deliveryLedger.listDeliveries(statuses);
+    const deliveries = await c.get('runtime').deliveryLedger.listDeliveries(statuses);
     return c.json({
       deliveries,
     });
   });
 
   router.get('/deliveries/:deliveryId', async (c) => {
-    const delivery = await deliveryLedger.getDelivery(c.req.param('deliveryId'));
+    const delivery = await c.get('runtime').deliveryLedger.getDelivery(c.req.param('deliveryId'));
     if (!delivery) {
       return jsonError(
         c,
@@ -93,6 +89,7 @@ export function createAdminRoutes(
   });
 
   router.post('/deliveries/:deliveryId/retry', async (c) => {
+    const { deliveryLedger, eventProcessor } = c.get('runtime');
     const deliveryId = c.req.param('deliveryId');
     const result = await eventProcessor.retryDelivery(deliveryId);
 

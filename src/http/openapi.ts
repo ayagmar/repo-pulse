@@ -603,7 +603,7 @@ export function renderSwaggerUiPage(document: OpenApiDocument): string {
     <title>Repo Pulse API Docs</title>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui.css"
+      href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.1/swagger-ui.css"
     />
     <style>
       html, body {
@@ -619,7 +619,7 @@ export function renderSwaggerUiPage(document: OpenApiDocument): string {
   </head>
   <body>
     <div id="swagger-ui"></div>
-    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.1/swagger-ui-bundle.js"></script>
     <script>
       const openApiDocument = ${serializedDocument};
       window.addEventListener('load', function () {

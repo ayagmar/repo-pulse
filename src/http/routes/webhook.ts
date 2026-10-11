@@ -1,13 +1,13 @@
-import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { Hono } from 'hono';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
-import type { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { logger } from '../../core/services/logger.js';
 import { EventMappingError, mapGitHubEvent } from '../../providers/github/event-mapper.js';
 import {
   GitHubWebhookRequestError,
   parseGitHubWebhookRequest,
 } from '../../providers/github/webhook-request.js';
+import type { HttpEnv } from '../app-env.js';
 import { jsonError } from '../error-response.js';
 
 interface WebhookSuccessResponse {
@@ -31,20 +31,22 @@ function parseContentLength(value: string | undefined): number | null {
   return Number.parseInt(normalizedValue, 10);
 }
 
-async function readRawBodyWithLimit(c: Context, maxBodyBytes: number): Promise<string> {
+async function readRawBodyWithLimit(c: Context, maxBodyBytes: number): Promise<Uint8Array> {
   const contentLength = parseContentLength(c.req.header('Content-Length'));
   if (contentLength !== null && contentLength > maxBodyBytes) {
-    throw new GitHubWebhookRequestError(413, `Payload too large: max ${maxBodyBytes} bytes`);
+    throw new GitHubWebhookRequestError(
+      413,
+      `Payload too large: max ${String(maxBodyBytes)} bytes`
+    );
   }
 
   const body = c.req.raw.body;
   if (!body) {
-    return '';
+    return new Uint8Array();
   }
 
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
+  const chunks: Uint8Array[] = [];
   let totalBytes = 0;
 
   try {
@@ -57,36 +59,35 @@ async function readRawBodyWithLimit(c: Context, maxBodyBytes: number): Promise<s
       totalBytes += value.byteLength;
       if (totalBytes > maxBodyBytes) {
         await reader.cancel();
-        throw new GitHubWebhookRequestError(413, `Payload too large: max ${maxBodyBytes} bytes`);
+        throw new GitHubWebhookRequestError(
+          413,
+          `Payload too large: max ${String(maxBodyBytes)} bytes`
+        );
       }
 
-      chunks.push(decoder.decode(value, { stream: true }));
+      chunks.push(value);
     }
 
-    chunks.push(decoder.decode());
-    return chunks.join('');
+    const rawBody = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      rawBody.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return rawBody;
   } finally {
     reader.releaseLock();
   }
 }
 
-/**
- * Create webhook routes with injected dependencies
- */
-export function createWebhookRoutes(
-  eventProcessor: DurableEventProcessor,
-  options: {
-    maxBodyBytes: number;
-    webhookSecret: string;
-    isDevelopment: boolean;
-  }
-): Hono {
-  const router = new Hono();
+export function createWebhookRoutes(): Hono<HttpEnv> {
+  const router = new Hono<HttpEnv>();
 
-  router.post('/', async (c: Context) => {
-    let rawBody: string;
+  router.post('/', async (c) => {
+    const { config, eventProcessor } = c.get('runtime');
+    let rawBody: Uint8Array;
     try {
-      rawBody = await readRawBodyWithLimit(c, options.maxBodyBytes);
+      rawBody = await readRawBodyWithLimit(c, config.github.maxBodyBytes);
     } catch (error) {
       if (error instanceof GitHubWebhookRequestError) {
         return jsonError(c, error);
@@ -103,7 +104,7 @@ export function createWebhookRoutes(
         signature: c.req.header('X-Hub-Signature-256'),
         eventType: c.req.header('X-GitHub-Event'),
         deliveryId: c.req.header('X-GitHub-Delivery'),
-        secret: options.webhookSecret,
+        secret: config.github.webhookSecret,
       });
     } catch (error) {
       if (error instanceof GitHubWebhookRequestError) {
@@ -153,7 +154,7 @@ export function createWebhookRoutes(
       sourceEventType: inbound.eventType,
     });
 
-    if (options.isDevelopment) {
+    if (config.server.isDev) {
       logger.debug('webhook.accepted', {
         component: 'webhook',
         deliveryId: inbound.deliveryId,

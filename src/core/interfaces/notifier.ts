@@ -4,7 +4,7 @@ import type { RepoEvent } from '../models/repo-event.js';
 /**
  * Result of a notification attempt
  */
-export interface NotificationSuccessResult {
+interface NotificationSuccessResult {
   success: true;
   provider: string;
 }

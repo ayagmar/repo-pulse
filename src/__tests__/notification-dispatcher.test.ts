@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NotificationResult, Notifier } from '../core/interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../core/models/failure-classification.js';
+import type { RepoEvent } from '../core/models/repo-event.js';
 import {
+  createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
-  createRepoEvent,
 } from '../core/models/repo-event.js';
-import type { RepoEvent } from '../core/models/repo-event.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
 
 function createMockNotifier(

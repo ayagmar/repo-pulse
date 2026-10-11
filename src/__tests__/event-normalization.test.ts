@@ -24,22 +24,18 @@ const mockSender = {
 
 describe('mapGitHubEvent', () => {
   it('throws on missing repository', () => {
-    expect(() => mapGitHubEvent('star', { sender: mockSender } as GitHubWebhookPayload)).toThrow(
-      EventMappingError
-    );
+    expect(() => mapGitHubEvent('star', { sender: mockSender })).toThrow(EventMappingError);
   });
 
   it('throws on missing sender', () => {
-    expect(() => mapGitHubEvent('star', { repository: mockRepo } as GitHubWebhookPayload)).toThrow(
-      EventMappingError
-    );
+    expect(() => mapGitHubEvent('star', { repository: mockRepo })).toThrow(EventMappingError);
   });
 
   it('returns null for unsupported event types', () => {
     const result = mapGitHubEvent('unknown_event', {
       repository: mockRepo,
       sender: mockSender,
-    } as GitHubWebhookPayload);
+    });
 
     expect(result).toBeNull();
   });
@@ -50,10 +46,10 @@ describe('mapGitHubEvent', () => {
         action: 'created',
         repository: mockRepo,
         sender: mockSender,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.STAR_CREATED);
-      if (!result || result.type !== REPO_EVENT_TYPES.STAR_CREATED) {
+      if (result?.type !== REPO_EVENT_TYPES.STAR_CREATED) {
         throw new Error('Expected star.created event');
       }
 
@@ -68,10 +64,10 @@ describe('mapGitHubEvent', () => {
         action: 'deleted',
         repository: mockRepo,
         sender: mockSender,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.STAR_DELETED);
-      if (!result || result.type !== REPO_EVENT_TYPES.STAR_DELETED) {
+      if (result?.type !== REPO_EVENT_TYPES.STAR_DELETED) {
         throw new Error('Expected star.deleted event');
       }
 
@@ -83,9 +79,19 @@ describe('mapGitHubEvent', () => {
         action: 'unknown',
         repository: mockRepo,
         sender: mockSender,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result).toBeNull();
+    });
+
+    it('rejects non-finite counters from parsed JSON', () => {
+      expect(() =>
+        mapGitHubEvent('star', {
+          action: 'created',
+          repository: { ...mockRepo, stargazers_count: Number.POSITIVE_INFINITY },
+          sender: mockSender,
+        })
+      ).toThrow(new EventMappingError('Invalid repository.stargazers_count'));
     });
 
     it('throws on malformed repository data instead of returning a broken event', () => {
@@ -118,10 +124,10 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         issue: mockIssue,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.ISSUE_OPENED);
-      if (!result || result.type !== REPO_EVENT_TYPES.ISSUE_OPENED) {
+      if (result?.type !== REPO_EVENT_TYPES.ISSUE_OPENED) {
         throw new Error('Expected issue.opened event');
       }
 
@@ -136,10 +142,10 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         issue: { ...mockIssue, state: 'closed' as const },
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.ISSUE_CLOSED);
-      if (!result || result.type !== REPO_EVENT_TYPES.ISSUE_CLOSED) {
+      if (result?.type !== REPO_EVENT_TYPES.ISSUE_CLOSED) {
         throw new Error('Expected issue.closed event');
       }
 
@@ -152,7 +158,7 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         issue: mockIssue,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.ISSUE_REOPENED);
     });
@@ -163,7 +169,7 @@ describe('mapGitHubEvent', () => {
           action: 'opened',
           repository: mockRepo,
           sender: mockSender,
-        } as GitHubWebhookPayload)
+        })
       ).toThrow(EventMappingError);
     });
 
@@ -204,10 +210,10 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         pull_request: mockPR,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.PULL_REQUEST_OPENED);
-      if (!result || result.type !== REPO_EVENT_TYPES.PULL_REQUEST_OPENED) {
+      if (result?.type !== REPO_EVENT_TYPES.PULL_REQUEST_OPENED) {
         throw new Error('Expected pull_request.opened event');
       }
 
@@ -222,14 +228,25 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         pull_request: { ...mockPR, state: 'closed' as const },
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.PULL_REQUEST_CLOSED);
-      if (!result || result.type !== REPO_EVENT_TYPES.PULL_REQUEST_CLOSED) {
+      if (result?.type !== REPO_EVENT_TYPES.PULL_REQUEST_CLOSED) {
         throw new Error('Expected pull_request.closed event');
       }
 
       expect(result.pullRequest.merged).toBe(false);
+    });
+
+    it('rejects non-boolean merge status instead of announcing a merge', () => {
+      expect(() =>
+        mapGitHubEvent('pull_request', {
+          action: 'closed',
+          repository: mockRepo,
+          sender: mockSender,
+          pull_request: { ...mockPR, state: 'closed', merged: 'false' },
+        } as unknown as GitHubWebhookPayload)
+      ).toThrow(new EventMappingError('Invalid pull_request.merged'));
     });
 
     it('maps merged pull requests to pull_request.merged', () => {
@@ -238,10 +255,10 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         pull_request: { ...mockPR, state: 'closed' as const, merged: true },
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.PULL_REQUEST_MERGED);
-      if (!result || result.type !== REPO_EVENT_TYPES.PULL_REQUEST_MERGED) {
+      if (result?.type !== REPO_EVENT_TYPES.PULL_REQUEST_MERGED) {
         throw new Error('Expected pull_request.merged event');
       }
 
@@ -254,7 +271,7 @@ describe('mapGitHubEvent', () => {
         repository: mockRepo,
         sender: mockSender,
         pull_request: mockPR,
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.PULL_REQUEST_REOPENED);
     });
@@ -271,10 +288,10 @@ describe('mapGitHubEvent', () => {
           html_url: 'https://github.com/otheruser/test-repo',
           default_branch: 'main',
         },
-      } as GitHubWebhookPayload);
+      });
 
       expect(result?.type).toBe(REPO_EVENT_TYPES.FORK_CREATED);
-      if (!result || result.type !== REPO_EVENT_TYPES.FORK_CREATED) {
+      if (result?.type !== REPO_EVENT_TYPES.FORK_CREATED) {
         throw new Error('Expected fork.created event');
       }
 

@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "WebWorker"],
+    "types": ["@cloudflare/vitest-plugin/types"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,14 +15,12 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@core/*": ["src/core/*"],
-      "@providers/*": ["src/providers/*"],
-      "@config/*": ["src/config/*"],
-      "@http/*": ["src/http/*"],
-      "@use-cases/*": ["src/use-cases/*"]
+      "@/*": ["./src/*"],
+      "@core/*": ["./src/core/*"],
+      "@providers/*": ["./src/providers/*"],
+      "@config/*": ["./src/config/*"],
+      "@http/*": ["./src/http/*"]
     },
     "noUnusedLocals": true,
     "noUnusedParameters": true,

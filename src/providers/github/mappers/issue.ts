@@ -5,9 +5,9 @@ import type {
   RepoEventOf,
 } from '../../../core/models/repo-event.js';
 import {
+  createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
-  createRepoEvent,
 } from '../../../core/models/repo-event.js';
 import type { GitHubIssue, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';

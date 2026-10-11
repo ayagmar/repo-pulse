@@ -72,7 +72,7 @@ describe('webhook route', () => {
     });
     const execution = createExecutionContext();
 
-    const response = await createApp(env).fetch(
+    const response = await createApp().fetch(
       new Request('https://example.com/webhook', {
         method: 'POST',
         headers: {
@@ -109,7 +109,7 @@ describe('webhook route', () => {
     const payload = createWebhookPayload();
     const execution = createExecutionContext();
 
-    const response = await createApp(env).fetch(
+    const response = await createApp().fetch(
       new Request('https://example.com/webhook', {
         method: 'POST',
         headers: {
@@ -145,7 +145,7 @@ describe('webhook route', () => {
     const payload = createWebhookPayload();
     const execution = createExecutionContext();
 
-    const response = await createApp(env).fetch(
+    const response = await createApp().fetch(
       new Request('https://example.com/webhook', {
         method: 'POST',
         headers: {
@@ -193,7 +193,7 @@ describe('webhook route', () => {
       )
     );
 
-    const app = createApp(env);
+    const app = createApp();
     const payload = createWebhookPayload();
     const execution = createExecutionContext();
     const response = await app.fetch(
@@ -227,6 +227,34 @@ describe('webhook route', () => {
     });
   });
 
+  it('uses rotated webhook secrets and body limits with shared routes', async () => {
+    const database = createTempDatabasePath();
+    cleanups.push(database.cleanup);
+    const env = createTestEnv(database.databasePath);
+    cleanups.push(() => {
+      env.DB.close();
+    });
+    const app = createApp();
+    const payload = createWebhookPayload();
+    const request = (signingSecret: string): Request =>
+      new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: {
+          'X-GitHub-Event': 'ping',
+          'X-GitHub-Delivery': 'rotated-secret',
+          'X-Hub-Signature-256': createSignature(payload, signingSecret),
+        },
+        body: payload,
+      });
+    expect((await app.fetch(request(secret), env)).status).toBe(200);
+    env.GITHUB_WEBHOOK_SECRET = 'rotated-secret';
+    expect((await app.fetch(request(secret), env)).status).toBe(401);
+    expect((await app.fetch(request('rotated-secret'), env)).status).toBe(200);
+    env.WEBHOOK_MAX_BODY_BYTES = '10';
+    expect((await app.fetch(request('rotated-secret'), env)).status).toBe(413);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('acknowledges duplicate deliveries without resending notifications', async () => {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);
@@ -242,7 +270,7 @@ describe('webhook route', () => {
     const firstExecution = createExecutionContext();
     const secondExecution = createExecutionContext();
 
-    const firstResponse = await createApp(firstEnv).fetch(
+    const firstResponse = await createApp().fetch(
       new Request('https://example.com/webhook', {
         method: 'POST',
         headers: {
@@ -258,7 +286,7 @@ describe('webhook route', () => {
     );
     await firstExecution.waitForBackground();
 
-    const secondResponse = await createApp(secondEnv).fetch(
+    const secondResponse = await createApp().fetch(
       new Request('https://example.com/webhook', {
         method: 'POST',
         headers: {

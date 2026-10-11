@@ -1,7 +1,8 @@
-import type { Context, MiddlewareHandler, Next } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { encodeUtf8, timingSafeEqual } from '../../core/security/constant-time.js';
 import { logger } from '../../core/services/logger.js';
+import type { HttpEnv } from '../app-env.js';
 import { jsonError } from '../error-response.js';
 
 async function isAuthorized(
@@ -21,9 +22,9 @@ async function isAuthorized(
   return timingSafeEqual(encodeUtf8(receivedToken), encodeUtf8(expectedToken));
 }
 
-export function createAdminAuthMiddleware(expectedToken: string): MiddlewareHandler {
-  return async (c: Context, next: Next) => {
-    if (await isAuthorized(c.req.header('Authorization'), expectedToken)) {
+export function createAdminAuthMiddleware(): MiddlewareHandler<HttpEnv> {
+  return async (c, next) => {
+    if (await isAuthorized(c.req.header('Authorization'), c.get('runtime').config.admin.apiToken)) {
       await next();
       return;
     }

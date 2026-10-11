@@ -14,16 +14,16 @@ function toArrayBuffer(value: Uint8Array): ArrayBuffer {
  * @returns boolean indicating if signature is valid
  */
 export async function verifyGitHubSignature(
-  payload: string,
+  payload: string | Uint8Array,
   signature: string | undefined,
   secret: string
 ): Promise<boolean> {
-  if (!signature?.startsWith('sha256=')) {
+  if (signature?.startsWith('sha256=') !== true) {
     return false;
   }
 
   const receivedSignature = decodeHex(signature.slice('sha256='.length));
-  if (!receivedSignature) {
+  if (receivedSignature?.byteLength !== 32) {
     return false;
   }
 
@@ -38,10 +38,11 @@ export async function verifyGitHubSignature(
       false,
       ['sign']
     );
+    const payloadBytes = typeof payload === 'string' ? encodeUtf8(payload) : payload;
     const expectedSignature = new Uint8Array(
-      await crypto.subtle.sign('HMAC', key, toArrayBuffer(encodeUtf8(payload)))
+      await crypto.subtle.sign('HMAC', key, toArrayBuffer(payloadBytes))
     );
-    return timingSafeEqual(receivedSignature, expectedSignature);
+    return await timingSafeEqual(receivedSignature, expectedSignature);
   } catch {
     return false;
   }

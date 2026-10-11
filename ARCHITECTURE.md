@@ -8,20 +8,26 @@ Repo Pulse has one runtime path and one package-manager path:
 
 ## System Shape
 
-- [`src/http/routes/webhook.ts`](/home/ayagmar/Projects/Personal/repo-pulse/src/http/routes/webhook.ts) handles bounded raw-body reads, GitHub signature verification, event normalization, delivery persistence, and acceptance.
-- [`src/core/services/d1-delivery-ledger.ts`](/home/ayagmar/Projects/Personal/repo-pulse/src/core/services/d1-delivery-ledger.ts) is the durable source of truth for dedupe, status transitions, retry timing, and provider attempt history.
-- [`src/core/services/durable-event-processor.ts`](/home/ayagmar/Projects/Personal/repo-pulse/src/core/services/durable-event-processor.ts) claims due work, dispatches notifiers, persists outcomes, and reschedules transient failures.
-- [`src/http/routes/admin.ts`](/home/ayagmar/Projects/Personal/repo-pulse/src/http/routes/admin.ts) exposes authenticated operational endpoints against the same ledger.
-- [`src/providers/discord/`](/home/ayagmar/Projects/Personal/repo-pulse/src/providers/discord) owns Discord formatting and transport.
+- [`src/http/routes/webhook.ts`](src/http/routes/webhook.ts) bounds the raw request bytes, verifies GitHub signatures before decoding JSON, normalizes events, persists deliveries, and acknowledges acceptance.
+- [`src/core/services/d1-delivery-ledger.ts`](src/core/services/d1-delivery-ledger.ts) is the durable source of truth for dedupe, status transitions, retry timing, and provider attempt history.
+- [`src/core/services/durable-event-processor.ts`](src/core/services/durable-event-processor.ts) claims due work, dispatches notifiers, persists outcomes, and reschedules transient failures.
+- [`src/http/routes/admin.ts`](src/http/routes/admin.ts) exposes authenticated operational endpoints against the same ledger.
+- [`src/providers/discord/`](src/providers/discord/) owns Discord formatting and transport.
 
 ## Design Intent
 
-- Persist first: accepted supported deliveries are written to D1 before success is returned.
-- Dedupe at the ledger: duplicate GitHub delivery IDs do not resend notifications.
-- Keep the route thin: the webhook route talks directly to `DurableEventProcessor`; removed abstraction layers were not reintroduced.
-- Keep background work recoverable: immediate follow-up uses `waitUntil()`, while durable retries and stale lease recovery run from D1 state plus cron drains.
+- Persist first: supported deliveries are written to D1 before `202 Accepted`.
+- Dedupe at the ledger: a retained GitHub delivery ID does not enqueue new work.
+- Keep the route thin: it talks directly to `DurableEventProcessor`.
+- Reuse Hono routes and matchers across requests. Build configuration and binding-dependent services per request so binding-only deployments do not retain stale secrets or database clients.
+- Keep background work recoverable: `waitUntil()` starts immediate processing; cron recovers expired leases and retries from D1.
+- Fence delivery outcomes by processing attempt: a stale processor cannot overwrite a newer claim. Admin retries atomically transition only failed rows.
+- Count interrupted attempts toward the retry budget. A D1 outcome-write failure leaves a recoverable lease instead of becoming a permanent provider failure.
+- Provider sends are **at-least-once**, not exactly-once. A crash between sending to Discord and recording success can cause a repeat. Pruning a succeeded row also ends its dedupe window.
 
 ## Further Reading
 
-- Detailed design and Mermaid diagrams: [`docs/system-design.md`](/home/ayagmar/Projects/Personal/repo-pulse/docs/system-design.md)
-- Setup, deploy, and operations: [`docs/operations.md`](/home/ayagmar/Projects/Personal/repo-pulse/docs/operations.md)
+- [Detailed design](docs/system-design.md)
+- [Setup](SETUP.md)
+- [Operations](docs/operations.md)
+- [Production profiling](docs/profiling.md)

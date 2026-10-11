@@ -1,5 +1,4 @@
-const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
-export type LogLevel = (typeof LOG_LEVELS)[number];
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 type LogFields = Record<string, unknown>;
 
@@ -94,7 +93,7 @@ function serializeLogValue(value: unknown): unknown {
     return value.map((entry) => serializeLogValue(entry));
   }
 
-  if (value && typeof value === 'object') {
+  if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, nestedValue]) => [key, serializeLogValue(nestedValue)])
     );

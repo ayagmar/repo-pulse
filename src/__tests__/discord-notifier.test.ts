@@ -6,6 +6,7 @@ import { createTestRepoEvent } from './test-helpers.js';
 describe('createDiscordNotifier', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('returns null when no webhook URL is configured', () => {
@@ -65,6 +66,32 @@ describe('createDiscordNotifier', () => {
       provider: 'discord',
       error: 'Discord API error: 503 server error',
       failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+    });
+  });
+
+  it('classifies a timed-out Discord request as retryable', async () => {
+    const notifier = createDiscordNotifier('https://discord.com/api/webhooks/1/test-hook');
+    if (!notifier) throw new Error('Expected Discord notifier');
+    // Control the clock at the timeout API boundary; never wait ten seconds or use the network.
+    const controller = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Timed out', 'TimeoutError'));
+            });
+          })
+      )
+    );
+    const pending = notifier.notify(createTestRepoEvent());
+    controller.abort();
+    await expect(pending).resolves.toMatchObject({
+      success: false,
+      failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+      error: 'Discord request failed: Timed out',
     });
   });
 

@@ -1,14 +1,14 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import type { ConfigEnv } from '../config/env.js';
+import type { RepoEventOf } from '../core/models/repo-event.js';
 import {
+  createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
-  createRepoEvent,
 } from '../core/models/repo-event.js';
-import type { RepoEventOf } from '../core/models/repo-event.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../core/services/d1-types.js';
 
 const migrationsDirectoryUrl = new URL('../../migrations/', import.meta.url);
@@ -170,6 +170,12 @@ export function createExecutionContext(): {
       },
       exports: {} as Cloudflare.Exports,
       props: {},
+      get tracing(): Tracing {
+        throw new Error('Tracing requires the Workers integration test runtime');
+      },
+      abort(): void {
+        throw new Error('Execution context aborted');
+      },
     },
     async waitForBackground(): Promise<void> {
       await Promise.allSettled(backgroundTasks);

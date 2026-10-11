@@ -3,12 +3,12 @@ interface D1MetaLike {
   last_row_id?: number;
 }
 
-export interface D1RunResultLike {
+interface D1RunResultLike {
   success: boolean;
   meta: D1MetaLike;
 }
 
-export interface D1AllResultLike<Row> {
+interface D1AllResultLike<Row> {
   results: Row[];
   success: boolean;
   meta: D1MetaLike;

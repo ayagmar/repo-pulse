@@ -59,7 +59,7 @@ function parsePositiveInteger(
   }
 
   const parsedValue = Number.parseInt(normalizedValue, 10);
-  if (parsedValue < minimum) {
+  if (!Number.isSafeInteger(parsedValue) || parsedValue < minimum) {
     throw new Error(`Invalid ${name}: expected an integer >= ${String(minimum)}`);
   }
 

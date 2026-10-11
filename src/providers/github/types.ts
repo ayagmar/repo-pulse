@@ -29,7 +29,7 @@ export interface GitHubIssue {
   html_url: string;
   state: 'open' | 'closed';
   body: string | null;
-  labels: Array<{ name: string }>;
+  labels: { name: string }[];
 }
 
 export interface GitHubPullRequest {

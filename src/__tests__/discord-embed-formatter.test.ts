@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import {
-  REPO_EVENT_ACTIONS,
-  REPO_EVENT_TYPES,
-  createRepoEvent,
-} from '../core/models/repo-event.js';
 import type {
   RepoEvent,
   RepoEventInput,
   RepoEventOf,
   RepoEventType,
+} from '../core/models/repo-event.js';
+import {
+  createRepoEvent,
+  REPO_EVENT_ACTIONS,
+  REPO_EVENT_TYPES,
 } from '../core/models/repo-event.js';
 import { formatDiscordEmbed } from '../providers/discord/embed-formatter.js';
 
@@ -195,6 +195,25 @@ describe('formatDiscordEmbed', () => {
     expect(embed.title).toBe('🍴 New Fork');
     expect(embed.description).toContain('otheruser/test-repo');
     expect(embed.color).toBe(0x0366d6);
+  });
+
+  it('keeps long label lists within Discord field limits', () => {
+    const event = createEvent(REPO_EVENT_TYPES.ISSUE_OPENED, {
+      action: REPO_EVENT_ACTIONS.OPENED,
+      issue: {
+        number: 1,
+        title: 'Many labels',
+        url: 'https://github.com/owner/test-repo/issues/1',
+        state: 'open',
+        body: null,
+        labels: Array.from({ length: 100 }, () => 'label'.repeat(10)),
+      },
+    });
+    const labels = getFirstEmbed(formatDiscordEmbed(event)).fields?.find(
+      (field) => field.name === 'Labels'
+    );
+    expect(labels?.value.length).toBe(1024);
+    expect(labels?.value.endsWith('...')).toBe(true);
   });
 
   it('includes timestamp and author in all embeds', () => {

@@ -107,13 +107,13 @@ export class DurableEventProcessor {
 
     const recoveredCount = await this.ledger.requeueExpiredProcessingDeliveries(new Date());
     if (recoveredCount > 0) {
-      logger.warn('event_processor.interrupted_deliveries_requeued', {
+      logger.warn('event_processor.interrupted_deliveries_recovered', {
         component: 'event_processor',
         recoveredCount,
       });
     }
 
-    if (options.pruneSucceededDeliveries) {
+    if (options.pruneSucceededDeliveries === true) {
       await this.pruneSucceededDeliveries();
     }
 
@@ -158,7 +158,11 @@ export class DurableEventProcessor {
 
       const failures = results.filter((result) => !result.success);
       if (failures.length === 0) {
-        await this.ledger.markDeliverySucceeded(delivery.deliveryId, new Date());
+        await this.ledger.markDeliverySucceeded(
+          delivery.deliveryId,
+          new Date(),
+          delivery.processingAttempt
+        );
         return;
       }
 
@@ -180,7 +184,8 @@ export class DurableEventProcessor {
           delivery.deliveryId,
           nextAttemptAt,
           lastError,
-          FAILURE_CLASSIFICATIONS.TRANSIENT
+          FAILURE_CLASSIFICATIONS.TRANSIENT,
+          delivery.processingAttempt
         );
         return;
       }
@@ -189,23 +194,21 @@ export class DurableEventProcessor {
         delivery.deliveryId,
         new Date(),
         lastError,
-        allFailuresTransient ? FAILURE_CLASSIFICATIONS.TRANSIENT : FAILURE_CLASSIFICATIONS.PERMANENT
+        allFailuresTransient
+          ? FAILURE_CLASSIFICATIONS.TRANSIENT
+          : FAILURE_CLASSIFICATIONS.PERMANENT,
+        delivery.processingAttempt
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? (error.stack ?? error.message) : String(error);
-
-      await this.ledger.markDeliveryFailed(
-        delivery.deliveryId,
-        new Date(),
-        errorMessage,
-        FAILURE_CLASSIFICATIONS.PERMANENT
-      );
-      logger.error('event_processor.delivery_failed', {
+      // Keep the lease recoverable when persisting an outcome fails. A D1 outage
+      // is not a permanent provider failure; cron will recover this attempt.
+      logger.error('event_processor.delivery_interrupted', {
         component: 'event_processor',
         deliveryId: delivery.deliveryId,
         repository: delivery.repository,
         error,
       });
+      throw error;
     }
   }
 

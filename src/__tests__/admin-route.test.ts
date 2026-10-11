@@ -39,7 +39,7 @@ describe('admin routes', () => {
       env.DB.close();
     });
 
-    const response = await createApp(env).fetch(
+    const response = await createApp().fetch(
       new Request('https://example.com/admin/health'),
       env,
       createExecutionContext().executionCtx
@@ -58,7 +58,7 @@ describe('admin routes', () => {
       env.DB.close();
     });
 
-    const response = await createApp(env).fetch(
+    const response = await createApp().fetch(
       new Request('https://example.com/admin/health', {
         headers: {
           Authorization: 'Bearer admin-token',
@@ -85,7 +85,7 @@ describe('admin routes', () => {
       env.DB.close();
     });
 
-    const response = await createApp(env).fetch(
+    const response = await createApp().fetch(
       new Request('https://example.com/admin/status', {
         headers: {
           Authorization: 'Bearer admin-token',
@@ -106,6 +106,46 @@ describe('admin routes', () => {
     });
   });
 
+  it('uses rotated admin credentials and the current database with shared routes', async () => {
+    const firstDatabase = createTempDatabasePath();
+    const secondDatabase = createTempDatabasePath();
+    cleanups.push(firstDatabase.cleanup, secondDatabase.cleanup);
+    const env = createTestEnv(firstDatabase.databasePath);
+    const nextEnv = createTestEnv(secondDatabase.databasePath, {
+      ADMIN_API_TOKEN: 'rotated-token',
+    });
+    const firstDb = env.DB;
+    cleanups.push(
+      () => {
+        firstDb.close();
+      },
+      () => {
+        nextEnv.DB.close();
+      }
+    );
+    const app = createApp();
+    const request = (token: string): Request =>
+      new Request('https://example.com/admin/status', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    expect((await app.fetch(request('admin-token'), env)).status).toBe(200);
+    const event = createTestRepoEvent();
+    await new D1DeliveryLedger(nextEnv.DB).persistAcceptedDelivery({
+      deliveryId: 'new-database',
+      sourceEventType: 'star',
+      repository: event.repository.fullName,
+      event,
+      maxAttempts: 5,
+    });
+
+    // Binding-only updates must work even if the platform reuses the env object.
+    Object.assign(env, nextEnv);
+    expect((await app.fetch(request('admin-token'), env)).status).toBe(401);
+    const response = await app.fetch(request('rotated-token'), env);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ deliveryLedger: { total: 1 } });
+  });
+
   it('lists deliveries with status filters and returns delivery details', async () => {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);
@@ -124,6 +164,7 @@ describe('admin routes', () => {
       event,
       maxAttempts: 5,
     });
+    await ledger.claimNextPendingDelivery(new Date(), 300_000);
     await ledger.recordProviderAttempts('delivery-failed', 1, [
       {
         provider: 'discord',
@@ -136,10 +177,11 @@ describe('admin routes', () => {
       'delivery-failed',
       new Date(),
       'discord: Webhook failed',
-      FAILURE_CLASSIFICATIONS.PERMANENT
+      FAILURE_CLASSIFICATIONS.PERMANENT,
+      1
     );
 
-    const app = createApp(env);
+    const app = createApp();
     const execution = createExecutionContext();
     const listResponse = await app.fetch(
       new Request('https://example.com/admin/deliveries?status=failed', {
@@ -193,7 +235,7 @@ describe('admin routes', () => {
       env.DB.close();
     });
 
-    const app = createApp(env);
+    const app = createApp();
     const execution = createExecutionContext();
 
     const openApiResponse = await app.fetch(
@@ -246,7 +288,7 @@ describe('admin routes', () => {
       )
     );
 
-    const app = createApp(env);
+    const app = createApp();
     const ledger = new D1DeliveryLedger(env.DB);
     const event = createTestRepoEvent();
     await ledger.persistAcceptedDelivery({
@@ -256,6 +298,7 @@ describe('admin routes', () => {
       event,
       maxAttempts: 5,
     });
+    await ledger.claimNextPendingDelivery(new Date(), 300_000);
     await ledger.recordProviderAttempts('delivery-retry', 1, [
       {
         provider: 'discord',
@@ -268,7 +311,8 @@ describe('admin routes', () => {
       'delivery-retry',
       new Date('2026-03-09T10:00:01.000Z'),
       'discord: Discord unavailable',
-      FAILURE_CLASSIFICATIONS.PERMANENT
+      FAILURE_CLASSIFICATIONS.PERMANENT,
+      1
     );
 
     const retryExecution = createExecutionContext();
@@ -290,7 +334,7 @@ describe('admin routes', () => {
       status: 'succeeded',
       attempts: [
         expect.objectContaining({ success: false, deliveryAttempt: 1 }),
-        expect.objectContaining({ success: true, deliveryAttempt: 1 }),
+        expect.objectContaining({ success: true, deliveryAttempt: 2 }),
       ],
     });
   });

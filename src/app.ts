@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import { type ConfigEnv, createConfig } from './config/env.js';
+import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
-import type { D1DatabaseLike } from './core/services/d1-types.js';
 import { DurableEventProcessor } from './core/services/durable-event-processor.js';
 import { logger } from './core/services/logger.js';
 import { NotificationDispatcher } from './core/services/notification-dispatcher.js';
+import type { HttpEnv } from './http/app-env.js';
 import { createAdminAuthMiddleware } from './http/middleware/admin-auth.js';
 import { createErrorHandler } from './http/middleware/error-handler.js';
 import { requestLogger } from './http/middleware/logger.js';
@@ -12,11 +12,7 @@ import { createAdminRoutes } from './http/routes/admin.js';
 import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
 
-type AppEnv = ConfigEnv & {
-  DB: D1DatabaseLike;
-};
-
-function buildRuntime(env: AppEnv) {
+function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime'] {
   const config = createConfig(env);
   logger.setLevel(config.server.logLevel);
 
@@ -42,37 +38,28 @@ function buildRuntime(env: AppEnv) {
   };
 }
 
-export function createApp(env: AppEnv) {
-  const runtime = buildRuntime(env);
-  const app = new Hono<{ Bindings: AppEnv }>();
+export function createApp(): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
 
+  // Reuse routes, but derive clients and configuration from each request's bindings.
+  app.use('*', async (c, next) => {
+    c.set('runtime', buildRuntime(c.env));
+    await next();
+  });
   app.use('*', requestLogger);
-  app.onError(createErrorHandler(runtime.config.server.isDev));
-
-  app.route(
-    '/webhook',
-    createWebhookRoutes(runtime.eventProcessor, {
-      maxBodyBytes: runtime.config.github.maxBodyBytes,
-      webhookSecret: runtime.config.github.webhookSecret,
-      isDevelopment: runtime.config.server.isDev,
-    })
+  app.onError((error, c) =>
+    createErrorHandler((c.env.NODE_ENV ?? 'development') === 'development')(error, c)
   );
 
-  app.use('/admin/*', createAdminAuthMiddleware(runtime.config.admin.apiToken));
-  app.route(
-    '/admin',
-    createAdminRoutes(
-      runtime.notificationDispatcher,
-      runtime.deliveryLedger,
-      runtime.eventProcessor
-    )
-  );
+  app.route('/webhook', createWebhookRoutes());
+  app.use('/admin/*', createAdminAuthMiddleware());
+  app.route('/admin', createAdminRoutes());
 
   return app;
 }
 
 export async function drainDueDeliveries(
-  env: AppEnv,
+  env: HttpEnv['Bindings'],
   options: {
     pruneSucceededDeliveries?: boolean;
   } = {}

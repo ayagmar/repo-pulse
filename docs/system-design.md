@@ -63,7 +63,8 @@ stateDiagram-v2
     processing --> succeeded: all providers succeeded
     processing --> pending: transient failure / retry scheduled
     processing --> failed: permanent failure or max attempts reached
-    processing --> pending: lease expired and later drain requeues it
+    processing --> pending: lease expired with attempts remaining
+    processing --> failed: lease expired with retry budget exhausted
 ```
 
 ## Components
@@ -72,7 +73,8 @@ stateDiagram-v2
 
 - Reads the raw request stream directly so HMAC verification matches GitHub’s original bytes.
 - Rejects oversized requests before JSON parsing.
-- Rejects unsupported or invalid payloads with standardized JSON errors.
+- Verifies the original bytes before UTF-8 decoding and JSON parsing.
+- Rejects invalid supported payloads with standardized JSON errors; unsupported events are acknowledged and ignored.
 
 ### Domain mapping
 
@@ -91,6 +93,9 @@ stateDiagram-v2
 - Claims due rows from D1 in batches.
 - Persists `processing` leases to recover from interrupted invocations.
 - Reschedules transient failures with backoff.
+- Fences outcome updates by processing attempt and prevents admin retries from resetting active work.
+- Counts interruptions against the retry budget, including exhausted pending rows from previous releases.
+- Leaves processing leases recoverable when a D1 outcome write fails.
 - Prunes succeeded deliveries based on retention policy.
 
 ### Admin surface
@@ -108,4 +113,6 @@ stateDiagram-v2
 
 - Retry execution is durable, but exact execution time is bounded by cron cadence and Worker scheduling.
 - Notification dispatch is asynchronous; `202 Accepted` means persisted and queued, not fully delivered.
+- Provider sends are at-least-once on interruption. Delivery-ID dedupe applies only while the ledger row is retained.
+- Newest-first delivery lists use indexed ordering and indexed per-row attempt counts, not full-ledger aggregation.
 - Runtime code avoids filesystem-only and non-Workers APIs. Test code may use local SQLite only as a D1-compatible harness.
