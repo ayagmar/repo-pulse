@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { REPO_EVENT_TYPES } from '../core/models/repo-event.js';
 import { EventMappingError, mapGitHubEvent } from '../providers/github/event-mapper.js';
-import type { GitHubWebhookPayload } from '../providers/github/types.js';
+import type { GitHubCommit, GitHubWebhookPayload } from '../providers/github/types.js';
 
 const mockRepo = {
   id: 1,
@@ -297,6 +297,113 @@ describe('mapGitHubEvent', () => {
 
       expectTypeOf(result.fork.fullName).toBeString();
       expect(result.fork.fullName).toBe('otheruser/test-repo');
+    });
+  });
+
+  describe('push events', () => {
+    const commit = (id: string, message: string, distinct = true): GitHubCommit => ({
+      id,
+      message,
+      url: `https://github.com/owner/test-repo/commit/${id}`,
+      distinct,
+      author: { name: 'Test User', username: 'testuser' },
+    });
+    const push = (
+      overrides: Partial<GitHubWebhookPayload> = {}
+    ): Partial<GitHubWebhookPayload> => ({
+      ref: 'refs/heads/main',
+      deleted: false,
+      forced: false,
+      compare: 'https://github.com/owner/test-repo/compare/a...b',
+      commits: [commit('a1', 'fix: first\n\nbody text'), commit('b2', 'feat: second')],
+      repository: { ...mockRepo, default_branch: 'main' },
+      sender: mockSender,
+      ...overrides,
+    });
+
+    it('maps default-branch pushes with commit subjects, oldest first', () => {
+      const result = mapGitHubEvent('push', push());
+
+      if (result?.type !== REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH) {
+        throw new Error('Expected push event');
+      }
+      expect(result.push).toMatchObject({
+        branch: 'main',
+        forced: false,
+        compareUrl: 'https://github.com/owner/test-repo/compare/a...b',
+      });
+      expect(result.push.commits.map((c) => [c.id, c.message, c.author])).toEqual([
+        ['a1', 'fix: first', 'testuser'],
+        ['b2', 'feat: second', 'testuser'],
+      ]);
+    });
+
+    it.each([
+      ['other branches', push({ ref: 'refs/heads/feature' })],
+      ['tags', push({ ref: 'refs/tags/v1.0.0' })],
+      ['branch deletions', push({ deleted: true, commits: [] })],
+      ['bots', push({ sender: { ...mockSender, login: 'dependabot[bot]', type: 'Bot' } })],
+      ['commits already on another branch', push({ commits: [commit('a1', 'fix', false)] })],
+      [
+        'GitHub merge commits',
+        push({ commits: [commit('m1', 'Merge pull request #12 from x/y')] }),
+      ],
+      ['squash merges', push({ commits: [commit('s1', 'feat: add thing (#12)')] })],
+    ])('ignores %s', (_case, payload) => {
+      expect(mapGitHubEvent('push', payload)).toBeNull();
+    });
+
+    it('announces pushes that only mention a pull request among other commits', () => {
+      const result = mapGitHubEvent(
+        'push',
+        push({ commits: [commit('a1', 'fix (#12)'), commit('b2', 'chore: follow-up')] })
+      );
+
+      expect(result?.type).toBe(REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH);
+    });
+
+    it('rejects malformed push payloads', () => {
+      expect(() => mapGitHubEvent('push', { ...push(), commits: 'not-a-list' } as never)).toThrow(
+        EventMappingError
+      );
+    });
+  });
+
+  describe('release events', () => {
+    const release = {
+      tag_name: 'v1.2.0',
+      name: '',
+      html_url: 'https://github.com/owner/test-repo/releases/tag/v1.2.0',
+      body: 'notes',
+      prerelease: true,
+    };
+
+    it('maps published releases, treating an empty name as absent', () => {
+      const result = mapGitHubEvent('release', {
+        action: 'published',
+        repository: mockRepo,
+        sender: mockSender,
+        release,
+      });
+
+      if (result?.type !== REPO_EVENT_TYPES.RELEASE_PUBLISHED) {
+        throw new Error('Expected release event');
+      }
+      expect(result.release).toEqual({
+        tagName: 'v1.2.0',
+        name: null,
+        url: release.html_url,
+        body: 'notes',
+        prerelease: true,
+      });
+    });
+
+    it('ignores the follow-up release actions so a release is announced once', () => {
+      for (const action of ['released', 'prereleased', 'created', 'edited']) {
+        expect(
+          mapGitHubEvent('release', { action, repository: mockRepo, sender: mockSender, release })
+        ).toBeNull();
+      }
     });
   });
 });

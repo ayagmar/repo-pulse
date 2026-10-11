@@ -67,7 +67,7 @@ Use:
 
 - content type: `application/json`
 - secret: same value as `GITHUB_WEBHOOK_SECRET`
-- events: `Stars`, `Issues`, `Pull requests`, `Forks`
+- events: `Stars`, `Issues`, `Pull requests`, `Forks`, `Pushes`, `Releases`
 
 ## Runtime Configuration
 

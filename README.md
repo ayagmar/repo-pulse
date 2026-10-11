@@ -67,6 +67,13 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 | Issues | `issue.opened`, `issue.closed`, `issue.reopened` |
 | Pull requests | `pull_request.opened`, `pull_request.closed`, `pull_request.merged`, `pull_request.reopened` |
 | Forks | `fork.created` |
+| Pushes | `push.default_branch` |
+| Releases | `release.published` (including pre-releases) |
+
+Pushes are announced only for the repository's default branch, as one message with
+the latest commits. Bot pushes, branch deletions, and GitHub's own pull-request
+merge or squash commits are skipped, since the merged pull request is announced
+already. Rebase merges are not detected and are announced as a push.
 
 Unsupported events are acknowledged and ignored.
 

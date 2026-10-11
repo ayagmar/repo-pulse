@@ -52,12 +52,38 @@ interface Fork {
   defaultBranch: string;
 }
 
+export interface Commit {
+  id: string;
+  /** First line of the commit message. */
+  message: string;
+  url: string;
+  author: string;
+}
+
+interface Push {
+  branch: string;
+  compareUrl: string;
+  forced: boolean;
+  /** Distinct new commits, oldest first. */
+  commits: Commit[];
+}
+
+interface Release {
+  tagName: string;
+  name: string | null;
+  url: string;
+  body: string | null;
+  prerelease: boolean;
+}
+
 export const REPO_EVENT_ACTIONS = {
   CREATED: 'created',
   DELETED: 'deleted',
   OPENED: 'opened',
   CLOSED: 'closed',
   REOPENED: 'reopened',
+  PUSHED: 'pushed',
+  PUBLISHED: 'published',
 } as const;
 
 export const REPO_EVENT_TYPES = {
@@ -71,6 +97,8 @@ export const REPO_EVENT_TYPES = {
   PULL_REQUEST_MERGED: 'pull_request.merged',
   PULL_REQUEST_REOPENED: 'pull_request.reopened',
   FORK_CREATED: 'fork.created',
+  PUSH_DEFAULT_BRANCH: 'push.default_branch',
+  RELEASE_PUBLISHED: 'release.published',
 } as const;
 
 interface RepoEventPayloadMap {
@@ -118,6 +146,14 @@ interface RepoEventPayloadMap {
     action: typeof REPO_EVENT_ACTIONS.CREATED;
     fork: Fork;
   };
+  [REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH]: {
+    action: typeof REPO_EVENT_ACTIONS.PUSHED;
+    push: Push;
+  };
+  [REPO_EVENT_TYPES.RELEASE_PUBLISHED]: {
+    action: typeof REPO_EVENT_ACTIONS.PUBLISHED;
+    release: Release;
+  };
 }
 
 export type RepoEventType = keyof RepoEventPayloadMap;
@@ -142,6 +178,8 @@ export type PullRequestEvent = RepoEventOf<
   'pull_request.opened' | 'pull_request.closed' | 'pull_request.merged' | 'pull_request.reopened'
 >;
 export type ForkEvent = RepoEventOf<'fork.created'>;
+export type PushEvent = RepoEventOf<'push.default_branch'>;
+export type ReleaseEvent = RepoEventOf<'release.published'>;
 export type RepoEventInput<TType extends RepoEventType> = Omit<
   RepoEventOf<TType>,
   'timestamp' | 'type'

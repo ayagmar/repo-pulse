@@ -50,16 +50,20 @@ export function requireState(value: unknown, field: string): 'open' | 'closed' {
   invalidField(field);
 }
 
+export function requireArray(value: unknown, field: string): unknown[] {
+  if (!Array.isArray(value)) {
+    invalidField(field);
+  }
+
+  return value;
+}
+
 export function requireStringArrayFromObjects(
   value: unknown,
   field: string,
   nestedField: string
 ): string[] {
-  if (!Array.isArray(value)) {
-    invalidField(field);
-  }
-
-  return value.map((entry, index) => {
+  return requireArray(value, field).map((entry, index) => {
     const object = requireObject(entry, `${field}[${String(index)}]`);
     return requireString(object[nestedField], `${field}[${String(index)}].${nestedField}`);
   });

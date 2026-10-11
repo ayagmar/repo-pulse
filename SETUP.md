@@ -80,7 +80,7 @@ For each repository, open **Settings → Webhooks → Add webhook**:
 - Payload URL: `https://<your-worker>.workers.dev/webhook`
 - Content type: `application/json`
 - Secret: the value of `GITHUB_WEBHOOK_SECRET`
-- Events: Stars, Issues, Pull requests, Forks
+- Events: Stars, Issues, Pull requests, Forks, Pushes, Releases
 
 Use GitHub's delivery tester against a test destination first. Supported deliveries
 return `202` after persistence, not after Discord delivery. Duplicate retained delivery
