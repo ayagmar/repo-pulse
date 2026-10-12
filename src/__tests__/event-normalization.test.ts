@@ -343,14 +343,30 @@ describe('mapGitHubEvent', () => {
       ['tags', push({ ref: 'refs/tags/v1.0.0' })],
       ['branch deletions', push({ deleted: true, commits: [] })],
       ['bots', push({ sender: { ...mockSender, login: 'dependabot[bot]', type: 'Bot' } })],
-      ['commits already on another branch', push({ commits: [commit('a1', 'fix', false)] })],
       [
         'GitHub merge commits',
-        push({ commits: [commit('m1', 'Merge pull request #12 from x/y')] }),
+        push({
+          commits: [
+            commit('a1', 'fix: on the pull request branch', false),
+            commit('m1', 'Merge pull request #12 from x/y'),
+          ],
+        }),
       ],
       ['squash merges', push({ commits: [commit('s1', 'feat: add thing (#12)')] })],
     ])('ignores %s', (_case, payload) => {
       expect(mapGitHubEvent('push', payload)).toBeNull();
+    });
+
+    it('announces fast-forwards to commits already pushed on another branch', () => {
+      const result = mapGitHubEvent(
+        'push',
+        push({ commits: [commit('a1', 'fix: first', false), commit('b2', 'feat: second', false)] })
+      );
+
+      if (result?.type !== REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH) {
+        throw new Error('Expected push event');
+      }
+      expect(result.push.commits.map((c) => c.id)).toEqual(['a1', 'b2']);
     });
 
     it('announces pushes that only mention a pull request among other commits', () => {

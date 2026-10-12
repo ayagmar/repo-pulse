@@ -129,7 +129,7 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
     if (!event) {
       const unsupportedResponse: WebhookSuccessResponse = {
         success: true,
-        message: `Event type '${inbound.eventType}' is not supported`,
+        message: `Event '${inbound.eventType}' ignored: unsupported, or filtered out as noise`,
         eventType: inbound.eventType,
         repository: inbound.repository,
       };
