@@ -8,11 +8,11 @@ import type { GitHubRepository, GitHubUser, GitHubWebhookPayload } from '../type
 import { mapRepository, mapUser } from './repository.js';
 import { requireArray, requireBoolean, requireObject, requireString } from './validation.js';
 
-// GitHub's merge-commit and squash-merge subjects. Those pushes repeat a
-// "pull request merged" notification, so they are not announced again.
+// GitHub's merge-commit and squash-merge subjects. A push whose newest commit
+// has one repeats a "pull request merged" notification, so it is not announced.
 const PULL_REQUEST_MERGE_SUBJECT = /^Merge pull request #\d+ |\(#\d+\)$/;
 
-function mapCommit(value: unknown, index: number): Commit & { distinct: boolean } {
+function mapCommit(value: unknown, index: number): Commit {
   const field = `commits[${String(index)}]`;
   const commit = requireObject(value, field);
   const author = requireObject(commit.author, `${field}.author`);
@@ -26,7 +26,6 @@ function mapCommit(value: unknown, index: number): Commit & { distinct: boolean 
       typeof username === 'string' && username !== ''
         ? username
         : requireString(author.name, `${field}.author.name`),
-    distinct: requireBoolean(commit.distinct, `${field}.distinct`),
   };
 }
 
@@ -52,15 +51,11 @@ export function mapPush(
     return null;
   }
 
-  const commits = requireArray(payload.commits, 'commits')
-    .map(mapCommit)
-    .filter((commit) => commit.distinct)
-    .map(({ distinct: _distinct, ...commit }) => commit);
-  const [onlyCommit] = commits;
-  if (
-    commits.length === 0 ||
-    (commits.length === 1 && onlyCommit && PULL_REQUEST_MERGE_SUBJECT.test(onlyCommit.message))
-  ) {
+  // Commits are not filtered by `distinct`: fast-forwarding the default branch
+  // to commits already pushed on a feature branch is still news for that branch.
+  const commits = requireArray(payload.commits, 'commits').map(mapCommit);
+  const newest = commits.at(-1);
+  if (!newest || PULL_REQUEST_MERGE_SUBJECT.test(newest.message)) {
     return null;
   }
 

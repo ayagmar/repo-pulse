@@ -71,11 +71,12 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 | Releases | `release.published` (including pre-releases) |
 
 Pushes are announced only for the repository's default branch, as one message with
-the latest commits. Bot pushes, branch deletions, and GitHub's own pull-request
+the latest commits. Fast-forwarding the default branch to commits that were pushed to
+another branch first is announced too. Bot pushes, branch deletions, and GitHub's own pull-request
 merge or squash commits are skipped, since the merged pull request is announced
 already. Rebase merges are not detected and are announced as a push.
 
-Unsupported events are acknowledged and ignored.
+Unsupported and skipped events are acknowledged with `200` and ignored.
 
 ## API surface
 

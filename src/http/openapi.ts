@@ -101,7 +101,10 @@ export function createOpenApiDocument(origin: string): OpenApiDocument {
           required: ['success', 'message', 'eventType', 'repository'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            message: { type: 'string', example: "Event type 'ping' is not supported" },
+            message: {
+              type: 'string',
+              example: "Event 'ping' ignored: unsupported, or filtered out as noise",
+            },
             eventType: { type: 'string', example: 'ping' },
             repository: { type: 'string', example: 'myorg/repo' },
           },

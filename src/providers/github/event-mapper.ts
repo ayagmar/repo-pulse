@@ -26,7 +26,7 @@ export class EventMappingError extends AppError {
 
 /**
  * Map GitHub webhook payload to internal RepoEvent.
- * @returns RepoEvent or null if event type is not supported
+ * @returns RepoEvent, or null if the event is unsupported or filtered out
  * @throws EventMappingError if payload is invalid
  */
 export function mapGitHubEvent(
