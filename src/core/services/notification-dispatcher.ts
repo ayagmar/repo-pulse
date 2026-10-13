@@ -9,7 +9,6 @@ interface DispatchMetadata {
 
 /**
  * Simple dispatcher that sends events to all configured notifiers.
- * Replaces the over-engineered registry pattern.
  */
 export class NotificationDispatcher {
   private readonly notifiers: Notifier[] = [];
