@@ -1,11 +1,12 @@
 # Setup Guide
 
-Deploy Repo Pulse on Cloudflare Workers with D1, GitHub webhooks, and Discord notifications.
+Deploy Repo Pulse from a clone with Wrangler. The [Deploy to Cloudflare button](README.md#deploy)
+does the same without a local checkout; the GitHub webhook steps below apply to both.
 
 ## Prerequisites
 
 - Cloudflare account with Workers and D1 enabled
-- GitHub repository admin access
+- GitHub repository admin access, and the [GitHub CLI](https://cli.github.com/) to subscribe repositories
 - Discord webhook URL for the destination channel
 - Node 24 LTS recommended (`nvm use`); supported ranges are in `package.json`
 - npm 12.2.0 recommended (`npm install --global npm@12.2.0`)
@@ -53,38 +54,55 @@ another account, create your own database and update that ID first:
 npm exec -- wrangler d1 create repo-pulse
 ```
 
-The binding name must remain `DB`. If changing `database_name`, update the migration
-scripts in `package.json` too. Regenerate types after changing bindings.
+The binding name must remain `DB`: the migration scripts refer to the database by its
+binding, so `database_name` can change freely. Regenerate types after changing bindings.
 
 ## Secrets and deploy
+
+Generate the webhook secret into a file first. Neither GitHub nor Cloudflare shows it
+again, and every repository webhook needs the same value:
+
+```bash
+mkdir -p ~/.config/repo-pulse
+(umask 077; openssl rand -hex 32 | tr -d '\n' > ~/.config/repo-pulse/webhook-secret)
+```
 
 These commands affect the deployed Worker. `wrangler secret put` deploys a new version;
 use `wrangler versions secret put` instead if the secret change must be staged.
 
 ```bash
-npm exec -- wrangler secret put GITHUB_WEBHOOK_SECRET
+npm exec -- wrangler secret put GITHUB_WEBHOOK_SECRET < ~/.config/repo-pulse/webhook-secret
 npm exec -- wrangler secret put ADMIN_API_TOKEN
 npm exec -- wrangler secret put DISCORD_WEBHOOK_URL
-npm run db:migrate:remote
 npm run deploy
 ```
 
-Migration `0003` adds two delivery-list indexes without deleting data. Apply migrations
-before deploying the optimized query. Source maps and sampled traces are enabled in
-Wrangler configuration; deployment is required for those settings to reach production.
+`npm run deploy` applies pending D1 migrations, then deploys the Worker. Source maps and
+sampled traces are enabled in Wrangler configuration; deployment is required for those
+settings to reach production.
 
 ## GitHub webhooks
 
-For each repository, open **Settings → Webhooks → Add webhook**:
+With the [GitHub CLI](https://cli.github.com/) logged in as a repository admin, subscribe
+repositories in one command. Repositories that already send to the URL are skipped:
+
+```bash
+just subscribe https://<your-worker>.workers.dev owner/repo owner/other-repo
+```
+
+The script (`scripts/subscribe.sh`) reads the secret from
+`~/.config/repo-pulse/webhook-secret`, or from `REPO_PULSE_SECRET_FILE` when set.
+
+To add one by hand, open the repository's **Settings → Webhooks → Add webhook**:
 
 - Payload URL: `https://<your-worker>.workers.dev/webhook`
 - Content type: `application/json`
 - Secret: the value of `GITHUB_WEBHOOK_SECRET`
 - Events: Stars, Issues, Pull requests, Forks, Pushes, Releases
 
-Use GitHub's delivery tester against a test destination first. Supported deliveries
-return `202` after persistence, not after Discord delivery. Duplicate retained delivery
-IDs return `200`; unsupported events are acknowledged and ignored.
+GitHub pings each new webhook: `200` means the secret matches, `401` means it does not.
+Supported deliveries return `202` after persistence, not after Discord delivery. Duplicate
+retained delivery IDs return `200`; unsupported events are acknowledged and ignored.
 
 ## Verify
 

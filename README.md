@@ -15,40 +15,66 @@
 
 </div>
 
-Repo Pulse is a Cloudflare Workers service for GitHub repository activity. It verifies raw webhook signatures, normalizes supported events into a strict internal model, persists accepted deliveries in D1, deduplicates on GitHub delivery ID, and dispatches Discord notifications asynchronously.
-
 <div align="center">
-  <img src="docs/images/repo-pulse.png" alt="Repo Pulse overview" width="760" />
+  <img src="docs/images/repo-pulse.png" alt="Repo Pulse" width="760" />
 </div>
 
-## Why it exists
+Repo Pulse posts activity from your GitHub repositories to a Discord channel: stars, forks, issues, pull requests, default-branch pushes, and releases. You run it yourself on your Cloudflare account, as a Worker with a D1 database. There is no hosted version.
 
-GitHub webhooks are easy to receive and easy to mishandle. Repo Pulse is built around the parts that usually break first in production:
+<div align="center">
+  <img src="docs/images/stars.png" alt="Repo Pulse star notifications in Discord" width="720" />
+</div>
 
-- exact raw-body HMAC verification
-- persist-before-accept durability
-- duplicate delivery protection
-- asynchronous notification dispatch
-- retryable delivery ledger with attempt history
-- authenticated admin endpoints for status, health, replay, and docs
+## Why not Discord's built-in GitHub webhook?
 
-## What the service does
+Discord accepts GitHub webhooks directly: add `/github` to a channel's webhook URL and give that to GitHub. If that is enough for you, use it. There is nothing to host.
+
+Repo Pulse is for when you want to choose what gets announced and keep a record of what was sent:
+
+- Pushes are announced only for the default branch, as one message with the latest commits. Bot pushes, branch deletions, and GitHub's own pull-request merge commits are skipped, because the merged pull request is announced already.
+- Failed Discord sends are retried with backoff, following Discord's rate-limit headers, up to 5 attempts.
+- If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
+- Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
+
+## Deploy
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ayagmar/repo-pulse)
+
+Generate the webhook secret first and keep it in a file. GitHub and Cloudflare never show it again, and you need it for every repository you subscribe:
+
+```bash
+mkdir -p ~/.config/repo-pulse
+(umask 077; openssl rand -hex 32 | tr -d '\n' > ~/.config/repo-pulse/webhook-secret)
+cat ~/.config/repo-pulse/webhook-secret
+```
+
+The button creates the D1 database in your Cloudflare account and asks for three secrets:
+
+| Secret | Value |
+| --- | --- |
+| `GITHUB_WEBHOOK_SECRET` | the contents of `~/.config/repo-pulse/webhook-secret` |
+| `ADMIN_API_TOKEN` | another random string, for example from `openssl rand -hex 32` |
+| `DISCORD_WEBHOOK_URL` | the Discord channel's webhook URL (Server Settings → Integrations → Webhooks) |
+
+It then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
+
+## Subscribe repositories
+
+GitHub has no account-wide webhooks, so each repository needs its own. With the [GitHub CLI](https://cli.github.com/) logged in as a repository admin:
+
+```bash
+just subscribe https://repo-pulse.<your-subdomain>.workers.dev owner/repo owner/other-repo
+```
+
+Without `just`, run `scripts/subscribe.sh` with the same arguments. It adds a webhook for the six supported events, signed with the secret in `~/.config/repo-pulse/webhook-secret` (set `REPO_PULSE_SECRET_FILE` to use another file), and skips repositories that already send to that URL.
+
+GitHub pings each new webhook. The repository's **Settings → Webhooks → Recent Deliveries** shows the result: `200` means the secret matches, `401` means it does not.
+
+## How it works
 
 ```text
 GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 202 -> notify Discord -> retry if needed
 ```
-
-<div align="center">
-  <img src="docs/images/repo-pulse.png" alt="Repo Pulse webhook and delivery architecture" width="100%" />
-</div>
-
-## UI preview
-
-<div align="center">
-  <img src="docs/images/stars.png" alt="Repo Pulse admin dashboard screenshot" width="720" />
-</div>
-
-### Core behavior
 
 - `POST /webhook` receives GitHub webhook deliveries
 - verifies `X-Hub-Signature-256` against the exact raw body
@@ -159,68 +185,20 @@ Related docs:
 - [Operations guide](docs/operations.md)
 - [Production CPU and heap profiling](docs/profiling.md)
 
-## Quick start
-
-### 1. Install
+## Local development
 
 Use Node 24 LTS (`nvm use`) and npm 12.2.0. Node 22.22.2+ is also supported;
 see `engines` in `package.json` for the exact ranges.
 
 ```bash
 npm ci
-```
-
-### 2. Create local secrets
-
-```bash
 cp .dev.vars.example .dev.vars
-```
-
-### 3. Apply local migrations and generate types
-
-```bash
 npm run db:migrate:local
 npm run typegen
-```
-
-### 4. Start the Worker
-
-```bash
 npm run dev
 ```
 
-Wrangler serves the app on `http://127.0.0.1:8787` by default.
-
-## Deploy
-
-### Required secrets
-
-```bash
-npm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-npm exec wrangler secret put ADMIN_API_TOKEN
-npm exec wrangler secret put DISCORD_WEBHOOK_URL
-```
-
-### Remote migration and deploy
-
-```bash
-npm run db:migrate:remote
-npm run deploy
-```
-
-### GitHub webhook configuration
-
-Use this endpoint:
-
-```text
-https://<your-worker>.workers.dev/webhook
-```
-
-Use these GitHub webhook settings:
-
-- content type: `application/json`
-- secret: same value as `GITHUB_WEBHOOK_SECRET`
-- events: `Stars`, `Issues`, `Pull requests`, `Forks`
+Fill in `.dev.vars` with test values first. Wrangler serves the app on `http://127.0.0.1:8787`.
 
 ## Tooling
 
@@ -263,4 +241,5 @@ src/core/services/d1-delivery-ledger.ts
 src/core/services/durable-event-processor.ts
 src/providers/github/           payload verification + event mapping
 src/providers/discord/          embed formatting + delivery transport
+scripts/subscribe.sh            adds the webhook to GitHub repositories
 ```
