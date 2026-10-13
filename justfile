@@ -85,6 +85,10 @@ knip-fix:
 config-status:
     @curl -s -H "Authorization: Bearer $$ADMIN_API_TOKEN" http://localhost:8787/admin/health | jq
 
+# Add the Repo Pulse webhook to GitHub repositories (skips ones already subscribed)
+subscribe url +repos:
+    scripts/subscribe.sh {{url}} {{repos}}
+
 # Copy local Cloudflare secrets template
 setup-config:
     cp .dev.vars.example .dev.vars
