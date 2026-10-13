@@ -10,11 +10,11 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run db:migrate:remote && wrangler deploy",
     "build": "wrangler deploy --dry-run",
     "typegen": "wrangler types",
-    "db:migrate:local": "wrangler d1 migrations apply repo-pulse --local",
-    "db:migrate:remote": "wrangler d1 migrations apply repo-pulse --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
@@ -76,5 +76,18 @@
     "esbuild@0.28.2": true,
     "workerd@1.20261006.1": true,
     "better-sqlite3": false
+  },
+  "cloudflare": {
+    "bindings": {
+      "GITHUB_WEBHOOK_SECRET": {
+        "description": "Random string GitHub signs each webhook delivery with. Generate one with `openssl rand -hex 32` and save a copy: you need the same value for every repository webhook."
+      },
+      "ADMIN_API_TOKEN": {
+        "description": "Bearer token for the `/admin` endpoints. Generate one with `openssl rand -hex 32`."
+      },
+      "DISCORD_WEBHOOK_URL": {
+        "description": "Webhook URL of the Discord channel to post to (Server Settings → Integrations → Webhooks)."
+      }
+    }
   }
 }

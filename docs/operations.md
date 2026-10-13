@@ -35,39 +35,9 @@ npm run dev
 
 ## Production Deployment
 
-1. Ensure [`wrangler.jsonc`](../wrangler.jsonc) points at the correct D1 database for the Cloudflare account you are deploying to. If you are deploying this repo to a different account than the current one, replace the committed `database_id` first.
-
-2. Set secrets:
-
-```bash
-npm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-npm exec wrangler secret put ADMIN_API_TOKEN
-npm exec wrangler secret put DISCORD_WEBHOOK_URL
-```
-
-3. Apply remote migrations:
-
-```bash
-npm run db:migrate:remote
-```
-
-4. Deploy:
-
-```bash
-npm run deploy
-```
-
-5. Configure GitHub webhooks to point at:
-
-```text
-https://<your-worker>.workers.dev/webhook
-```
-
-Use:
-
-- content type: `application/json`
-- secret: same value as `GITHUB_WEBHOOK_SECRET`
-- events: `Stars`, `Issues`, `Pull requests`, `Forks`, `Pushes`, `Releases`
+Follow [SETUP.md](../SETUP.md): it covers the Deploy to Cloudflare button, deploying with
+Wrangler, and subscribing repositories. `npm run deploy` applies pending D1 migrations
+before deploying the Worker.
 
 ## Runtime Configuration
 
