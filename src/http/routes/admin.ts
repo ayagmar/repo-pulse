@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { APP_VERSION } from '../../config/app-version.js';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { DELIVERY_STATUS_VALUES, type DeliveryStatus } from '../../core/models/delivery-ledger.js';
 import type { HttpEnv } from '../app-env.js';
@@ -39,7 +40,7 @@ export function createAdminRoutes(): Hono<HttpEnv> {
 
     return c.json({
       name: 'repo-pulse',
-      version: '1.0.0',
+      version: APP_VERSION,
       status: 'running',
       providers: notificationDispatcher.getNotifiers().map((notifier) => notifier.name),
       deliveryLedger: stats,

@@ -1,3 +1,5 @@
+import { APP_VERSION } from '../config/app-version.js';
+
 interface OpenApiDocument {
   openapi: '3.0.3';
   info: {
@@ -27,7 +29,7 @@ export function createOpenApiDocument(origin: string): OpenApiDocument {
     openapi: '3.0.3',
     info: {
       title: 'Repo Pulse API',
-      version: '1.0.0',
+      version: APP_VERSION,
       description:
         'Repo Pulse receives GitHub webhooks, persists accepted deliveries to a D1 ledger, and dispatches notifications to configured providers from Cloudflare Workers.',
     },
