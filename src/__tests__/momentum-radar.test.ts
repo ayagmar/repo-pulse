@@ -237,6 +237,34 @@ describe('momentum radar', () => {
     expect(postedEmbeds()).toEqual([]);
   });
 
+  it('sends one alert per check, starting with the repository with the most stargazers', async () => {
+    const env = createRadarEnv();
+    const now = new Date('2026-10-15T12:05:00.000Z');
+    await recordStars(env, 'cli', now, ['a', 'b', 'c', 'd', 'e'], 5);
+    await recordStars(env, 'web', now, ['a', 'b', 'c', 'd', 'e', 'f'], 6);
+
+    await check(env, '2026-10-15T12:05:00.000Z');
+    const afterFirstCheck = postedEmbeds().map((embed) => embed.title);
+    await check(env, '2026-10-15T12:15:00.000Z');
+
+    expect(afterFirstCheck).toEqual(['🚀 myorg/web is taking off']);
+    expect(postedEmbeds().map((embed) => embed.title)).toEqual([
+      '🚀 myorg/web is taking off',
+      '🚀 myorg/cli is taking off',
+    ]);
+  });
+
+  it('sends one alert when two checks overlap', async () => {
+    const env = createRadarEnv();
+    const now = new Date('2026-10-15T12:05:00.000Z');
+    await recordStars(env, 'cli', now, ['a', 'b', 'c', 'd', 'e'], 5);
+    vi.setSystemTime(now);
+
+    await Promise.all([checkMomentum(env, now), checkMomentum(env, now)]);
+
+    expect(postedEmbeds()).toHaveLength(1);
+  });
+
   it('retries an alert Discord rejected at the next check', async () => {
     const env = createRadarEnv();
     await recordStars(
