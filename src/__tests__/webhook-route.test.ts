@@ -17,6 +17,7 @@ function createWebhookPayload(overrides: Record<string, unknown> = {}): string {
       full_name: 'myorg/repo',
       owner: { login: 'myorg' },
       html_url: 'https://github.com/myorg/repo',
+      private: false,
       description: null,
       stargazers_count: 1,
       forks_count: 0,

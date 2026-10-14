@@ -9,6 +9,7 @@ export interface Repository {
   fullName: string;
   owner: string;
   url: string;
+  private: boolean;
   description: string | null;
   stars: number;
   forks: number;

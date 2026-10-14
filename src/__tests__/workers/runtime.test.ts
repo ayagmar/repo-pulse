@@ -21,6 +21,7 @@ describe('Workers runtime integration', () => {
       fullName: 'myorg/repo',
       owner: 'myorg',
       url: 'https://github.com/myorg/repo',
+      private: false,
       description: null,
       stars: 1,
       forks: 0,

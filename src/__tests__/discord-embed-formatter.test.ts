@@ -21,6 +21,7 @@ const basePayload: BaseEventPayload = {
     fullName: 'owner/test-repo',
     owner: 'owner',
     url: 'https://github.com/owner/test-repo',
+    private: false,
     description: 'A test repository',
     stars: 42,
     forks: 5,

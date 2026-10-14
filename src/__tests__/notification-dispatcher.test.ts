@@ -30,6 +30,7 @@ function createMockEvent(): RepoEvent {
       fullName: 'owner/test-repo',
       owner: 'owner',
       url: 'https://github.com/owner/test-repo',
+      private: false,
       description: null,
       stars: 1,
       forks: 0,
