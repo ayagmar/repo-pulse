@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS radar_alerts (
   sent_at TEXT
 );
 
--- The radar counts recent stars every ten minutes.
+-- The radar counts recent stars every ten minutes, then earlier stars for the few
+-- repositories with enough recent ones.
 CREATE INDEX IF NOT EXISTS idx_events_type_received_at
   ON events (event_type, received_at);
+CREATE INDEX IF NOT EXISTS idx_events_repository_type_received_at
+  ON events (repository, event_type, received_at);

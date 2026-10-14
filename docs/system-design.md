@@ -106,8 +106,9 @@ stateDiagram-v2
 
 ### Star radar
 
-- Every ten minutes, at minute 5 of each ten so it does not share a run with the digest, the cron counts each repository's `star.created` events in the last 3 hours and in the 14 days before.
-- A repository is spiking when it got at least 5 stars in those 3 hours, and at least 4 times the average for a 3-hour window over the 14 days. A repository with less than 14 days of history looks quieter than it is, so its first spikes alert more easily.
+- Every ten minutes, at minute 5 of each ten, the cron counts the people who starred each repository in the last 3 hours. Counting people rather than `star.created` events means one person toggling a star cannot set it off.
+- For repositories with at least 5, not cooling down, it also counts their stars in the 14 days before. A repository is spiking when its recent count is at least 4 times the average for a 3-hour window over those 14 days. A repository with less than 14 days of history looks quieter than it is, so its first spikes alert more easily.
+- Each check reads the stars of the last 3 hours, plus the 14-day stars of those candidates. A repository steadily starred by 5 or more people every 3 hours is a candidate at every check, so it costs its 14-day star count in D1 reads 144 times a day.
 - Each alert is claimed in `radar_alerts` as `stars:<owner/repo>` before it is posted. Once sent, it blocks another alert for that repository for 24 hours. If every provider fails, the claim is released. If the check fails before either, the claim's five-minute lease runs out before the next check, which retries.
 - With `GITHUB_TOKEN`, the alert looks up the last 20 stargazers' follower counts in one GraphQL request and lists up to three with at least 100 followers. It also lists the top three referrers from the traffic API. Either lookup can fail without blocking the alert.
 

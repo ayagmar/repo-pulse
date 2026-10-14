@@ -17,7 +17,7 @@ const CHECK_MINUTE = 5;
 
 const RECENT_WINDOW_HOURS = 3;
 const BASELINE_DAYS = 14;
-/** A spike is at least this many stars in the recent window... */
+/** A spike is at least this many people starring in the recent window... */
 const MIN_SPIKE_STARS = 5;
 /** ...and at least this many times the stars such a window usually gets. */
 const SPIKE_FACTOR = 4;
@@ -56,11 +56,7 @@ function findStarSpikes(counts: readonly StarCounts[]): StarSpike[] {
       recentStars: count.recent,
       expectedStars: count.earlier / windowsInBaseline,
     }))
-    .filter(
-      (spike) =>
-        spike.recentStars >= MIN_SPIKE_STARS &&
-        spike.recentStars >= SPIKE_FACTOR * spike.expectedStars
-    )
+    .filter((spike) => spike.recentStars >= SPIKE_FACTOR * spike.expectedStars)
     .sort((left, right) => right.recentStars - left.recentStars);
 }
 
@@ -83,10 +79,11 @@ export class MomentumRadar {
     }
 
     const recentStart = new Date(now.getTime() - RECENT_WINDOW_HOURS * HOUR_MS);
-    const counts = await this.radarLog.countStarsOutsideCooldown({
+    const counts = await this.radarLog.listStarCandidates({
       earlierStart: new Date(recentStart.getTime() - BASELINE_DAYS * DAY_MS),
       recentStart,
       end: now,
+      minimumRecent: MIN_SPIKE_STARS,
       alertPrefix: ALERT_PREFIX,
       now: new Date(),
       limits: ALERT_LIMITS,

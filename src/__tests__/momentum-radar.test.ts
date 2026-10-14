@@ -227,6 +227,16 @@ describe('momentum radar', () => {
     expect(postedEmbeds()).toEqual([]);
   });
 
+  it('counts people, not stars, so one person toggling a star cannot set it off', async () => {
+    const env = createRadarEnv();
+    const now = new Date('2026-10-15T12:05:00.000Z');
+    await recordStars(env, 'cli', now, ['a', 'a', 'a', 'a', 'a', 'a'], 1);
+
+    await check(env, now.toISOString());
+
+    expect(postedEmbeds()).toEqual([]);
+  });
+
   it('retries an alert Discord rejected at the next check', async () => {
     const env = createRadarEnv();
     await recordStars(

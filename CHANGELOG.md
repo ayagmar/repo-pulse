@@ -15,7 +15,7 @@
   days per repository and lists the latest merged pull requests.
 - With an optional `GITHUB_TOKEN`, the daily digest lists repositories with commits on the
   default branch since their latest release.
-- Star radar: a repository that gets at least 5 stars in 3 hours, and 4 times its usual
+- Star radar: a repository starred by at least 5 people in 3 hours, and 4 times its usual
   rate over the previous two weeks, is announced at most once a day. With `GITHUB_TOKEN`
   the alert lists notable new stargazers and top referrers. Migration `0006` adds the
   `radar_alerts` table and an index on events by type and time.

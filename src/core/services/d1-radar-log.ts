@@ -1,9 +1,11 @@
 import type { D1DatabaseLike } from './d1-types.js';
 
-/** Stars one repository gained in a recent window and in the period before it. */
+/** Stars one repository got in a recent window, and in the period before it. */
 export interface StarCounts {
   repository: string;
+  /** People who starred it in the recent window. */
   recent: number;
+  /** Stars it got in the period before. */
   earlier: number;
 }
 
@@ -23,37 +25,50 @@ export class D1RadarLog {
   constructor(private readonly db: D1DatabaseLike) {}
 
   /**
-   * Stars gained per repository in [recentStart, end) and in [earlierStart, recentStart).
-   * Leaves out repositories whose alert, `alertPrefix` plus the repository's name, could
-   * not be claimed at `now`.
+   * Repositories starred by at least `minimumRecent` people in [recentStart, end), with
+   * how many people that is and how many stars they got in [earlierStart, recentStart).
+   * Leaves out repositories whose alert, `alertPrefix` plus the repository's name,
+   * could not be claimed at `now`. Only those candidates have their earlier stars read.
    */
-  async countStarsOutsideCooldown(input: {
+  async listStarCandidates(input: {
     earlierStart: Date;
     recentStart: Date;
     end: Date;
+    minimumRecent: number;
     alertPrefix: string;
     now: Date;
     limits: { cooldownMs: number; leaseMs: number };
   }): Promise<StarCounts[]> {
     const rows = await this.db
       .prepare(
-        `SELECT
-           events.repository AS repository,
-           SUM(CASE WHEN events.received_at >= ? THEN 1 ELSE 0 END) AS recent,
-           SUM(CASE WHEN events.received_at < ? THEN 1 ELSE 0 END) AS earlier
-         FROM events
-         LEFT JOIN radar_alerts ON radar_alerts.alert_id = ? || events.repository
-         WHERE events.event_type = 'star.created'
-           AND events.received_at >= ? AND events.received_at < ?
-           AND (radar_alerts.alert_id IS NULL OR ${AVAILABLE})
-         GROUP BY events.repository`
+        `WITH recent AS (
+           SELECT
+             repository,
+             COUNT(DISTINCT json_extract(event_json, '$.sender.login')) AS recent
+           FROM events
+           WHERE event_type = 'star.created' AND received_at >= ? AND received_at < ?
+           GROUP BY repository
+           HAVING recent >= ?
+         )
+         SELECT
+           recent.repository AS repository,
+           recent.recent AS recent,
+           (SELECT COUNT(*)
+            FROM events
+            WHERE events.repository = recent.repository
+              AND events.event_type = 'star.created'
+              AND events.received_at >= ? AND events.received_at < ?) AS earlier
+         FROM recent
+         LEFT JOIN radar_alerts ON radar_alerts.alert_id = ? || recent.repository
+         WHERE radar_alerts.alert_id IS NULL OR ${AVAILABLE}`
       )
       .bind(
         input.recentStart.toISOString(),
+        input.end.toISOString(),
+        input.minimumRecent,
+        input.earlierStart.toISOString(),
         input.recentStart.toISOString(),
         input.alertPrefix,
-        input.earlierStart.toISOString(),
-        input.end.toISOString(),
         ...availableBindings(input.now, input.limits)
       )
       .all<StarCounts>();
