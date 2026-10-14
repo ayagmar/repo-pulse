@@ -97,8 +97,8 @@ stateDiagram-v2
 
 ### Daily digest
 
-- The every-minute cron checks the local time in `DIGEST_TIME_ZONE`. During the first ten minutes of `DIGEST_HOUR`, it summarizes the events received since that hour on the previous local day and sends one message per provider.
-- The window follows the time zone's clock changes, so it lasts 23 or 25 hours on the day of a change. Morocco, for example, moved to UTC+0 on 20 September 2026.
+- The every-minute cron checks the local time in `DIGEST_TIME_ZONE`. During the first ten minutes after `DIGEST_HOUR`, it summarizes the events received since that hour on the previous local day and sends one message per provider.
+- Both ends of the window come from the same local-hour instant, so consecutive digests meet exactly. Across a clock change a window lasts 23 or 25 hours; Morocco, for example, moved to UTC+0 on 20 September 2026. A digest hour repeated by a clock change uses its first occurrence, and one skipped by a clock change moves forward by the gap.
 - `digest_sends` records each provider that accepted a day's digest. A failed send is retried the next minute until the window closes, and a sent digest is not repeated.
 - Days without events get no digest.
 

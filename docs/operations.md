@@ -74,7 +74,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - Duplicate retained delivery IDs return `200` without enqueueing new work.
 - A retry resends only to the providers that have not accepted the delivery yet.
 - Provider sends remain at-least-once: interruption between sending and persisting success can repeat a send.
-- The daily digest is posted by the every-minute cron during the first ten minutes of `DIGEST_HOUR`. A failed digest is retried each minute in that window; one that is still failing when it closes is skipped for that day.
+- The daily digest is posted by the every-minute cron during the first ten minutes after `DIGEST_HOUR`. A failed digest is retried each minute in that window. One that is still failing when it closes is skipped, and the next day's digest does not include its events.
 - Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
 - Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.
 - Discord requests time out after ten seconds and are classified as transient failures.

@@ -12,6 +12,8 @@ import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
 const HOUR_MS = 60 * 60_000;
 
+type DigestWindowResult = NonNullable<ReturnType<typeof dueDigestWindow>>;
+
 /** Local wall-clock time, computed independently of the code under test. */
 function localWallClock(instant: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('sv-SE', {
@@ -94,42 +96,63 @@ function release(name: string, tagName: string): RepoEvent {
 }
 
 describe('daily digest schedule', () => {
+  function digestsIn2026(timeZone: string, hour: number): DigestWindowResult[] {
+    const windows: DigestWindowResult[] = [];
+    // These zones are offset from UTC by whole or half hours, so half-hour steps land on
+    // every digest's due time, and no due period is sampled twice.
+    for (
+      let time = Date.parse('2026-01-01T00:00:00.000Z');
+      time < Date.parse('2027-01-01T00:00:00.000Z');
+      time += 30 * 60_000
+    ) {
+      const window = dueDigestWindow(new Date(time), timeZone, hour);
+      if (window) {
+        windows.push(window);
+      }
+    }
+    return windows;
+  }
+
+  function expectEveryDayOnceWithoutGaps(windows: DigestWindowResult[], timeZone: string): void {
+    expect(new Set(windows.map((window) => window.date)).size).toBe(windows.length);
+    // 2026-01-01's digest falls on the first day sampled; 365 local days follow it.
+    expect(windows.length).toBeGreaterThanOrEqual(364);
+    for (const [index, window] of windows.entries()) {
+      expect(localWallClock(window.end, timeZone).slice(0, 10)).toBe(window.date);
+      const next = windows[index + 1];
+      if (next) {
+        expect(next.start).toEqual(window.end);
+      }
+    }
+  }
+
   it.each(['Africa/Casablanca', 'America/New_York', 'Asia/Kolkata'])(
     'in %s, covers each local day exactly once, from 09:00 to 09:00, across clock changes',
     (timeZone) => {
-      const windows: NonNullable<ReturnType<typeof dueDigestWindow>>[] = [];
-      // These zones are offset from UTC by whole or half hours, so half-hour steps
-      // land on 09:00 local time every day.
-      for (
-        let time = Date.parse('2026-01-01T00:00:00.000Z');
-        time < Date.parse('2027-01-01T00:00:00.000Z');
-        time += 30 * 60_000
-      ) {
-        const window = dueDigestWindow(new Date(time), timeZone, 9);
-        if (window && windows.at(-1)?.date !== window.date) {
-          windows.push(window);
-        }
-      }
+      const windows = digestsIn2026(timeZone, 9);
 
-      expect(new Set(windows.map((window) => window.date)).size).toBe(windows.length);
-      expect(windows.length).toBeGreaterThanOrEqual(364);
-      for (const [index, window] of windows.entries()) {
+      expectEveryDayOnceWithoutGaps(windows, timeZone);
+      for (const window of windows) {
         expect(localWallClock(window.end, timeZone)).toBe(`${window.date} 09:00`);
-        expect(localWallClock(window.start, timeZone)).toMatch(/ 09:00$/);
-        const next = windows[index + 1];
-        if (next) {
-          expect(next.start).toEqual(window.end);
-        }
       }
-
       const durations = new Set(
         windows.map((window) => (window.end.getTime() - window.start.getTime()) / HOUR_MS)
       );
-      if (timeZone === 'Asia/Kolkata') {
-        expect([...durations]).toEqual([24]);
-      } else {
-        expect([...durations].sort()).toEqual([23, 24, 25]);
-      }
+      expect([...durations].sort()).toEqual(timeZone === 'Asia/Kolkata' ? [24] : [23, 24, 25]);
+    }
+  );
+
+  it.each([
+    ['Africa/Casablanca', 1],
+    ['Africa/Casablanca', 2],
+    ['America/New_York', 1],
+    ['America/New_York', 2],
+  ])(
+    'in %s at hour %i, inside a clock change, still sends one digest a day and leaves no gap',
+    (timeZone, hour) => {
+      const windows = digestsIn2026(timeZone, hour);
+
+      expectEveryDayOnceWithoutGaps(windows, timeZone);
     }
   );
 });

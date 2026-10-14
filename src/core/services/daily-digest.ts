@@ -9,7 +9,7 @@ const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 
 /**
- * The digest is due during the first minutes of its local hour. The cron runs every
+ * The digest is due during the first minutes after its local hour. The cron runs every
  * minute, so a failed send is retried until this window closes.
  */
 const SEND_WINDOW_MINUTES = 10;
@@ -46,34 +46,61 @@ function localDateTime(instant: Date, timeZone: string): LocalDateTime {
   };
 }
 
+function parseDate(date: string): [number, number, number] {
+  return date.split('-').map(Number) as [number, number, number];
+}
+
 /** Local time minus UTC at the given instant, to the minute. */
-function utcOffsetMs(instant: Date, timeZone: string): number {
-  const local = localDateTime(instant, timeZone);
-  const [year, month, day] = local.date.split('-').map(Number) as [number, number, number];
+function utcOffsetMs(instant: number, timeZone: string): number {
+  const local = localDateTime(new Date(instant), timeZone);
+  const [year, month, day] = parseDate(local.date);
   const localAsUtc = Date.UTC(year, month - 1, day, local.hour, local.minute);
-  return localAsUtc - Math.floor(instant.getTime() / MINUTE_MS) * MINUTE_MS;
+  return localAsUtc - Math.floor(instant / MINUTE_MS) * MINUTE_MS;
+}
+
+/**
+ * The instant at which a local date reaches `hour`:00. Clock changes are resolved
+ * like Temporal's "compatible" disambiguation: a repeated hour uses its first
+ * occurrence, and an hour skipped by a clock change moves forward by the gap.
+ */
+function localHourInstant(date: string, hour: number, timeZone: string): Date {
+  const [year, month, day] = parseDate(date);
+  const wallClock = Date.UTC(year, month - 1, day, hour);
+  // The offsets in effect a day either side cover any single clock change at that hour.
+  const withOffsetBefore = wallClock - utcOffsetMs(wallClock - DAY_MS, timeZone);
+  const withOffsetAfter = wallClock - utcOffsetMs(wallClock + DAY_MS, timeZone);
+  const isExact = (instant: number): boolean =>
+    instant + utcOffsetMs(instant, timeZone) === wallClock;
+
+  if (isExact(withOffsetBefore) && isExact(withOffsetAfter)) {
+    return new Date(Math.min(withOffsetBefore, withOffsetAfter));
+  }
+  if (isExact(withOffsetAfter)) {
+    return new Date(withOffsetAfter);
+  }
+  return new Date(withOffsetBefore);
+}
+
+function previousDate(date: string): string {
+  const [year, month, day] = parseDate(date);
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
 }
 
 /**
  * The digest due at `now`, or null when none is. A digest covers the day up to the
- * digest hour: from that hour on the previous local day to that hour today. Around a
- * clock change this is 23 or 25 hours.
+ * digest hour: from that hour on the previous local day to that hour today. Both ends
+ * come from the same local-hour instant, so consecutive digests meet exactly, even
+ * across a clock change, when a window lasts 23 or 25 hours.
  */
 export function dueDigestWindow(now: Date, timeZone: string, hour: number): DigestWindow | null {
-  const local = localDateTime(now, timeZone);
-  if (local.hour !== hour || local.minute >= SEND_WINDOW_MINUTES) {
+  const date = localDateTime(now, timeZone).date;
+  const end = localHourInstant(date, hour, timeZone);
+  const elapsed = now.getTime() - end.getTime();
+  if (elapsed < 0 || elapsed >= SEND_WINDOW_MINUTES * MINUTE_MS) {
     return null;
   }
 
-  const end = new Date(
-    Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS - local.minute * MINUTE_MS
-  );
-  const dayBefore = new Date(end.getTime() - DAY_MS);
-  const start = new Date(
-    dayBefore.getTime() + utcOffsetMs(end, timeZone) - utcOffsetMs(dayBefore, timeZone)
-  );
-
-  return { date: local.date, start, end };
+  return { date, start: localHourInstant(previousDate(date), hour, timeZone), end };
 }
 
 function emptyActivity(event: EventActivity): RepositoryActivity {
