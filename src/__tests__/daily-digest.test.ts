@@ -98,10 +98,12 @@ describe('daily digest schedule', () => {
     'in %s, covers each local day exactly once, from 09:00 to 09:00, across clock changes',
     (timeZone) => {
       const windows: NonNullable<ReturnType<typeof dueDigestWindow>>[] = [];
+      // These zones are offset from UTC by whole or half hours, so half-hour steps
+      // land on 09:00 local time every day.
       for (
         let time = Date.parse('2026-01-01T00:00:00.000Z');
         time < Date.parse('2027-01-01T00:00:00.000Z');
-        time += 5 * 60_000
+        time += 30 * 60_000
       ) {
         const window = dueDigestWindow(new Date(time), timeZone, 9);
         if (window && windows.at(-1)?.date !== window.date) {
