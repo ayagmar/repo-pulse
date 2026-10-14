@@ -1,4 +1,5 @@
 import type { Digest, RepositoryActivity, UnreleasedWork } from '../../core/models/digest.js';
+import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type {
   ForkEvent,
   IssueEvent,
@@ -84,7 +85,7 @@ function truncate(str: string, maxLength: number): string {
 }
 
 function plural(count: number, noun: string): string {
-  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+  return `${count.toLocaleString('en-US')} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -408,6 +409,54 @@ export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
           text: `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`,
           icon_url: GITHUB_ICON_URL,
         },
+      },
+    ],
+  };
+}
+
+/**
+ * Format a momentum alert: how fast stars are coming in, who starred, and where
+ * visitors come from
+ */
+export function formatDiscordAlert(alert: MomentumAlert): DiscordWebhookPayload {
+  const usual =
+    alert.expectedStars < 0.05
+      ? 'up from almost none'
+      : `against about ${alert.expectedStars.toFixed(1)} usually`;
+  const fields: NonNullable<DiscordEmbed['fields']> = [];
+  if (alert.notableStargazers.length > 0) {
+    fields.push({
+      name: 'Notable stargazers',
+      value: alert.notableStargazers
+        .map(
+          (stargazer) =>
+            `[${stargazer.login}](${stargazer.url}) · ${plural(stargazer.followers, 'follower')}`
+        )
+        .join('\n'),
+    });
+  }
+  if (alert.referrers.length > 0) {
+    fields.push({
+      name: 'Top referrers, last 14 days',
+      value: alert.referrers
+        .map(
+          (referrer) =>
+            `${referrer.name} · ${plural(referrer.views, 'view')} from ${plural(referrer.uniqueVisitors, 'visitor')}`
+        )
+        .join('\n'),
+    });
+  }
+
+  return {
+    embeds: [
+      {
+        title: truncate(`🚀 ${alert.repository} is taking off`, TITLE_LIMIT),
+        url: alert.url,
+        description: `⭐ **${plural(alert.recentStars, 'star')}** in the last ${plural(alert.windowHours, 'hour')}, ${usual}. **${alert.totalStars.toLocaleString('en-US')}** total.`,
+        color: COLORS.star,
+        timestamp: alert.detectedAt.toISOString(),
+        ...(fields.length > 0 ? { fields } : {}),
+        footer: { text: alert.repository, icon_url: GITHUB_ICON_URL },
       },
     ],
   };

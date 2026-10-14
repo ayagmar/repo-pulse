@@ -67,7 +67,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - `GITHUB_WEBHOOK_SECRET`
 - `ADMIN_API_TOKEN`
 - `DISCORD_WEBHOOK_URL`
-- `GITHUB_TOKEN` (optional): a fine-grained token with read-only **Contents** access to your repositories. The daily digest uses it to list repositories with commits since their latest release.
+- `GITHUB_TOKEN` (optional): a fine-grained token with read-only access to your repositories, with **Contents: read** and **Administration: read**. The daily digest uses it to list repositories with commits since their latest release. Star alerts use it for stargazer follower counts and traffic referrers, which need **Administration: read**.
 
 ## Operational Behavior
 
@@ -76,6 +76,8 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - A retry resends only to the providers that have not accepted the delivery yet.
 - Provider sends remain at-least-once: interruption between sending and persisting success can repeat a send.
 - The daily digest is posted by the every-minute cron during the first ten minutes after `DIGEST_HOUR`. A failed digest is retried each minute in that window. One that is still failing when it closes is skipped, and the next day's digest does not include its events.
+- The star radar runs in the cron at minutes 5, 15, 25, and so on (UTC). It sends at most one alert per run; another spiking repository is alerted at the next run. A failed alert is retried at the next run.
+- One cron run stays within the Workers Free plan's 50 subrequests: up to 5 deliveries at about five each, a digest with two GitHub requests, and one star alert with two GitHub requests.
 - Digests are at-least-once in one case: a run that stops after posting but before recording the send is retried once its five-minute claim expires.
 - Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
 - Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.

@@ -54,6 +54,13 @@ export interface EventActivity {
   pullRequestUrl: string | null;
 }
 
+/** One `star.created` event, with the running total it brought the repository to. */
+export interface RecentStar {
+  login: string;
+  repositoryUrl: string;
+  starCount: number;
+}
+
 export class D1EventHistory {
   constructor(private readonly db: D1DatabaseLike) {}
 
@@ -96,6 +103,25 @@ export class D1EventHistory {
       .all<{ repository: string }>();
 
     return rows.results.map((row) => row.repository);
+  }
+
+  /** A repository's `star.created` events received since `since`, newest first. */
+  async listRecentStars(repository: string, since: Date, limit: number): Promise<RecentStar[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT
+           json_extract(event_json, '$.sender.login') AS login,
+           json_extract(event_json, '$.repository.url') AS repositoryUrl,
+           json_extract(event_json, '$.star.count') AS starCount
+         FROM events
+         WHERE repository = ? AND event_type = 'star.created' AND received_at >= ?
+         ORDER BY received_at DESC, delivery_id DESC
+         LIMIT ?`
+      )
+      .bind(repository, since.toISOString(), limit)
+      .all<RecentStar>();
+
+    return rows.results;
   }
 
   async listRecentEvents(limit = 50): Promise<EventHistoryEntry[]> {

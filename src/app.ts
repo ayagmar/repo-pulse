@@ -3,9 +3,11 @@ import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from './core/services/d1-digest-log.js';
 import { D1EventHistory } from './core/services/d1-event-history.js';
+import { D1RadarLog } from './core/services/d1-radar-log.js';
 import { DigestSender } from './core/services/digest.js';
 import { DurableEventProcessor } from './core/services/durable-event-processor.js';
 import { logger } from './core/services/logger.js';
+import { MomentumRadar } from './core/services/momentum-radar.js';
 import { NotificationDispatcher } from './core/services/notification-dispatcher.js';
 import type { HttpEnv } from './http/app-env.js';
 import { createAdminAuthMiddleware } from './http/middleware/admin-auth.js';
@@ -74,6 +76,10 @@ export async function drainDueDeliveries(
   await runtime.eventProcessor.drainDueDeliveries(options);
 }
 
+function createInsights(apiToken: string | undefined): GitHubInsights | null {
+  return apiToken === undefined ? null : new GitHubInsights(apiToken);
+}
+
 export async function sendDueDigests(env: HttpEnv['Bindings'], now: Date): Promise<void> {
   const runtime = buildRuntime(env);
   const sender = new DigestSender(
@@ -81,9 +87,18 @@ export async function sendDueDigests(env: HttpEnv['Bindings'], now: Date): Promi
     new D1DigestLog(env.DB),
     runtime.notificationDispatcher,
     runtime.config.digest,
-    runtime.config.github.apiToken === undefined
-      ? null
-      : new GitHubInsights(runtime.config.github.apiToken)
+    createInsights(runtime.config.github.apiToken)
   );
   await sender.sendDueDigests(now);
+}
+
+export async function checkMomentum(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+  const runtime = buildRuntime(env);
+  const radar = new MomentumRadar(
+    runtime.eventHistory,
+    new D1RadarLog(env.DB),
+    runtime.notificationDispatcher,
+    createInsights(runtime.config.github.apiToken)
+  );
+  await radar.check(now);
 }

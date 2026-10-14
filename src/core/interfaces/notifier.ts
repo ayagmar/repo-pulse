@@ -1,5 +1,6 @@
 import type { Digest } from '../models/digest.js';
 import type { FailureClassification } from '../models/failure-classification.js';
+import type { MomentumAlert } from '../models/momentum-alert.js';
 import type { RepoEvent } from '../models/repo-event.js';
 
 /**
@@ -38,7 +39,12 @@ export interface Notifier {
   notify(event: RepoEvent): Promise<NotificationResult>;
 
   /**
-   * Send the daily summary of recorded events
+   * Send a daily or weekly summary of recorded events
    */
   notifyDigest(digest: Digest): Promise<NotificationResult>;
+
+  /**
+   * Send an alert that a repository is gaining stars unusually fast
+   */
+  notifyAlert(alert: MomentumAlert): Promise<NotificationResult>;
 }

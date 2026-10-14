@@ -1,7 +1,8 @@
-import type { RepositoryInsights } from '../../core/interfaces/repository-insights.js';
+import type { RepositoryInsights, UserProfile } from '../../core/interfaces/repository-insights.js';
 import type { UnreleasedWork } from '../../core/models/digest.js';
+import type { Referrer } from '../../core/models/momentum-alert.js';
 
-const GRAPHQL_URL = 'https://api.github.com/graphql';
+const API_URL = 'https://api.github.com';
 const ERROR_DETAIL_LIMIT = 300;
 
 interface LatestRelease {
@@ -22,14 +23,27 @@ interface Released {
   publishedAt: string;
 }
 
-function splitFullName(fullName: string): [string, string] {
+interface AliasedField {
+  variables: Record<string, string>;
+  /** The field to select, given the query-wide name of each of its variables. */
+  field: (variable: (key: string) => string) => string;
+}
+
+function splitFullName(fullName: string): { owner: string; name: string } {
   const [owner = '', name = ''] = fullName.split('/');
-  return [owner, name];
+  return { owner, name };
+}
+
+/** A `repository` field for the `owner` and `name` variables, selecting `fields`. */
+function repositoryField(fields: AliasedField['field']): AliasedField['field'] {
+  return (variable) =>
+    `repository(owner: ${variable('owner')}, name: ${variable('name')}) { ${fields(variable)} }`;
 }
 
 /**
- * Asks GitHub's GraphQL API for each repository in one request, using an alias per
- * repository and variables for every name, so names never need escaping.
+ * Reads GitHub's API with a read-only token. GraphQL questions about several
+ * repositories or users are asked in one request, with an alias per item and
+ * variables for every name, so names never need escaping.
  */
 export class GitHubInsights implements RepositoryInsights {
   constructor(private readonly token: string) {}
@@ -41,9 +55,10 @@ export class GitHubInsights implements RepositoryInsights {
 
     const latest = await this.queryEach<LatestRelease>(
       repositories.map((repository) => ({
-        repository,
-        variables: {},
-        fields: (): string => 'url defaultBranchRef { name } latestRelease { tagName publishedAt }',
+        variables: splitFullName(repository),
+        field: repositoryField(
+          () => 'url defaultBranchRef { name } latestRelease { tagName publishedAt }'
+        ),
       }))
     );
     const released: Released[] = [];
@@ -65,10 +80,15 @@ export class GitHubInsights implements RepositoryInsights {
 
     const comparisons = await this.queryEach<ReleaseComparison>(
       released.map((release) => ({
-        repository: release.repository,
-        variables: { tag: `refs/tags/${release.tagName}`, branch: release.branch },
-        fields: (variable): string =>
-          `ref(qualifiedName: ${variable('tag')}) { compare(headRef: ${variable('branch')}) { aheadBy } }`,
+        variables: {
+          ...splitFullName(release.repository),
+          tag: `refs/tags/${release.tagName}`,
+          branch: release.branch,
+        },
+        field: repositoryField(
+          (variable) =>
+            `ref(qualifiedName: ${variable('tag')}) { compare(headRef: ${variable('branch')}) { aheadBy } }`
+        ),
       }))
     );
     return released.flatMap((release, index) => {
@@ -88,50 +108,62 @@ export class GitHubInsights implements RepositoryInsights {
     });
   }
 
+  async getUserProfiles(logins: readonly string[]): Promise<UserProfile[]> {
+    if (logins.length === 0) {
+      return [];
+    }
+
+    const users = await this.queryEach<{
+      login: string;
+      url: string;
+      followers: { totalCount: number };
+    }>(
+      logins.map((login) => ({
+        variables: { login },
+        field: (variable): string =>
+          `user(login: ${variable('login')}) { login url followers { totalCount } }`,
+      }))
+    );
+    return users.flatMap((user) =>
+      user ? [{ login: user.login, url: user.url, followers: user.followers.totalCount }] : []
+    );
+  }
+
+  async listTopReferrers(repository: string): Promise<Referrer[]> {
+    const { owner, name } = splitFullName(repository);
+    const response = await this.request(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/traffic/popular/referrers`
+    );
+    const referrers: { referrer: string; count: number; uniques: number }[] = await response.json();
+    return referrers.map((referrer) => ({
+      name: referrer.referrer,
+      views: referrer.count,
+      uniqueVisitors: referrer.uniques,
+    }));
+  }
+
   /**
-   * Run one query with a `repository` field per item, aliased `r0`, `r1`, and so on.
-   * Each item's variables are suffixed with its index; `fields` gets their names from
-   * `variable`. A repository GitHub cannot see comes back as null.
+   * Run one GraphQL query that selects each item's field under the alias `r0`, `r1`,
+   * and so on. Each item's variables are suffixed with its index. An item GitHub
+   * cannot see, such as a deleted repository, comes back as null.
    */
-  private async queryEach<T>(
-    items: readonly {
-      repository: string;
-      variables: Record<string, string>;
-      fields: (variable: (key: string) => string) => string;
-    }[]
-  ): Promise<(T | null)[]> {
+  private async queryEach<T>(items: readonly AliasedField[]): Promise<(T | null)[]> {
     const declarations: string[] = [];
     const selections: string[] = [];
     const variables: Record<string, string> = {};
     for (const [index, item] of items.entries()) {
-      const variable = (key: string): string => `$${key}${String(index)}`;
-      const [owner, name] = splitFullName(item.repository);
-      for (const [key, value] of Object.entries({ owner, name, ...item.variables })) {
-        declarations.push(`${variable(key)}: String!`);
-        variables[`${key}${String(index)}`] = value;
+      const suffix = String(index);
+      for (const [key, value] of Object.entries(item.variables)) {
+        declarations.push(`$${key}${suffix}: String!`);
+        variables[`${key}${suffix}`] = value;
       }
-      selections.push(
-        `r${String(index)}: repository(owner: ${variable('owner')}, name: ${variable('name')}) { ${item.fields(variable)} }`
-      );
+      selections.push(`r${suffix}: ${item.field((key) => `$${key}${suffix}`)}`);
     }
 
-    const response = await fetch(GRAPHQL_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'repo-pulse',
-      },
-      body: JSON.stringify({
-        query: `query(${declarations.join(', ')}) { ${selections.join(' ')} }`,
-        variables,
-      }),
+    const response = await this.request('/graphql', {
+      query: `query(${declarations.join(', ')}) { ${selections.join(' ')} }`,
+      variables,
     });
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, ERROR_DETAIL_LIMIT);
-      throw new Error(`GitHub GraphQL request failed with ${String(response.status)}: ${detail}`);
-    }
-
     const body: { data?: Record<string, T | null> | null; errors?: { message: string }[] } =
       await response.json();
     if (!body.data) {
@@ -140,5 +172,25 @@ export class GitHubInsights implements RepositoryInsights {
     }
     const data = body.data;
     return items.map((_, index) => data[`r${String(index)}`] ?? null);
+  }
+
+  /** GET `path`, or POST `body` as JSON to it. Throws on a non-2xx response. */
+  private async request(path: string, body?: unknown): Promise<Response> {
+    const response = await fetch(`${API_URL}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${this.token}`,
+        'User-Agent': 'repo-pulse',
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, ERROR_DETAIL_LIMIT);
+      throw new Error(`GitHub ${path} failed with ${String(response.status)}: ${detail}`);
+    }
+    return response;
   }
 }

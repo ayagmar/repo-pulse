@@ -104,6 +104,13 @@ stateDiagram-v2
 - On Mondays a weekly digest is sent at the same hour. It covers the seven local days since the previous Monday's digest hour and lists up to three merged pull requests per repository. It is claimed under its own id, such as `weekly:2026-10-19`, next to `daily:2026-10-19`.
 - Days without events get no digest.
 
+### Star radar
+
+- Every ten minutes, at minute 5 of each ten so it does not share a run with the digest, the cron counts each repository's `star.created` events in the last 3 hours and in the 14 days before.
+- A repository is spiking when it got at least 5 stars in those 3 hours, and at least 4 times the average for a 3-hour window over the 14 days. A repository with less than 14 days of history looks quieter than it is, so its first spikes alert more easily.
+- Each alert is claimed in `radar_alerts` as `stars:<owner/repo>` before it is posted. A claim younger than 24 hours blocks another alert for that repository. If every provider fails, the claim is released and the next check retries.
+- With `GITHUB_TOKEN`, the alert looks up the last 20 stargazers' follower counts in one GraphQL request and lists up to three with at least 100 followers. It also lists the top three referrers from the traffic API. Either lookup can fail without blocking the alert.
+
 ### Background processor
 
 - Claims due rows from D1 in batches.

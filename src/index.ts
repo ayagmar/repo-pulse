@@ -1,4 +1,4 @@
-import { createApp, drainDueDeliveries, sendDueDigests } from './app.js';
+import { checkMomentum, createApp, drainDueDeliveries, sendDueDigests } from './app.js';
 
 const app = createApp();
 
@@ -9,6 +9,7 @@ const worker = {
   scheduled(controller: ScheduledController, env: Env, executionCtx: ExecutionContext): void {
     executionCtx.waitUntil(drainDueDeliveries(env, { pruneSucceededDeliveries: true }));
     executionCtx.waitUntil(sendDueDigests(env, new Date(controller.scheduledTime)));
+    executionCtx.waitUntil(checkMomentum(env, new Date(controller.scheduledTime)));
   },
 } satisfies ExportedHandler<Env>;
 

@@ -174,6 +174,7 @@ describe('Workers runtime integration', () => {
       isConfigured: () => true,
       notify: () => Promise.resolve({ success: true, provider: 'test' }),
       notifyDigest: () => Promise.reject(new Error('Not used in this test')),
+      notifyAlert: () => Promise.reject(new Error('Not used in this test')),
     });
     const processor = new DurableEventProcessor(ledger, dispatcher);
     await processor.enqueue(event, {

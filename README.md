@@ -33,6 +33,7 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 
 - Pushes are announced only for the default branch, as one message with the latest commits. Bot pushes, branch deletions, and GitHub's own pull-request merge commits are skipped, because the merged pull request is announced already.
 - A star that reaches 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a multiple of 10,000 is announced as a milestone.
+- When a repository gets at least 5 stars in 3 hours, and 4 times what it usually gets, one alert says so, at most once a day per repository. With a GitHub token, it names the most-followed new stargazers and the sites sending visitors.
 - Failed Discord sends are retried with backoff, following Discord's rate-limit headers, up to 5 attempts.
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
@@ -63,13 +64,13 @@ It then runs `npm run deploy`, which applies the D1 migrations and deploys the W
 
 ### Optional: a GitHub token
 
-With a GitHub token, the daily digest also lists repositories with commits on the default branch since their latest release. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories and the **Contents: read** permission, then add it:
+With a GitHub token, the daily digest also lists repositories with commits on the default branch since their latest release, and star alerts name notable stargazers and top referrers. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories and two permissions: **Contents: read** for releases and commits, and **Administration: read** for traffic referrers. Then add it:
 
 ```bash
 npx wrangler secret put GITHUB_TOKEN
 ```
 
-Without the token, or when GitHub does not answer, the digest is posted without that section.
+Without the token, or when GitHub does not answer, digests and alerts are posted without those details.
 
 ## Subscribe repositories
 
@@ -192,6 +193,7 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 - **Event history:** keeps every accepted event in D1 after its delivery row is pruned
 - **Background processor:** drains due work, dispatches providers, reschedules transient failures, and prunes old succeeded rows
 - **Digests:** the cron posts one summary of the previous day, and on Mondays one of the past week, from the event history
+- **Star radar:** every ten minutes, the cron looks for repositories gaining stars much faster than usual and alerts once a day per repository
 - **Admin surface:** exposes status, health, delivery history, retries, OpenAPI, and Swagger UI
 
 Related docs:

@@ -15,6 +15,10 @@
   days per repository and lists the latest merged pull requests.
 - With an optional `GITHUB_TOKEN`, the daily digest lists repositories with commits on the
   default branch since their latest release.
+- Star radar: a repository that gets at least 5 stars in 3 hours, and 4 times its usual
+  rate over the previous two weeks, is announced at most once a day. With `GITHUB_TOKEN`
+  the alert lists notable new stargazers and top referrers. Migration `0006` adds the
+  `radar_alerts` table and an index on events by type and time.
 - A star that brings a repository to 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a
   multiple of 10,000 stars is announced as a milestone.
 - A retry now resends only to the providers that failed, so a second provider cannot
