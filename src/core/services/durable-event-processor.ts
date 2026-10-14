@@ -76,7 +76,7 @@ export class DurableEventProcessor {
     this.succeededRetentionDays =
       options.succeededRetentionDays ?? DELIVERY_DEFAULTS.succeededRetentionDays;
     this.processingLeaseMs = options.processingLeaseMs ?? 5 * 60_000;
-    this.drainBatchSize = options.drainBatchSize ?? 25;
+    this.drainBatchSize = options.drainBatchSize ?? DELIVERY_DEFAULTS.drainBatchSize;
   }
 
   hasHandlers(): boolean {

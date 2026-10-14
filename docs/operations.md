@@ -58,7 +58,7 @@ Values configured in [`wrangler.jsonc`](../wrangler.jsonc):
 - `DELIVERY_RETRY_MAX_DELAY_MS`
 - `DELIVERY_SUCCEEDED_RETENTION_DAYS`
 - `DELIVERY_PROCESSING_LEASE_MS`
-- `DELIVERY_DRAIN_BATCH_SIZE`
+- `DELIVERY_DRAIN_BATCH_SIZE`: deliveries sent per drain pass. On the Workers Free plan an invocation may make 50 subrequests, D1 queries included, and a delivery takes about five, so keep it at 5 or below there.
 - `DIGEST_TIME_ZONE`: IANA time zone for the daily digest, such as `Europe/Paris`. Defaults to `UTC`.
 - `DIGEST_HOUR`: local hour, 0 to 23, when the digest is posted. Defaults to `9`.
 

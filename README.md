@@ -169,7 +169,7 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 | Retry max delay | `15m` |
 | Succeeded retention | `14 days` |
 | Processing lease | `5m` |
-| Drain batch size | `25` |
+| Drain batch size | `5` (keeps a run within the Free plan's 50 subrequests) |
 | Cron cadence | every minute |
 | Digest time | `09:00` in `DIGEST_TIME_ZONE` (`Africa/Casablanca`) |
 

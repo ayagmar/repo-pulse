@@ -184,7 +184,7 @@ export function createConfig(env: ConfigEnv): {
       drainBatchSize: parsePositiveInteger(
         'DELIVERY_DRAIN_BATCH_SIZE',
         getEnvVar(env, 'DELIVERY_DRAIN_BATCH_SIZE'),
-        25
+        DELIVERY_DEFAULTS.drainBatchSize
       ),
     },
 
