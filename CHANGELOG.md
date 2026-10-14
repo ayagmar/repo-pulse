@@ -9,7 +9,8 @@
 - `GET /admin/events` lists the 50 most recent events.
 - Daily digest: at 09:00 in `DIGEST_TIME_ZONE` (`DIGEST_HOUR` sets the hour), one message
   sums up the previous day per repository. Days without activity get none. Migration
-  `0005` adds the `digest_sends` table that keeps it to one send per provider.
+  `0005` adds the `digest_sends` table, where each provider claims a digest before
+  posting, so overlapping cron runs post it once.
 - A retry now resends only to the providers that failed, so a second provider cannot
   cause repeated Discord posts.
 

@@ -1,7 +1,9 @@
--- One row per provider that accepted a day's digest, so it is sent only once.
+-- One row per provider and digest, such as 'daily:2026-10-15'. A provider claims the
+-- row before posting, so overlapping cron runs post a digest only once.
 CREATE TABLE IF NOT EXISTS digest_sends (
-  digest_date TEXT NOT NULL,
+  digest_id TEXT NOT NULL,
   provider_name TEXT NOT NULL,
-  sent_at TEXT NOT NULL,
-  PRIMARY KEY (digest_date, provider_name)
+  claimed_at TEXT NOT NULL,
+  sent_at TEXT,
+  PRIMARY KEY (digest_id, provider_name)
 );

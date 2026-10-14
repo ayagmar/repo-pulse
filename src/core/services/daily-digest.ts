@@ -14,6 +14,12 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
  */
 const SEND_WINDOW_MINUTES = 10;
 
+/**
+ * How long a claimed digest is left to the run that claimed it. A run that stopped
+ * after posting but before recording it causes one repeat post once this passes.
+ */
+const DIGEST_CLAIM_LEASE_MS = 5 * MINUTE_MS;
+
 interface DigestWindow {
   date: string;
   start: Date;
@@ -187,16 +193,22 @@ export class DailyDigestSender {
       return;
     }
 
-    const sentProviders = await this.digestLog.listSentProviders(window.date);
-    const pendingProviders = this.dispatcher
-      .getNotifiers()
-      .filter((notifier) => !sentProviders.has(notifier.name));
-    if (pendingProviders.length === 0) {
+    const digestId = `daily:${window.date}`;
+    const claimedProviders = new Set<string>();
+    for (const notifier of this.dispatcher.getNotifiers()) {
+      if (await this.digestLog.claim(digestId, notifier.name, now, DIGEST_CLAIM_LEASE_MS)) {
+        claimedProviders.add(notifier.name);
+      }
+    }
+    if (claimedProviders.size === 0) {
       return;
     }
 
     const events = await this.history.listActivityBetween(window.start, window.end);
     if (events.length === 0) {
+      for (const provider of claimedProviders) {
+        await this.digestLog.release(digestId, provider);
+      }
       return;
     }
 
@@ -208,11 +220,21 @@ export class DailyDigestSender {
       eventCount: events.length,
       repositories: summarizeRepositories(events),
     };
-    const results = await this.dispatcher.dispatchDigest(digest, { skipProviders: sentProviders });
+    const unclaimedProviders = new Set(
+      this.dispatcher
+        .getNotifiers()
+        .map((notifier) => notifier.name)
+        .filter((name) => !claimedProviders.has(name))
+    );
+    const results = await this.dispatcher.dispatchDigest(digest, {
+      skipProviders: unclaimedProviders,
+    });
 
     for (const result of results) {
       if (result.success) {
-        await this.digestLog.recordSent(window.date, result.provider, new Date());
+        await this.digestLog.markSent(digestId, result.provider, new Date());
+      } else {
+        await this.digestLog.release(digestId, result.provider);
       }
     }
 

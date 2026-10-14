@@ -248,6 +248,18 @@ describe('daily digest', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('posts once when two cron runs overlap', async () => {
+    const env = createDigestEnv();
+    await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
+
+    await Promise.all([
+      sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z')),
+      sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z')),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('posts nothing after a day without activity', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-13T12:00:00.000Z', [star('cli')]);
