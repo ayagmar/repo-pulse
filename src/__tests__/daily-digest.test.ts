@@ -114,14 +114,14 @@ describe('daily digest schedule', () => {
     return windows;
   }
 
-  function expectEveryDayOnceWithoutGaps(windows: DigestWindowResult[], timeZone: string): void {
-    expect(new Set(windows.map((window) => window.date)).size).toBe(windows.length);
+  function expectEveryDayOnceWithoutGaps(windows: DigestWindowResult[]): void {
     // 2026-01-01's digest falls on the first day sampled; 365 local days follow it.
     expect(windows.length).toBeGreaterThanOrEqual(364);
     for (const [index, window] of windows.entries()) {
-      expect(localWallClock(window.end, timeZone).slice(0, 10)).toBe(window.date);
       const next = windows[index + 1];
       if (next) {
+        const nextDay = new Date(Date.parse(`${window.date}T00:00:00.000Z`) + 24 * HOUR_MS);
+        expect(next.date).toBe(nextDay.toISOString().slice(0, 10));
         expect(next.start).toEqual(window.end);
       }
     }
@@ -132,7 +132,7 @@ describe('daily digest schedule', () => {
     (timeZone) => {
       const windows = digestsIn2026(timeZone, 9);
 
-      expectEveryDayOnceWithoutGaps(windows, timeZone);
+      expectEveryDayOnceWithoutGaps(windows);
       for (const window of windows) {
         expect(localWallClock(window.end, timeZone)).toBe(`${window.date} 09:00`);
       }
@@ -148,12 +148,14 @@ describe('daily digest schedule', () => {
     ['Africa/Casablanca', 2],
     ['America/New_York', 1],
     ['America/New_York', 2],
+    // Nuuk springs forward from 23:00 to 00:00, moving the digest into the next day.
+    ['America/Nuuk', 23],
   ])(
     'in %s at hour %i, inside a clock change, still sends one digest a day and leaves no gap',
     (timeZone, hour) => {
       const windows = digestsIn2026(timeZone, hour);
 
-      expectEveryDayOnceWithoutGaps(windows, timeZone);
+      expectEveryDayOnceWithoutGaps(windows);
     }
   );
 });

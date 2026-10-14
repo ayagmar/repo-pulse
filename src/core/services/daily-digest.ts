@@ -99,14 +99,17 @@ function previousDate(date: string): string {
  * across a clock change, when a window lasts 23 or 25 hours.
  */
 export function dueDigestWindow(now: Date, timeZone: string, hour: number): DigestWindow | null {
-  const date = localDateTime(now, timeZone).date;
-  const end = localHourInstant(date, hour, timeZone);
-  const elapsed = now.getTime() - end.getTime();
-  if (elapsed < 0 || elapsed >= SEND_WINDOW_MINUTES * MINUTE_MS) {
-    return null;
+  const today = localDateTime(now, timeZone).date;
+  // A digest hour skipped by a clock change can move into the next local day, as 23:00
+  // does in America/Nuuk each March, so yesterday's digest may be the one due.
+  for (const date of [today, previousDate(today)]) {
+    const end = localHourInstant(date, hour, timeZone);
+    const elapsed = now.getTime() - end.getTime();
+    if (elapsed >= 0 && elapsed < SEND_WINDOW_MINUTES * MINUTE_MS) {
+      return { date, start: localHourInstant(previousDate(date), hour, timeZone), end };
+    }
   }
-
-  return { date, start: localHourInstant(previousDate(date), hour, timeZone), end };
+  return null;
 }
 
 function emptyActivity(event: EventActivity): RepositoryActivity {
