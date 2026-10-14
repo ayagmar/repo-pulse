@@ -1,16 +1,23 @@
-import { applyD1Migrations } from 'cloudflare:test';
+import {
+  applyD1Migrations,
+  createExecutionContext,
+  createScheduledController,
+  waitOnExecutionContext,
+} from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
+  serializeRepoEvent,
 } from '../../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
 import { dueDigestWindow } from '../../core/services/daily-digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
+import worker from '../../index.js';
 
 // Local workerd/D1 integration only: no remote bindings, secrets or outbound requests.
 describe('Workers runtime integration', () => {
@@ -44,6 +51,10 @@ describe('Workers runtime integration', () => {
   beforeEach(async () => {
     await env.DB.prepare('DELETE FROM deliveries').run();
     await env.DB.prepare('DELETE FROM events').run();
+    await env.DB.prepare('DELETE FROM digest_sends').run();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('protects the admin surface through the exported Worker', async () => {
@@ -194,5 +205,38 @@ describe('Workers runtime integration', () => {
       start: new Date('2026-10-14T09:00:00.000Z'),
       end: new Date('2026-10-15T09:00:00.000Z'),
     });
+  });
+
+  it('posts the daily digest from the scheduled handler at the configured local hour', async () => {
+    // A stubbed Discord: this suite makes no outbound requests.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    await env.DB.prepare(
+      `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+       VALUES ('digest-star', 'star.created', 'myorg/repo', '2026-10-14T12:00:00.000Z', ?)`
+    )
+      .bind(serializeRepoEvent(event))
+      .run();
+
+    // wrangler.jsonc sets the digest to 09:00 Africa/Casablanca, which is UTC+0 since
+    // 20 September 2026.
+    const context = createExecutionContext();
+    worker.scheduled(
+      createScheduledController({
+        scheduledTime: new Date('2026-10-15T09:00:00.000Z'),
+        cron: '* * * * *',
+      }),
+      { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/test' } as typeof env,
+      context
+    );
+    await waitOnExecutionContext(context);
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    await expect(
+      env.DB.prepare(
+        'SELECT digest_id AS digestId, sent_at IS NOT NULL AS sent FROM digest_sends'
+      ).all()
+    ).resolves.toMatchObject({ results: [{ digestId: 'daily:2026-10-15', sent: 1 }] });
   });
 });
