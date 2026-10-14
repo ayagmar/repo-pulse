@@ -217,6 +217,7 @@ describe('digests', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     while (cleanups.length > 0) {
       cleanups.pop()?.();
@@ -473,6 +474,32 @@ describe('digests', () => {
     expect(new Headers(githubRequests()[0]?.headers).get('authorization')).toBe(
       'Bearer github-token'
     );
+  });
+
+  it('posts the daily digest without unreleased work when GitHub does not answer', async () => {
+    // Control the clock at the timeout API boundary instead of waiting for it.
+    const timeout = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url !== 'https://api.github.com/graphql') {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      queueMicrotask(() => {
+        timeout.abort(new DOMException('Timed out', 'TimeoutError'));
+      });
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Timed out', 'TimeoutError'));
+        });
+      });
+    });
+    const env = createDigestEnv({ GITHUB_TOKEN: 'github-token' });
+    await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
+
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+
+    expect(postedEmbeds()).toHaveLength(1);
+    expect(postedEmbeds()[0]?.fields).toBeUndefined();
   });
 
   it('still posts the daily digest when GitHub fails', async () => {

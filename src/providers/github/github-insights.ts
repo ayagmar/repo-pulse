@@ -4,6 +4,8 @@ import type { Referrer } from '../../core/models/momentum-alert.js';
 
 const API_URL = 'https://api.github.com';
 const ERROR_DETAIL_LIMIT = 300;
+/** A digest or alert waits this long for GitHub, then goes out without its details. */
+const REQUEST_TIMEOUT_MS = 5_000;
 
 interface LatestRelease {
   url: string;
@@ -178,6 +180,7 @@ export class GitHubInsights implements RepositoryInsights {
   private async request(path: string, body?: unknown): Promise<Response> {
     const response = await fetch(`${API_URL}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${this.token}`,
