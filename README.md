@@ -37,7 +37,7 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
-- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. On Mondays a weekly digest covers the past seven days and lists the latest merged pull requests.
+- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. With a GitHub token, it also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days and lists the latest merged pull requests.
 
 ## Deploy
 
@@ -60,6 +60,16 @@ The button creates the D1 database in your Cloudflare account and asks for three
 | `DISCORD_WEBHOOK_URL` | the Discord channel's webhook URL (Server Settings → Integrations → Webhooks) |
 
 It then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
+
+### Optional: a GitHub token
+
+With a GitHub token, the daily digest also lists repositories with commits on the default branch since their latest release. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories and the **Contents: read** permission, then add it:
+
+```bash
+npx wrangler secret put GITHUB_TOKEN
+```
+
+Without the token, or when GitHub does not answer, the digest is posted without that section.
 
 ## Subscribe repositories
 

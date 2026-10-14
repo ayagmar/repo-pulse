@@ -14,6 +14,7 @@ import { requestLogger } from './http/middleware/logger.js';
 import { createAdminRoutes } from './http/routes/admin.js';
 import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
+import { GitHubInsights } from './providers/github/github-insights.js';
 
 function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime'] {
   const config = createConfig(env);
@@ -79,7 +80,10 @@ export async function sendDueDigests(env: HttpEnv['Bindings'], now: Date): Promi
     runtime.eventHistory,
     new D1DigestLog(env.DB),
     runtime.notificationDispatcher,
-    runtime.config.digest
+    runtime.config.digest,
+    runtime.config.github.apiToken === undefined
+      ? null
+      : new GitHubInsights(runtime.config.github.apiToken)
   );
   await sender.sendDueDigests(now);
 }

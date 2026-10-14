@@ -1,4 +1,5 @@
-import type { Digest, DigestPeriod, RepositoryActivity } from '../models/digest.js';
+import type { RepositoryInsights } from '../interfaces/repository-insights.js';
+import type { Digest, DigestPeriod, RepositoryActivity, UnreleasedWork } from '../models/digest.js';
 import { REPO_EVENT_TYPES } from '../models/repo-event.js';
 import type { D1DigestLog } from './d1-digest-log.js';
 import type { D1EventHistory, EventActivity } from './d1-event-history.js';
@@ -21,6 +22,10 @@ const SEND_WINDOW_MINUTES = 10;
 const DIGEST_CLAIM_LEASE_MS = 5 * MINUTE_MS;
 
 const MONDAY = 1;
+
+/** The daily digest checks repositories active this recently for unreleased work. */
+const UNRELEASED_LOOKBACK_MS = 30 * DAY_MS;
+const UNRELEASED_MAX_REPOSITORIES = 20;
 
 interface DigestWindow {
   period: DigestPeriod;
@@ -220,7 +225,8 @@ export class DigestSender {
     private readonly history: D1EventHistory,
     private readonly digestLog: D1DigestLog,
     private readonly dispatcher: NotificationDispatcher,
-    private readonly options: { timeZone: string; hour: number }
+    private readonly options: { timeZone: string; hour: number },
+    private readonly insights: RepositoryInsights | null = null
   ) {}
 
   /** Send every digest due at `now`: the daily one, and on Mondays the weekly one too. */
@@ -237,13 +243,35 @@ export class DigestSender {
     }
   }
 
+  /** Unreleased work in recently active repositories, or none when GitHub cannot say. */
+  private async listUnreleasedWork(end: Date): Promise<UnreleasedWork[]> {
+    if (!this.insights) {
+      return [];
+    }
+
+    const repositories = await this.history.listActiveRepositories(
+      new Date(end.getTime() - UNRELEASED_LOOKBACK_MS),
+      UNRELEASED_MAX_REPOSITORIES
+    );
+    try {
+      return await this.insights.listUnreleasedWork(repositories);
+    } catch (error) {
+      logger.warn('digest.unreleased_work_failed', {
+        component: 'digest',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
   private async sendDigest(window: DigestWindow): Promise<void> {
     const digestId = `${window.period}:${window.date}`;
     /** Provider name to the time of its claim. */
     const claimedProviders = new Map<string, string>();
     for (const notifier of this.dispatcher.getNotifiers()) {
-      // `now` is the cron's scheduled time. A late run must not backdate its claim, or
-      // its lease would end early and an on-time run could post the digest again.
+      // Claim with the current time, not the cron's scheduled time. A late run must not
+      // backdate its claim, or its lease would end early and an on-time run could post
+      // the digest again.
       const claimedAt = await this.digestLog.claim(
         digestId,
         notifier.name,
@@ -274,6 +302,7 @@ export class DigestSender {
       windowEnd: window.end,
       eventCount: events.length,
       repositories: summarizeRepositories(events),
+      unreleased: window.period === 'daily' ? await this.listUnreleasedWork(window.end) : [],
     };
     const unclaimedProviders = new Set(
       this.dispatcher

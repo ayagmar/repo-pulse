@@ -1,4 +1,4 @@
-import type { Digest, RepositoryActivity } from '../../core/models/digest.js';
+import type { Digest, RepositoryActivity, UnreleasedWork } from '../../core/models/digest.js';
 import type {
   ForkEvent,
   IssueEvent,
@@ -53,6 +53,7 @@ const COMMIT_SUBJECT_LIMIT = 72;
 const LISTED_COMMITS = 5;
 const LISTED_RELEASES = 3;
 const LISTED_PULL_REQUESTS = 3;
+const LISTED_UNRELEASED = 5;
 
 // GitHub's state colors, so a message reads like the badge it links to.
 const COLORS = {
@@ -329,6 +330,34 @@ function mergedPullRequestLines(merged: RepositoryActivity['pullRequestsMerged']
   return lines;
 }
 
+/** Repositories with the most commits since their latest release, as one embed field. */
+function unreleasedField(
+  unreleased: readonly UnreleasedWork[],
+  timeZone: string
+): NonNullable<DiscordEmbed['fields']> {
+  const releaseDate = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  const lines: string[] = [];
+  let length = 0;
+  const mostAhead = [...unreleased]
+    .sort((left, right) => right.commitsSinceRelease - left.commitsSinceRelease)
+    .slice(0, LISTED_UNRELEASED);
+  for (const work of mostAhead) {
+    const line = `[${work.repository}](${work.compareUrl}) ${plural(work.commitsSinceRelease, 'commit')} since ${work.tagName} (${releaseDate.format(work.releasedAt)})`;
+    if (length + line.length + 1 > FIELD_VALUE_LIMIT) {
+      break;
+    }
+    lines.push(line);
+    length += line.length + 1;
+  }
+
+  return lines.length > 0 ? [{ name: '🚢 Not released yet', value: lines.join('\n') }] : [];
+}
+
 function repositories(count: number): string {
   return `${String(count)} ${count === 1 ? 'repository' : 'repositories'}`;
 }
@@ -365,6 +394,7 @@ export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
     length += block.length + 1;
   }
 
+  const fields = unreleasedField(digest.unreleased, digest.timeZone);
   const heading = digest.period === 'weekly' ? '📦 Weekly pulse' : '📊 Daily pulse';
   return {
     embeds: [
@@ -373,6 +403,7 @@ export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
         description: lines.join('\n'),
         color: COLORS.push,
         timestamp: digest.windowEnd.toISOString(),
+        ...(fields.length > 0 ? { fields } : {}),
         footer: {
           text: `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`,
           icon_url: GITHUB_ICON_URL,

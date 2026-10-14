@@ -67,6 +67,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - `GITHUB_WEBHOOK_SECRET`
 - `ADMIN_API_TOKEN`
 - `DISCORD_WEBHOOK_URL`
+- `GITHUB_TOKEN` (optional): a fine-grained token with read-only **Contents** access to your repositories. The daily digest uses it to list repositories with commits since their latest release.
 
 ## Operational Behavior
 

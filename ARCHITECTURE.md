@@ -26,7 +26,7 @@ Repo Pulse has one runtime path and one package-manager path:
 - Count interrupted attempts toward the retry budget. A D1 outcome-write failure leaves a recoverable lease instead of becoming a permanent provider failure.
 - Retry per provider: a retry resends only to the providers that have not accepted the delivery, so one failing provider does not repeat posts on the others.
 - Provider sends are **at-least-once**, not exactly-once. A crash between sending to Discord and recording success can cause a repeat. Pruning a succeeded row also ends its dedupe window.
-- The daily and weekly digests read the event history, not the ledger. Each provider claims a digest in `digest_sends` before posting it, so overlapping cron runs post it once.
+- The daily and weekly digests read the event history, not the ledger. Each provider claims a digest in `digest_sends` before posting it, so overlapping cron runs post it once. The optional GitHub lookup for unreleased work never blocks a digest: if it fails, the digest is posted without it.
 
 ## Further Reading
 

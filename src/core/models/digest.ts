@@ -20,6 +20,15 @@ export interface RepositoryActivity {
   releases: { tagName: string; url: string }[];
 }
 
+/** A repository whose default branch has commits that its latest release does not. */
+export interface UnreleasedWork {
+  repository: string;
+  compareUrl: string;
+  tagName: string;
+  releasedAt: Date;
+  commitsSinceRelease: number;
+}
+
 export interface Digest {
   period: DigestPeriod;
   /** Local date of the digest, YYYY-MM-DD. */
@@ -30,4 +39,6 @@ export interface Digest {
   eventCount: number;
   /** Most active repositories first. */
   repositories: RepositoryActivity[];
+  /** Daily digests only, and only when GitHub was asked and answered. */
+  unreleased: UnreleasedWork[];
 }

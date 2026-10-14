@@ -391,6 +391,7 @@ describe('formatDiscordDigest', () => {
       windowEnd: new Date('2026-10-15T09:00:00.000Z'),
       eventCount: 62,
       repositories: [activity('myorg/monorepo', 60), activity('myorg/cli', 0)],
+      unreleased: [],
     });
 
     const lines = payload.embeds[0]?.description?.split('\n') ?? [];

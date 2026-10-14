@@ -81,6 +81,23 @@ export class D1EventHistory {
     return rows.results;
   }
 
+  /** Repositories with events received since `since`, most recently active first. */
+  async listActiveRepositories(since: Date, limit: number): Promise<string[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT repository
+         FROM events
+         WHERE received_at >= ?
+         GROUP BY repository
+         ORDER BY MAX(received_at) DESC
+         LIMIT ?`
+      )
+      .bind(since.toISOString(), limit)
+      .all<{ repository: string }>();
+
+    return rows.results.map((row) => row.repository);
+  }
+
   async listRecentEvents(limit = 50): Promise<EventHistoryEntry[]> {
     const boundedLimit = Math.max(1, Math.min(limit, 200));
     const rows = await this.db
