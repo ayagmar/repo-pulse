@@ -32,16 +32,24 @@ interface LocalDateTime {
   minute: number;
 }
 
+/** Building a formatter costs far more than using one, and the cron runs every minute. */
+const localFormatters = new Map<string, Intl.DateTimeFormat>();
+
 function localDateTime(instant: Date, timeZone: string): LocalDateTime {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).formatToParts(instant);
+  let formatter = localFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    localFormatters.set(timeZone, formatter);
+  }
+  const parts = formatter.formatToParts(instant);
   const part = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((entry) => entry.type === type)?.value ?? '';
 
