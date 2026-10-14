@@ -316,7 +316,8 @@ describe('momentum radar', () => {
     const prepare = env.DB.prepare.bind(env.DB);
     let failed = false;
     vi.spyOn(env.DB, 'prepare').mockImplementation((query: string) => {
-      if (!failed && query.includes("'$.sender.login'")) {
+      // Only the lookup of recent stargazers, after the alert is claimed, reads star counts.
+      if (!failed && query.includes("'$.star.count'")) {
         failed = true;
         throw new Error('D1_ERROR: network connection lost');
       }
@@ -324,6 +325,8 @@ describe('momentum radar', () => {
     });
 
     await expect(check(env, '2026-10-15T12:05:00.000Z')).rejects.toThrow('D1_ERROR');
+    const claims = await env.DB.prepare('SELECT alert_id FROM radar_alerts').all();
+    expect(claims.results).toEqual([{ alert_id: 'stars:myorg/cli' }]);
     await check(env, '2026-10-15T12:15:00.000Z');
 
     expect(postedEmbeds()).toHaveLength(1);
