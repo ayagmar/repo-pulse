@@ -1,3 +1,4 @@
+import type { DailyDigest } from '../models/daily-digest.js';
 import type { FailureClassification } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
 
@@ -35,4 +36,9 @@ export interface Notifier {
    * Send a notification for the given repository event
    */
   notify(event: RepoEvent): Promise<NotificationResult>;
+
+  /**
+   * Send the daily summary of recorded events
+   */
+  notifyDigest(digest: DailyDigest): Promise<NotificationResult>;
 }

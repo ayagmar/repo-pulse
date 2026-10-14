@@ -1,3 +1,4 @@
+import type { DailyDigest, RepositoryActivity } from '../../core/models/daily-digest.js';
 import type {
   ForkEvent,
   IssueEvent,
@@ -37,7 +38,7 @@ interface DiscordEmbed {
   };
 }
 
-interface DiscordWebhookPayload {
+export interface DiscordWebhookPayload {
   username?: string;
   avatar_url?: string;
   embeds: DiscordEmbed[];
@@ -45,10 +46,12 @@ interface DiscordWebhookPayload {
 
 // Discord embed limits: https://discord.com/developers/docs/resources/message#embed-object-embed-limits
 const TITLE_LIMIT = 256;
+const DESCRIPTION_LIMIT = 4096;
 const FIELD_VALUE_LIMIT = 1024;
 const EXCERPT_LIMIT = 300;
 const COMMIT_SUBJECT_LIMIT = 72;
 const LISTED_COMMITS = 5;
+const LISTED_RELEASES = 3;
 
 // GitHub's state colors, so a message reads like the badge it links to.
 const COLORS = {
@@ -272,4 +275,77 @@ export function formatDiscordEmbed(event: RepoEvent): DiscordWebhookPayload {
     case REPO_EVENT_TYPES.RELEASE_PUBLISHED:
       return formatReleaseEvent(event);
   }
+}
+
+function releasedSummary(releases: RepositoryActivity['releases']): string {
+  const listed = releases
+    .slice(-LISTED_RELEASES)
+    .map((release) => `[${release.tagName}](${release.url})`);
+  const earlier = releases.length - listed.length;
+  return `released ${listed.join(', ')}${earlier > 0 ? ` and ${String(earlier)} more` : ''}`;
+}
+
+function activitySummary(activity: RepositoryActivity): string {
+  const items = [
+    activity.starsGained !== 0
+      ? `⭐ ${activity.starsGained > 0 ? '+' : ''}${String(activity.starsGained)}`
+      : null,
+    activity.commits > 0 ? plural(activity.commits, 'commit') : null,
+    activity.pullRequestsMerged > 0 ? `${plural(activity.pullRequestsMerged, 'PR')} merged` : null,
+    activity.pullRequestsOpened > 0 ? `${plural(activity.pullRequestsOpened, 'PR')} opened` : null,
+    activity.issuesOpened > 0 ? `${plural(activity.issuesOpened, 'issue')} opened` : null,
+    activity.issuesClosed > 0 ? `${plural(activity.issuesClosed, 'issue')} closed` : null,
+    activity.forks > 0 ? plural(activity.forks, 'fork') : null,
+    activity.releases.length > 0 ? releasedSummary(activity.releases) : null,
+  ].filter((item) => item !== null);
+
+  return items.length > 0 ? items.join(' · ') : 'no net change';
+}
+
+function repositories(count: number): string {
+  return `${String(count)} ${count === 1 ? 'repository' : 'repositories'}`;
+}
+
+function formatDigestTime(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(instant);
+}
+
+/**
+ * Format a daily digest as one embed with a line per repository, most active first
+ */
+export function formatDiscordDigest(digest: DailyDigest): DiscordWebhookPayload {
+  const lines: string[] = [];
+  let length = 0;
+  for (const [index, activity] of digest.repositories.entries()) {
+    const line = `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`;
+    // Leave room for the "and N more" line.
+    if (length + line.length + 1 > DESCRIPTION_LIMIT - 64) {
+      lines.push(`_…and ${repositories(digest.repositories.length - index)} more_`);
+      break;
+    }
+    lines.push(line);
+    length += line.length + 1;
+  }
+
+  return {
+    embeds: [
+      {
+        title: `📊 Daily pulse: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`,
+        description: lines.join('\n'),
+        color: COLORS.push,
+        timestamp: digest.windowEnd.toISOString(),
+        footer: {
+          text: `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`,
+          icon_url: GITHUB_ICON_URL,
+        },
+      },
+    ],
+  };
 }

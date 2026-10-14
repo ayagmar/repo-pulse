@@ -1,15 +1,23 @@
-import { applyD1Migrations } from 'cloudflare:test';
+import {
+  applyD1Migrations,
+  createExecutionContext,
+  createScheduledController,
+  waitOnExecutionContext,
+} from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
+  serializeRepoEvent,
 } from '../../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
+import { dueDigestWindow } from '../../core/services/daily-digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
+import worker from '../../index.js';
 
 // Local workerd/D1 integration only: no remote bindings, secrets or outbound requests.
 describe('Workers runtime integration', () => {
@@ -43,6 +51,10 @@ describe('Workers runtime integration', () => {
   beforeEach(async () => {
     await env.DB.prepare('DELETE FROM deliveries').run();
     await env.DB.prepare('DELETE FROM events').run();
+    await env.DB.prepare('DELETE FROM digest_sends').run();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('protects the admin surface through the exported Worker', async () => {
@@ -161,6 +173,7 @@ describe('Workers runtime integration', () => {
       name: 'test',
       isConfigured: () => true,
       notify: () => Promise.resolve({ success: true, provider: 'test' }),
+      notifyDigest: () => Promise.reject(new Error('Not used in this test')),
     });
     const processor = new DurableEventProcessor(ledger, dispatcher);
     await processor.enqueue(event, {
@@ -174,5 +187,56 @@ describe('Workers runtime integration', () => {
       processingAttempts: 1,
       providerAttemptCount: 1,
     });
+  });
+
+  it("follows Morocco's clock changes with the runtime's time zone data", () => {
+    // 09:00 in Morocco was 08:00 UTC in June 2026 (UTC+1) and is 09:00 UTC since the
+    // move to UTC+0 on 20 September 2026.
+    expect(
+      dueDigestWindow(new Date('2026-06-15T08:00:00.000Z'), 'Africa/Casablanca', 9)
+    ).toMatchObject({
+      date: '2026-06-15',
+    });
+    expect(
+      dueDigestWindow(new Date('2026-10-15T08:00:00.000Z'), 'Africa/Casablanca', 9)
+    ).toBeNull();
+    expect(dueDigestWindow(new Date('2026-10-15T09:00:00.000Z'), 'Africa/Casablanca', 9)).toEqual({
+      date: '2026-10-15',
+      start: new Date('2026-10-14T09:00:00.000Z'),
+      end: new Date('2026-10-15T09:00:00.000Z'),
+    });
+  });
+
+  it('posts the daily digest from the scheduled handler at the configured local hour', async () => {
+    // A stubbed Discord: this suite makes no outbound requests.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    await env.DB.prepare(
+      `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+       VALUES ('digest-star', 'star.created', 'myorg/repo', '2026-10-14T12:00:00.000Z', ?)`
+    )
+      .bind(serializeRepoEvent(event))
+      .run();
+
+    // wrangler.jsonc sets the digest to 09:00 Africa/Casablanca, which is UTC+0 since
+    // 20 September 2026.
+    const context = createExecutionContext();
+    worker.scheduled(
+      createScheduledController({
+        scheduledTime: new Date('2026-10-15T09:00:00.000Z'),
+        cron: '* * * * *',
+      }),
+      { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/test' } as typeof env,
+      context
+    );
+    await waitOnExecutionContext(context);
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    await expect(
+      env.DB.prepare(
+        'SELECT digest_id AS digestId, sent_at IS NOT NULL AS sent FROM digest_sends'
+      ).all()
+    ).resolves.toMatchObject({ results: [{ digestId: 'daily:2026-10-15', sent: 1 }] });
   });
 });

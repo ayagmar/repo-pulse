@@ -1,4 +1,4 @@
-import { createApp, drainDueDeliveries } from './app.js';
+import { createApp, drainDueDeliveries, sendDailyDigest } from './app.js';
 
 const app = createApp();
 
@@ -6,8 +6,9 @@ const worker = {
   fetch(request: Request, env: Env, executionCtx: ExecutionContext): Response | Promise<Response> {
     return app.fetch(request, env, executionCtx);
   },
-  scheduled(_controller: ScheduledController, env: Env, executionCtx: ExecutionContext): void {
+  scheduled(controller: ScheduledController, env: Env, executionCtx: ExecutionContext): void {
     executionCtx.waitUntil(drainDueDeliveries(env, { pruneSucceededDeliveries: true }));
+    executionCtx.waitUntil(sendDailyDigest(env, new Date(controller.scheduledTime)));
   },
 } satisfies ExportedHandler<Env>;
 

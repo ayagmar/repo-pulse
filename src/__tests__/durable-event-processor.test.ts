@@ -15,6 +15,7 @@ function createNotifier(notify: Notifier['notify']): Notifier {
     name: 'discord',
     isConfigured: () => true,
     notify,
+    notifyDigest: () => Promise.reject(new Error('Not used in this test')),
   };
 }
 
@@ -74,6 +75,99 @@ describe('DurableEventProcessor', () => {
         expect.objectContaining({ success: false, deliveryAttempt: 1 }),
         expect.objectContaining({ success: true, deliveryAttempt: 2 }),
       ],
+    });
+  });
+
+  it('retries only the providers that failed, without reposting to the ones that succeeded', async () => {
+    const tempDatabase = createTempDatabasePath();
+    cleanups.push(tempDatabase.cleanup);
+
+    const database = createTestD1Database(tempDatabase.databasePath);
+    cleanups.push(() => {
+      database.close();
+    });
+
+    const discordNotify = vi
+      .fn()
+      .mockResolvedValue({ success: true, provider: 'discord' } satisfies NotificationResult);
+    const slackNotify = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: false,
+        provider: 'slack',
+        error: 'Slack returned 503',
+        failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+      } satisfies NotificationResult)
+      .mockResolvedValueOnce({ success: true, provider: 'slack' } satisfies NotificationResult);
+    const dispatcher = new NotificationDispatcher();
+    dispatcher.add({
+      name: 'discord',
+      isConfigured: () => true,
+      notify: discordNotify,
+      notifyDigest: () => Promise.reject(new Error('Not used in this test')),
+    });
+    dispatcher.add({
+      name: 'slack',
+      isConfigured: () => true,
+      notify: slackNotify,
+      notifyDigest: () => Promise.reject(new Error('Not used in this test')),
+    });
+
+    const ledger = new D1DeliveryLedger(database);
+    const processor = new DurableEventProcessor(ledger, dispatcher, {
+      maxAttempts: 3,
+      retryBaseDelayMs: 0,
+      retryMaxDelayMs: 0,
+    });
+    const event = createTestRepoEvent();
+
+    await processor.enqueue(event, {
+      deliveryId: 'delivery-partial-failure',
+      repository: event.repository.fullName,
+      sourceEventType: 'star',
+    });
+    await processor.drainDueDeliveries();
+
+    expect(discordNotify).toHaveBeenCalledTimes(1);
+    expect(slackNotify).toHaveBeenCalledTimes(2);
+    await expect(ledger.getDelivery('delivery-partial-failure')).resolves.toMatchObject({
+      status: 'succeeded',
+      processingAttempts: 2,
+    });
+  });
+
+  it('completes an interrupted delivery without reposting when every provider already succeeded', async () => {
+    const tempDatabase = createTempDatabasePath();
+    cleanups.push(tempDatabase.cleanup);
+
+    const database = createTestD1Database(tempDatabase.databasePath);
+    cleanups.push(() => {
+      database.close();
+    });
+
+    const ledger = new D1DeliveryLedger(database);
+    const event = createTestRepoEvent();
+    await ledger.persistAcceptedDelivery({
+      deliveryId: 'delivery-interrupted',
+      sourceEventType: 'star',
+      repository: event.repository.fullName,
+      event,
+      maxAttempts: 5,
+    });
+    // The Worker posted and recorded the attempt, then stopped before marking success.
+    await ledger.claimNextPendingDelivery(new Date(), 0);
+    await ledger.recordProviderAttempts('delivery-interrupted', 1, [
+      { provider: 'discord', success: true, attemptedAt: new Date() },
+    ]);
+
+    const notify = vi.fn();
+    const dispatcher = new NotificationDispatcher();
+    dispatcher.add(createNotifier(notify));
+    await new DurableEventProcessor(ledger, dispatcher).drainDueDeliveries();
+
+    expect(notify).not.toHaveBeenCalled();
+    await expect(ledger.getDelivery('delivery-interrupted')).resolves.toMatchObject({
+      status: 'succeeded',
     });
   });
 

@@ -41,8 +41,39 @@ export function prepareEventHistoryInsert(
     );
 }
 
+/** The fields a digest needs from one recorded event. */
+export interface EventActivity {
+  eventType: RepoEvent['type'];
+  repository: string;
+  repositoryUrl: string;
+  commitCount: number | null;
+  releaseTagName: string | null;
+  releaseUrl: string | null;
+}
+
 export class D1EventHistory {
   constructor(private readonly db: D1DatabaseLike) {}
+
+  /** Events received in [start, end), oldest first. Reads only the fields a digest needs. */
+  async listActivityBetween(start: Date, end: Date): Promise<EventActivity[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT
+           event_type AS eventType,
+           repository,
+           json_extract(event_json, '$.repository.url') AS repositoryUrl,
+           json_array_length(event_json, '$.push.commits') AS commitCount,
+           json_extract(event_json, '$.release.tagName') AS releaseTagName,
+           json_extract(event_json, '$.release.url') AS releaseUrl
+         FROM events
+         WHERE received_at >= ? AND received_at < ?
+         ORDER BY received_at ASC, delivery_id ASC`
+      )
+      .bind(start.toISOString(), end.toISOString())
+      .all<EventActivity>();
+
+    return rows.results;
+  }
 
   async listRecentEvents(limit = 50): Promise<EventHistoryEntry[]> {
     const boundedLimit = Math.max(1, Math.min(limit, 200));

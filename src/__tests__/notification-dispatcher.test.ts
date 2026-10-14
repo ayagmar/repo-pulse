@@ -18,6 +18,7 @@ function createMockNotifier(
     name,
     isConfigured: () => configured,
     notify,
+    notifyDigest: () => Promise.reject(new Error('Not used in this test')),
   };
 }
 

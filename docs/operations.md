@@ -59,6 +59,8 @@ Values configured in [`wrangler.jsonc`](../wrangler.jsonc):
 - `DELIVERY_SUCCEEDED_RETENTION_DAYS`
 - `DELIVERY_PROCESSING_LEASE_MS`
 - `DELIVERY_DRAIN_BATCH_SIZE`
+- `DIGEST_TIME_ZONE`: IANA time zone for the daily digest, such as `Europe/Paris`. Defaults to `UTC`.
+- `DIGEST_HOUR`: local hour, 0 to 23, when the digest is posted. Defaults to `9`.
 
 Secrets configured in `.dev.vars` or via `wrangler secret put`:
 
@@ -70,7 +72,10 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 
 - Accepted supported deliveries are persisted before `POST /webhook` returns `202`.
 - Duplicate retained delivery IDs return `200` without enqueueing new work.
+- A retry resends only to the providers that have not accepted the delivery yet.
 - Provider sends remain at-least-once: interruption between sending and persisting success can repeat a send.
+- The daily digest is posted by the every-minute cron during the first ten minutes after `DIGEST_HOUR`. A failed digest is retried each minute in that window. One that is still failing when it closes is skipped, and the next day's digest does not include its events.
+- Digests are at-least-once in one case: a run that stops after posting but before recording the send is retried once its five-minute claim expires.
 - Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
 - Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.
 - Discord requests time out after ten seconds and are classified as transient failures.
