@@ -303,6 +303,27 @@ describe('daily digest', () => {
     ).toBeNull();
   });
 
+  it('records a post from a stalled run, so the run that took over cannot resend it', async () => {
+    const env = createDigestEnv();
+    const log = new D1DigestLog(env.DB);
+    const lease = 5 * 60_000;
+
+    await log.claim('daily:2026-10-15', 'discord', new Date('2026-10-15T09:00:00Z'), lease);
+    const takeover = await log.claim(
+      'daily:2026-10-15',
+      'discord',
+      new Date('2026-10-15T09:06:00Z'),
+      lease
+    );
+    // The stalled run's post went through; the takeover's failed.
+    await log.markSent('daily:2026-10-15', 'discord', new Date('2026-10-15T09:06:30Z'));
+    await log.release('daily:2026-10-15', 'discord', takeover ?? '');
+
+    expect(
+      await log.claim('daily:2026-10-15', 'discord', new Date('2026-10-15T09:07:00Z'), lease)
+    ).toBeNull();
+  });
+
   it('posts nothing after a day without activity', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-13T12:00:00.000Z', [star('cli')]);

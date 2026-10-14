@@ -8,8 +8,8 @@ export class D1DigestLog {
   constructor(private readonly db: D1DatabaseLike) {}
 
   /**
-   * Claim a digest for a provider. Returns the claim's time, which `markSent` and
-   * `release` take to act only on this claim. Returns null when the provider was
+   * Claim a digest for a provider. Returns the claim's time, which `release` takes to
+   * give up only this claim. Returns null when the provider was
    * already sent the digest, or another run claimed it less than `leaseMs` ago and
    * may still be posting.
    */
@@ -35,18 +35,14 @@ export class D1DigestLog {
     return claimed === null ? null : claimedAt;
   }
 
-  async markSent(
-    digestId: string,
-    provider: string,
-    claimedAt: string,
-    sentAt: Date
-  ): Promise<void> {
+  /**
+   * Record that the digest was posted. A run whose claim another run took over still
+   * records its post, so the other run cannot release the claim and cause a repeat.
+   */
+  async markSent(digestId: string, provider: string, sentAt: Date): Promise<void> {
     await this.db
-      .prepare(
-        `UPDATE digest_sends SET sent_at = ?
-         WHERE digest_id = ? AND provider_name = ? AND claimed_at = ?`
-      )
-      .bind(sentAt.toISOString(), digestId, provider, claimedAt)
+      .prepare('UPDATE digest_sends SET sent_at = ? WHERE digest_id = ? AND provider_name = ?')
+      .bind(sentAt.toISOString(), digestId, provider)
       .run();
   }
 

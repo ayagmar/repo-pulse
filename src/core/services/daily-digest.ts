@@ -248,7 +248,7 @@ export class DailyDigestSender {
         continue;
       }
       if (result.success) {
-        await this.digestLog.markSent(digestId, result.provider, claimedAt, new Date());
+        await this.digestLog.markSent(digestId, result.provider, new Date());
       } else {
         await this.digestLog.release(digestId, result.provider, claimedAt);
       }
