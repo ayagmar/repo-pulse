@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Permanent event history: every accepted event is kept in a new `events` D1 table, which
+  is never pruned. Migration `0004` backfills the deliveries still in the ledger and marks
+  them private, because they were stored without repository visibility.
+- Events now record whether their repository is private.
+- `GET /admin/events` lists the 50 most recent events.
+
 ## 1.0.0 (2026-10-13)
 
 First release.

@@ -8,6 +8,8 @@ import type {
 import { DELIVERY_STATUSES } from '../models/delivery-ledger.js';
 import type { FailureClassification } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
+import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
+import { prepareEventHistoryInsert } from './d1-event-history.js';
 import type { D1DatabaseLike } from './d1-types.js';
 
 interface PersistDeliveryInput {
@@ -81,21 +83,6 @@ export type ClaimedDelivery = DeliveryForProcessing;
 type RetryDeliveryResult = RetryQueuedResult | RetryNotFoundResult | RetryRejectedResult;
 type PersistDeliveryResult = PersistDeliveryAccepted | PersistDeliveryDuplicate;
 
-function serializeRepoEvent(event: RepoEvent): string {
-  return JSON.stringify({
-    ...event,
-    timestamp: event.timestamp.toISOString(),
-  });
-}
-
-function deserializeRepoEvent(value: string): RepoEvent {
-  const parsed = JSON.parse(value) as RepoEvent & { timestamp: string };
-  return {
-    ...parsed,
-    timestamp: new Date(parsed.timestamp),
-  };
-}
-
 function toDate(value: string | null): Date | null {
   return value === null ? null : new Date(value);
 }
@@ -135,7 +122,7 @@ export class D1DeliveryLedger {
 
   async persistAcceptedDelivery(input: PersistDeliveryInput): Promise<PersistDeliveryResult> {
     const acceptedAt = new Date().toISOString();
-    const result = await this.db
+    const insertDelivery = this.db
       .prepare(
         `INSERT OR IGNORE INTO deliveries (
           delivery_id,
@@ -165,10 +152,18 @@ export class D1DeliveryLedger {
         DELIVERY_STATUSES.PENDING,
         acceptedAt,
         input.maxAttempts
-      )
-      .run();
+      );
+    const [deliveryResult] = await this.db.batch([
+      insertDelivery,
+      prepareEventHistoryInsert(this.db, {
+        deliveryId: input.deliveryId,
+        repository: input.repository,
+        event: input.event,
+        receivedAt: acceptedAt,
+      }),
+    ]);
 
-    return result.meta.changes === 0 ? { outcome: 'duplicate' } : { outcome: 'accepted' };
+    return deliveryResult?.meta.changes === 0 ? { outcome: 'duplicate' } : { outcome: 'accepted' };
   }
 
   async claimNextPendingDelivery(

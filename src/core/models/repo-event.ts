@@ -186,6 +186,21 @@ export type RepoEventInput<TType extends RepoEventType> = Omit<
   'timestamp' | 'type'
 >;
 
+export function serializeRepoEvent(event: RepoEvent): string {
+  return JSON.stringify({
+    ...event,
+    timestamp: event.timestamp.toISOString(),
+  });
+}
+
+export function deserializeRepoEvent(value: string): RepoEvent {
+  const parsed = JSON.parse(value) as RepoEvent & { timestamp: string };
+  return {
+    ...parsed,
+    timestamp: new Date(parsed.timestamp),
+  };
+}
+
 /**
  * Factory function for creating RepoEvent instances.
  */

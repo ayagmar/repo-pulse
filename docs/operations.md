@@ -86,6 +86,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - `GET /admin/deliveries`
 - `GET /admin/deliveries/:deliveryId`
 - `POST /admin/deliveries/:deliveryId/retry`
+- `GET /admin/events`
 - `GET /admin/openapi.json`
 - `GET /admin/docs`
 

@@ -10,13 +10,14 @@ Repo Pulse has one runtime path and one package-manager path:
 
 - [`src/http/routes/webhook.ts`](src/http/routes/webhook.ts) bounds the raw request bytes, verifies GitHub signatures before decoding JSON, normalizes events, persists deliveries, and acknowledges acceptance.
 - [`src/core/services/d1-delivery-ledger.ts`](src/core/services/d1-delivery-ledger.ts) is the durable source of truth for dedupe, status transitions, retry timing, and provider attempt history.
+- [`src/core/services/d1-event-history.ts`](src/core/services/d1-event-history.ts) keeps every accepted event permanently. Delivery rows are pruned after the retention window; history rows are not.
 - [`src/core/services/durable-event-processor.ts`](src/core/services/durable-event-processor.ts) claims due work, dispatches notifiers, persists outcomes, and reschedules transient failures.
 - [`src/http/routes/admin.ts`](src/http/routes/admin.ts) exposes authenticated operational endpoints against the same ledger.
 - [`src/providers/discord/`](src/providers/discord/) owns Discord formatting and transport.
 
 ## Design Intent
 
-- Persist first: supported deliveries are written to D1 before `202 Accepted`.
+- Persist first: supported deliveries are written to D1 before `202 Accepted`. The delivery row and its history row are inserted in one D1 batch, so an event is never queued without being recorded.
 - Dedupe at the ledger: a retained GitHub delivery ID does not enqueue new work.
 - Keep the route thin: it talks directly to `DurableEventProcessor`.
 - Reuse Hono routes and matchers across requests. Build configuration and binding-dependent services per request so binding-only deployments do not retain stale secrets or database clients.
