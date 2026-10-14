@@ -21,7 +21,11 @@ const BASELINE_DAYS = 14;
 const MIN_SPIKE_STARS = 5;
 /** ...and at least this many times the stars such a window usually gets. */
 const SPIKE_FACTOR = 4;
+/** An alert is sent at most once in this long per repository. */
 const ALERT_COOLDOWN_MS = DAY_MS;
+/** A claimed alert never marked sent or released, after a crash, can be retried after this. */
+const ALERT_CLAIM_LEASE_MS = 5 * 60_000;
+const ALERT_LIMITS = { cooldownMs: ALERT_COOLDOWN_MS, leaseMs: ALERT_CLAIM_LEASE_MS };
 const ALERT_PREFIX = 'stars:';
 
 /** Recent stargazers whose profiles are looked up, newest first. */
@@ -84,19 +88,27 @@ export class MomentumRadar {
       recentStart,
       end: now,
       alertPrefix: ALERT_PREFIX,
-      cooldownEnd: new Date(now.getTime() - ALERT_COOLDOWN_MS),
+      now: new Date(),
+      limits: ALERT_LIMITS,
     });
 
     for (const spike of findStarSpikes(counts)) {
       const alertId = `${ALERT_PREFIX}${spike.repository}`;
-      const claimedAt = await this.radarLog.claim(alertId, now, ALERT_COOLDOWN_MS);
+      // Claim with the current time, not the cron's scheduled time, so a late check
+      // does not shorten its own lease.
+      const claimedAt = await this.radarLog.claim(alertId, new Date(), ALERT_LIMITS);
       if (claimedAt === null) {
         continue;
       }
 
+      // If this check fails before marking the alert sent or releasing it, the claim's
+      // lease runs out before the next check, which retries the alert.
       const alert = await this.buildAlert(spike, now, recentStart);
       const results = await this.dispatcher.dispatchAlert(alert);
-      if (results.every((result) => !result.success)) {
+      const sent = results.some((result) => result.success);
+      if (sent) {
+        await this.radarLog.markSent(alertId, new Date());
+      } else {
         await this.radarLog.release(alertId, claimedAt);
       }
       logger.info('radar.star_spike', {
@@ -104,7 +116,7 @@ export class MomentumRadar {
         repository: spike.repository,
         recentStars: spike.recentStars,
         expectedStars: spike.expectedStars,
-        sent: results.some((result) => result.success),
+        sent,
       });
       // One alert per check keeps the run within the Workers Free plan's 50
       // subrequests. Other spikes are sent by the next checks.

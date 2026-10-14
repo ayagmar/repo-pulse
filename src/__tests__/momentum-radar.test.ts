@@ -7,6 +7,7 @@ import {
   REPO_EVENT_TYPES,
 } from '../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
+import { D1RadarLog } from '../core/services/d1-radar-log.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
 const MINUTE_MS = 60_000;
@@ -132,6 +133,15 @@ describe('momentum radar', () => {
     }
   }
 
+  /** Run the radar as the cron would at `scheduledTime`, with the clock there too. */
+  async function check(
+    env: ReturnType<typeof createTestEnv>,
+    scheduledTime: string
+  ): Promise<void> {
+    vi.setSystemTime(new Date(scheduledTime));
+    await checkMomentum(env, new Date(scheduledTime));
+  }
+
   function postedEmbeds(): {
     title: string;
     description: string;
@@ -160,11 +170,11 @@ describe('momentum radar', () => {
       20
     );
 
-    await checkMomentum(env, new Date('2026-10-15T12:00:00.000Z'));
+    await check(env, '2026-10-15T12:00:00.000Z');
     expect(postedEmbeds()).toEqual([]);
 
-    await checkMomentum(env, new Date('2026-10-15T12:05:00.000Z'));
-    await checkMomentum(env, new Date('2026-10-15T12:15:00.000Z'));
+    await check(env, '2026-10-15T12:05:00.000Z');
+    await check(env, '2026-10-15T12:15:00.000Z');
 
     expect(postedEmbeds()).toEqual([
       expect.objectContaining({
@@ -202,7 +212,7 @@ describe('momentum radar', () => {
     }
     await recordStars(env, 'web', now, ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 300);
 
-    await checkMomentum(env, now);
+    await check(env, now.toISOString());
 
     expect(postedEmbeds()).toEqual([]);
   });
@@ -212,7 +222,7 @@ describe('momentum radar', () => {
     const now = new Date('2026-10-15T12:05:00.000Z');
     await recordStars(env, 'cli', now, ['a', 'b', 'c', 'd'], 4);
 
-    await checkMomentum(env, now);
+    await check(env, now.toISOString());
 
     expect(postedEmbeds()).toEqual([]);
   });
@@ -228,9 +238,9 @@ describe('momentum radar', () => {
     );
     fetchMock.mockResolvedValueOnce(new Response('upstream error', { status: 500 }));
 
-    await checkMomentum(env, new Date('2026-10-15T12:05:00.000Z'));
-    await checkMomentum(env, new Date('2026-10-15T12:15:00.000Z'));
-    await checkMomentum(env, new Date('2026-10-15T12:25:00.000Z'));
+    await check(env, '2026-10-15T12:05:00.000Z');
+    await check(env, '2026-10-15T12:15:00.000Z');
+    await check(env, '2026-10-15T12:25:00.000Z');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(postedEmbeds()[1]).toMatchObject({
@@ -250,9 +260,52 @@ describe('momentum radar', () => {
     const now = new Date('2026-10-15T12:05:00.000Z');
     await recordStars(env, 'cli', now, ['a', 'b', 'c', 'd', 'e'], 5);
 
-    await checkMomentum(env, now);
+    await check(env, now.toISOString());
 
     expect(postedEmbeds()).toHaveLength(1);
     expect(postedEmbeds()[0]?.fields).toBeUndefined();
+  });
+
+  it('retries an alert at the next check when building it fails', async () => {
+    const env = createRadarEnv();
+    await recordStars(
+      env,
+      'cli',
+      new Date('2026-10-15T12:05:00.000Z'),
+      ['a', 'b', 'c', 'd', 'e'],
+      5
+    );
+    const prepare = env.DB.prepare.bind(env.DB);
+    let failed = false;
+    vi.spyOn(env.DB, 'prepare').mockImplementation((query: string) => {
+      if (!failed && query.includes("'$.sender.login'")) {
+        failed = true;
+        throw new Error('D1_ERROR: network connection lost');
+      }
+      return prepare(query);
+    });
+
+    await expect(check(env, '2026-10-15T12:05:00.000Z')).rejects.toThrow('D1_ERROR');
+    await check(env, '2026-10-15T12:15:00.000Z');
+
+    expect(postedEmbeds()).toHaveLength(1);
+  });
+
+  it('lets a check take over an abandoned claim, and holds a sent alert for a day', async () => {
+    const env = createRadarEnv();
+    const log = new D1RadarLog(env.DB);
+    const limits = { cooldownMs: 24 * HOUR_MS, leaseMs: 5 * MINUTE_MS };
+    const claim = (at: string): Promise<string | null> =>
+      log.claim('stars:myorg/cli', new Date(at), limits);
+
+    expect(await claim('2026-10-15T12:05:00.000Z')).not.toBeNull();
+    // The claiming check may still be posting.
+    expect(await claim('2026-10-15T12:09:00.000Z')).toBeNull();
+    // It stopped without sending or releasing.
+    expect(await claim('2026-10-15T12:15:00.000Z')).not.toBeNull();
+    await log.markSent('stars:myorg/cli', new Date('2026-10-15T12:15:05.000Z'));
+
+    expect(await claim('2026-10-16T12:15:00.000Z')).toBeNull();
+    expect(await claim('2026-10-16T12:15:05.000Z')).not.toBeNull();
   });
 });
