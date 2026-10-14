@@ -249,11 +249,11 @@ export class DigestSender {
       return [];
     }
 
-    const repositories = await this.history.listActiveRepositories(
-      new Date(end.getTime() - UNRELEASED_LOOKBACK_MS),
-      UNRELEASED_MAX_REPOSITORIES
-    );
     try {
+      const repositories = await this.history.listActiveRepositories(
+        new Date(end.getTime() - UNRELEASED_LOOKBACK_MS),
+        UNRELEASED_MAX_REPOSITORIES
+      );
       return await this.insights.listUnreleasedWork(repositories);
     } catch (error) {
       logger.warn('digest.unreleased_work_failed', {
