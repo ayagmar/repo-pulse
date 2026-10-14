@@ -1,4 +1,5 @@
 import type { NotificationResult, Notifier } from '../interfaces/notifier.js';
+import type { DailyDigest } from '../models/daily-digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { logger } from './logger.js';
@@ -34,20 +35,52 @@ export class NotificationDispatcher {
    * Dispatch an event to every configured notifier not in `skipProviders`
    * @returns Results from the notification attempts made
    */
-  async dispatch(event: RepoEvent, metadata: DispatchMetadata = {}): Promise<NotificationResult[]> {
+  dispatch(event: RepoEvent, metadata: DispatchMetadata = {}): Promise<NotificationResult[]> {
+    return this.sendToEach(metadata.skipProviders, (notifier) => notifier.notify(event), {
+      deliveryId: metadata.deliveryId,
+      eventType: event.type,
+      repository: event.repository.fullName,
+    });
+  }
+
+  /**
+   * Dispatch a daily digest to every configured notifier not in `skipProviders`
+   * @returns Results from the notification attempts made
+   */
+  dispatchDigest(
+    digest: DailyDigest,
+    metadata: Pick<DispatchMetadata, 'skipProviders'> = {}
+  ): Promise<NotificationResult[]> {
+    return this.sendToEach(metadata.skipProviders, (notifier) => notifier.notifyDigest(digest), {
+      digestDate: digest.date,
+    });
+  }
+
+  /**
+   * Check if any notifiers are configured
+   */
+  hasNotifiers(): boolean {
+    return this.notifiers.length > 0;
+  }
+
+  private async sendToEach(
+    skipProviders: ReadonlySet<string> | undefined,
+    send: (notifier: Notifier) => Promise<NotificationResult>,
+    logFields: Record<string, unknown>
+  ): Promise<NotificationResult[]> {
     if (this.notifiers.length === 0) {
       throw new Error('No notification providers configured');
     }
 
     const notifiers = this.notifiers.filter(
-      (notifier) => metadata.skipProviders?.has(notifier.name) !== true
+      (notifier) => skipProviders?.has(notifier.name) !== true
     );
     const results = await Promise.all(
       notifiers.map(async (notifier) => {
         try {
           return {
             notifier,
-            result: await notifier.notify(event),
+            result: await send(notifier),
           } as const;
         } catch (reason) {
           return {
@@ -61,7 +94,7 @@ export class NotificationDispatcher {
     return results.map((entry) => {
       if ('result' in entry) {
         if (!entry.result.success) {
-          this.logFailure(entry.notifier.name, event, metadata.deliveryId, entry.result.error);
+          this.logFailure(entry.notifier.name, logFields, entry.result.error);
         }
 
         return entry.result;
@@ -71,7 +104,7 @@ export class NotificationDispatcher {
         entry.reason instanceof Error
           ? (entry.reason.stack ?? entry.reason.message)
           : String(entry.reason);
-      this.logFailure(entry.notifier.name, event, metadata.deliveryId, error);
+      this.logFailure(entry.notifier.name, logFields, error);
 
       return {
         success: false,
@@ -82,26 +115,12 @@ export class NotificationDispatcher {
     });
   }
 
-  /**
-   * Check if any notifiers are configured
-   */
-  hasNotifiers(): boolean {
-    return this.notifiers.length > 0;
-  }
-
-  private logFailure(
-    provider: string,
-    event: RepoEvent,
-    deliveryId: string | undefined,
-    error: string | undefined
-  ): void {
+  private logFailure(provider: string, logFields: Record<string, unknown>, error: string): void {
     logger.error('notifier.failed', {
       component: 'notification_dispatcher',
       provider,
-      deliveryId,
-      eventType: event.type,
-      repository: event.repository.fullName,
-      error: error ?? 'Unknown error',
+      ...logFields,
+      error,
     });
   }
 }

@@ -27,6 +27,18 @@ describe('createConfig', () => {
     ).toThrow('Invalid DELIVERY_MAX_ATTEMPTS');
   });
 
+  it('rejects a digest time zone or hour that would never match, instead of never posting', () => {
+    const base = { GITHUB_WEBHOOK_SECRET: 'test', ADMIN_API_TOKEN: 'test' };
+
+    expect(() => createConfig({ ...base, DIGEST_TIME_ZONE: 'Africa/Casablnca' })).toThrow(
+      'Invalid DIGEST_TIME_ZONE: Africa/Casablnca'
+    );
+    expect(() => createConfig({ ...base, DIGEST_HOUR: '24' })).toThrow(
+      'Invalid DIGEST_HOUR: expected an integer from 0 to 23'
+    );
+    expect(createConfig(base).digest).toEqual({ timeZone: 'UTC', hour: 9 });
+  });
+
   it('rejects retry max values smaller than the base delay', () => {
     const tempDatabase = createTempDatabasePath();
     const env = createTestEnv(tempDatabase.databasePath, {

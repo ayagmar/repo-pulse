@@ -15,6 +15,7 @@ function createNotifier(notify: Notifier['notify']): Notifier {
     name: 'discord',
     isConfigured: () => true,
     notify,
+    notifyDigest: () => Promise.reject(new Error('Not used in this test')),
   };
 }
 
@@ -103,11 +104,13 @@ describe('DurableEventProcessor', () => {
       name: 'discord',
       isConfigured: () => true,
       notify: discordNotify,
+      notifyDigest: () => Promise.reject(new Error('Not used in this test')),
     });
     dispatcher.add({
       name: 'slack',
       isConfigured: () => true,
       notify: slackNotify,
+      notifyDigest: () => Promise.reject(new Error('Not used in this test')),
     });
 
     const ledger = new D1DeliveryLedger(database);

@@ -16,7 +16,9 @@ type ConfigEnvVarName =
   | 'DELIVERY_RETRY_MAX_DELAY_MS'
   | 'DELIVERY_SUCCEEDED_RETENTION_DAYS'
   | 'DELIVERY_PROCESSING_LEASE_MS'
-  | 'DELIVERY_DRAIN_BATCH_SIZE';
+  | 'DELIVERY_DRAIN_BATCH_SIZE'
+  | 'DIGEST_TIME_ZONE'
+  | 'DIGEST_HOUR';
 
 export type ConfigEnv = Partial<Record<ConfigEnvVarName, string>>;
 
@@ -66,6 +68,27 @@ function parsePositiveInteger(
   return parsedValue;
 }
 
+function parseTimeZone(value: string | undefined): string {
+  if (value === undefined || value.trim() === '') {
+    return 'UTC';
+  }
+
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: value.trim() }).resolvedOptions().timeZone;
+  } catch {
+    throw new Error(`Invalid DIGEST_TIME_ZONE: ${value}`);
+  }
+}
+
+function parseHour(value: string | undefined, defaultValue: number): number {
+  const hour = parsePositiveInteger('DIGEST_HOUR', value, defaultValue, 0);
+  if (hour > 23) {
+    throw new Error('Invalid DIGEST_HOUR: expected an integer from 0 to 23');
+  }
+
+  return hour;
+}
+
 export function createConfig(env: ConfigEnv): {
   server: {
     env: string;
@@ -90,6 +113,10 @@ export function createConfig(env: ConfigEnv): {
     succeededRetentionDays: number;
     processingLeaseMs: number;
     drainBatchSize: number;
+  };
+  digest: {
+    timeZone: string;
+    hour: number;
   };
 } {
   const nodeEnv = getEnvVar(env, 'NODE_ENV') ?? 'development';
@@ -159,6 +186,11 @@ export function createConfig(env: ConfigEnv): {
         getEnvVar(env, 'DELIVERY_DRAIN_BATCH_SIZE'),
         25
       ),
+    },
+
+    digest: {
+      timeZone: parseTimeZone(getEnvVar(env, 'DIGEST_TIME_ZONE')),
+      hour: parseHour(getEnvVar(env, 'DIGEST_HOUR'), 9),
     },
   };
 }

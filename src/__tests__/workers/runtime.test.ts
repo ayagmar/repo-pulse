@@ -8,6 +8,7 @@ import {
 } from '../../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
+import { dueDigestWindow } from '../../core/services/daily-digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
 
@@ -161,6 +162,7 @@ describe('Workers runtime integration', () => {
       name: 'test',
       isConfigured: () => true,
       notify: () => Promise.resolve({ success: true, provider: 'test' }),
+      notifyDigest: () => Promise.reject(new Error('Not used in this test')),
     });
     const processor = new DurableEventProcessor(ledger, dispatcher);
     await processor.enqueue(event, {
@@ -173,6 +175,24 @@ describe('Workers runtime integration', () => {
       status: 'succeeded',
       processingAttempts: 1,
       providerAttemptCount: 1,
+    });
+  });
+
+  it("follows Morocco's clock changes with the runtime's time zone data", () => {
+    // 09:00 in Morocco was 08:00 UTC in June 2026 (UTC+1) and is 09:00 UTC since the
+    // move to UTC+0 on 20 September 2026.
+    expect(
+      dueDigestWindow(new Date('2026-06-15T08:00:00.000Z'), 'Africa/Casablanca', 9)
+    ).toMatchObject({
+      date: '2026-06-15',
+    });
+    expect(
+      dueDigestWindow(new Date('2026-10-15T08:00:00.000Z'), 'Africa/Casablanca', 9)
+    ).toBeNull();
+    expect(dueDigestWindow(new Date('2026-10-15T09:00:00.000Z'), 'Africa/Casablanca', 9)).toEqual({
+      date: '2026-10-15',
+      start: new Date('2026-10-14T09:00:00.000Z'),
+      end: new Date('2026-10-15T09:00:00.000Z'),
     });
   });
 });

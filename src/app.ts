@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
+import { D1DigestLog } from './core/services/d1-digest-log.js';
 import { D1EventHistory } from './core/services/d1-event-history.js';
+import { DailyDigestSender } from './core/services/daily-digest.js';
 import { DurableEventProcessor } from './core/services/durable-event-processor.js';
 import { logger } from './core/services/logger.js';
 import { NotificationDispatcher } from './core/services/notification-dispatcher.js';
@@ -69,4 +71,15 @@ export async function drainDueDeliveries(
 ): Promise<void> {
   const runtime = buildRuntime(env);
   await runtime.eventProcessor.drainDueDeliveries(options);
+}
+
+export async function sendDailyDigest(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+  const runtime = buildRuntime(env);
+  const sender = new DailyDigestSender(
+    runtime.eventHistory,
+    new D1DigestLog(env.DB),
+    runtime.notificationDispatcher,
+    runtime.config.digest
+  );
+  await sender.sendDueDigest(now);
 }

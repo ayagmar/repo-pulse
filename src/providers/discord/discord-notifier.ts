@@ -1,7 +1,12 @@
 import type { NotificationResult, Notifier } from '../../core/interfaces/notifier.js';
+import type { DailyDigest } from '../../core/models/daily-digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../../core/models/failure-classification.js';
 import type { RepoEvent } from '../../core/models/repo-event.js';
-import { formatDiscordEmbed } from './embed-formatter.js';
+import {
+  type DiscordWebhookPayload,
+  formatDiscordDigest,
+  formatDiscordEmbed,
+} from './embed-formatter.js';
 
 interface DiscordNotifierConfig {
   webhookUrl: string;
@@ -57,9 +62,15 @@ class DiscordNotifier implements Notifier {
     return true;
   }
 
-  async notify(event: RepoEvent): Promise<NotificationResult> {
-    const payload = formatDiscordEmbed(event);
+  notify(event: RepoEvent): Promise<NotificationResult> {
+    return this.post(formatDiscordEmbed(event));
+  }
 
+  notifyDigest(digest: DailyDigest): Promise<NotificationResult> {
+    return this.post(formatDiscordDigest(digest));
+  }
+
+  private async post(payload: DiscordWebhookPayload): Promise<NotificationResult> {
     if (this.cfg.username !== undefined && this.cfg.username !== '') {
       payload.username = this.cfg.username;
     }

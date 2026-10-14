@@ -95,6 +95,13 @@ stateDiagram-v2
 - Each stored event includes `repository.private`, so readers can leave private repositories out. Events backfilled from the ledger by migration `0004` predate that field and are recorded as private.
 - `GET /admin/events` lists the 50 most recent events.
 
+### Daily digest
+
+- The every-minute cron checks the local time in `DIGEST_TIME_ZONE`. During the first ten minutes of `DIGEST_HOUR`, it summarizes the events received since that hour on the previous local day and sends one message per provider.
+- The window follows the time zone's clock changes, so it lasts 23 or 25 hours on the day of a change. Morocco, for example, moved to UTC+0 on 20 September 2026.
+- `digest_sends` records each provider that accepted a day's digest. A failed send is retried the next minute until the window closes, and a sent digest is not repeated.
+- Days without events get no digest.
+
 ### Background processor
 
 - Claims due rows from D1 in batches.
