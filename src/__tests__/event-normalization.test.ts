@@ -9,6 +9,7 @@ const mockRepo = {
   full_name: 'owner/test-repo',
   owner: { login: 'owner' },
   html_url: 'https://github.com/owner/test-repo',
+  private: false,
   description: 'Test repo',
   stargazers_count: 10,
   forks_count: 2,
@@ -55,6 +56,7 @@ describe('mapGitHubEvent', () => {
 
       expectTypeOf(result.star.count).toBeNumber();
       expect(result.repository.fullName).toBe('owner/test-repo');
+      expect(result.repository.private).toBe(false);
       expect(result.sender.login).toBe('testuser');
       expect(result.star.count).toBe(10);
     });

@@ -35,6 +35,7 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - Failed Discord sends are retried with backoff, following Discord's rate-limit headers, up to 5 attempts.
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
+- Every accepted event is also kept in a permanent event history, which is never pruned.
 
 ## Deploy
 
@@ -127,6 +128,7 @@ Authorization: Bearer <ADMIN_API_TOKEN>
 | `GET` | `/admin/deliveries` | list persisted deliveries |
 | `GET` | `/admin/deliveries/:deliveryId` | inspect one delivery and attempts |
 | `POST` | `/admin/deliveries/:deliveryId/retry` | retry a failed delivery |
+| `GET` | `/admin/events` | list the 50 most recent events from the permanent history |
 | `GET` | `/admin/openapi.json` | authenticated OpenAPI document |
 | `GET` | `/admin/docs` | authenticated Swagger UI |
 
@@ -174,6 +176,7 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 - **Edge route:** reads the raw request stream and validates the GitHub signature
 - **Event mapping:** converts inbound payloads into strict domain events
 - **D1 ledger:** stores accepted deliveries, dedupe state, attempts, and retry metadata
+- **Event history:** keeps every accepted event in D1 after its delivery row is pruned
 - **Background processor:** drains due work, dispatches providers, reschedules transient failures, and prunes old succeeded rows
 - **Admin surface:** exposes status, health, delivery history, retries, OpenAPI, and Swagger UI
 

@@ -2,6 +2,7 @@ import type { Repository, User } from '../../../core/models/repo-event.js';
 import { normalizeRepoFullName } from '../../../core/repository-identity.js';
 import type { GitHubRepository, GitHubUser } from '../types.js';
 import {
+  requireBoolean,
   requireNullableString,
   requireNumber,
   requireObject,
@@ -19,6 +20,7 @@ export function mapRepository(repo: GitHubRepository): Repository {
     fullName,
     owner,
     url: requireString(repoData.html_url, 'repository.html_url'),
+    private: requireBoolean(repoData.private, 'repository.private'),
     description: requireNullableString(repoData.description, 'repository.description'),
     stars: requireNumber(repoData.stargazers_count, 'repository.stargazers_count'),
     forks: requireNumber(repoData.forks_count, 'repository.forks_count'),

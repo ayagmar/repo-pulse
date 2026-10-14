@@ -248,6 +248,25 @@ export function createOpenApiDocument(origin: string): OpenApiDocument {
             },
           },
         },
+        EventHistoryEntry: {
+          type: 'object',
+          required: ['deliveryId', 'receivedAt', 'event'],
+          properties: {
+            deliveryId: { type: 'string', example: '72d3162e-cc78-11e3-81ab-4c9367dc0958' },
+            receivedAt: { type: 'string', format: 'date-time' },
+            event: { $ref: '#/components/schemas/RepoEventEnvelope' },
+          },
+        },
+        AdminEventListResponse: {
+          type: 'object',
+          required: ['events'],
+          properties: {
+            events: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/EventHistoryEntry' },
+            },
+          },
+        },
         AdminRetryDeliveryResponse: {
           type: 'object',
           required: ['success', 'message', 'delivery'],
@@ -436,6 +455,31 @@ export function createOpenApiDocument(origin: string): OpenApiDocument {
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+            '401': {
+              description: 'Missing or invalid admin bearer token.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/events': {
+        get: {
+          tags: ['admin'],
+          summary: 'List the 50 most recent events from the permanent event history',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Recorded events, newest first.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AdminEventListResponse' },
                 },
               },
             },

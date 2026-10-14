@@ -88,6 +88,13 @@ stateDiagram-v2
 - Delivery rows store normalized event payload, status, attempt counters, retry timing, lease metadata, and latest failure context.
 - Provider attempt rows preserve historical send attempts per delivery and provider.
 
+### Event history
+
+- The `events` table keeps every accepted event, keyed by `delivery_id`, and is never pruned. It is the source for anything that reads past activity, such as a website feed or a digest.
+- The ledger inserts the history row in the same D1 batch as the delivery row. A redelivery that arrives after its delivery row was pruned is queued again but not recorded twice.
+- Each stored event includes `repository.private`, so readers can leave private repositories out. Events backfilled from the ledger by migration `0004` predate that field and are recorded as private.
+- `GET /admin/events` lists the 50 most recent events.
+
 ### Background processor
 
 - Claims due rows from D1 in batches.

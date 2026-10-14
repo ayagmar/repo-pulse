@@ -77,6 +77,13 @@ export function createAdminRoutes(): Hono<HttpEnv> {
     });
   });
 
+  router.get('/events', async (c) => {
+    const events = await c.get('runtime').eventHistory.listRecentEvents();
+    return c.json({
+      events,
+    });
+  });
+
   router.get('/deliveries/:deliveryId', async (c) => {
     const delivery = await c.get('runtime').deliveryLedger.getDelivery(c.req.param('deliveryId'));
     if (!delivery) {

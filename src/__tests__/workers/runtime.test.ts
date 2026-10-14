@@ -7,6 +7,7 @@ import {
   REPO_EVENT_TYPES,
 } from '../../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
+import { D1EventHistory } from '../../core/services/d1-event-history.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
 
@@ -21,6 +22,7 @@ describe('Workers runtime integration', () => {
       fullName: 'myorg/repo',
       owner: 'myorg',
       url: 'https://github.com/myorg/repo',
+      private: false,
       description: null,
       stars: 1,
       forks: 0,
@@ -40,6 +42,7 @@ describe('Workers runtime integration', () => {
   });
   beforeEach(async () => {
     await env.DB.prepare('DELETE FROM deliveries').run();
+    await env.DB.prepare('DELETE FROM events').run();
   });
 
   it('protects the admin surface through the exported Worker', async () => {
@@ -125,6 +128,31 @@ describe('Workers runtime integration', () => {
     ]);
     expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
     await expect(ledger.getDelivery('race')).resolves.toMatchObject({ processingAttempts: 1 });
+  });
+
+  it('records an accepted delivery in the event history in the same D1 batch', async () => {
+    await expect(
+      ledger.persistAcceptedDelivery({
+        deliveryId: 'recorded',
+        sourceEventType: 'star',
+        repository: event.repository.fullName,
+        event,
+        maxAttempts: 5,
+      })
+    ).resolves.toEqual({ outcome: 'accepted' });
+    await expect(
+      ledger.persistAcceptedDelivery({
+        deliveryId: 'recorded',
+        sourceEventType: 'star',
+        repository: event.repository.fullName,
+        event,
+        maxAttempts: 5,
+      })
+    ).resolves.toEqual({ outcome: 'duplicate' });
+
+    await expect(new D1EventHistory(env.DB).listRecentEvents()).resolves.toMatchObject([
+      { deliveryId: 'recorded', event: { type: 'star.created' } },
+    ]);
   });
 
   it('persists notification outcomes using real D1 batch and RETURNING semantics', async () => {

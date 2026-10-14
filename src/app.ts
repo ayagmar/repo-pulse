@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
+import { D1EventHistory } from './core/services/d1-event-history.js';
 import { DurableEventProcessor } from './core/services/durable-event-processor.js';
 import { logger } from './core/services/logger.js';
 import { NotificationDispatcher } from './core/services/notification-dispatcher.js';
@@ -17,6 +18,7 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
   logger.setLevel(config.server.logLevel);
 
   const deliveryLedger = new D1DeliveryLedger(env.DB);
+  const eventHistory = new D1EventHistory(env.DB);
   const notificationDispatcher = new NotificationDispatcher();
   const discordNotifier = createDiscordNotifier(config.discord.webhookUrl);
 
@@ -33,6 +35,7 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
   return {
     config,
     deliveryLedger,
+    eventHistory,
     notificationDispatcher,
     eventProcessor,
   };

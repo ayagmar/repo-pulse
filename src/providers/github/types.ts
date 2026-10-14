@@ -10,6 +10,7 @@ export interface GitHubRepository {
     login: string;
   };
   html_url: string;
+  private: boolean;
   description: string | null;
   stargazers_count: number;
   forks_count: number;
