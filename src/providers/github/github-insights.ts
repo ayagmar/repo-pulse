@@ -1,6 +1,7 @@
 import type { RepositoryInsights, UserProfile } from '../../core/interfaces/repository-insights.js';
 import type { UnreleasedWork } from '../../core/models/digest.js';
 import type { Referrer } from '../../core/models/momentum-alert.js';
+import { logger } from '../../core/services/logger.js';
 
 const API_URL = 'https://api.github.com';
 const ERROR_DETAIL_LIMIT = 300;
@@ -168,9 +169,14 @@ export class GitHubInsights implements RepositoryInsights {
     });
     const body: { data?: Record<string, T | null> | null; errors?: { message: string }[] } =
       await response.json();
+    const messages = body.errors?.map((error) => error.message).join('; ');
     if (!body.data) {
-      const messages = body.errors?.map((error) => error.message).join('; ') ?? 'no data';
-      throw new Error(`GitHub GraphQL query failed: ${messages}`);
+      throw new Error(`GitHub GraphQL query failed: ${messages ?? 'no data'}`);
+    }
+    if (messages !== undefined && messages !== '') {
+      // Items GitHub could not answer for, such as a repository the token cannot read,
+      // come back as null next to these errors.
+      logger.warn('github.graphql_partial_errors', { component: 'github', errors: messages });
     }
     const data = body.data;
     return items.map((_, index) => data[`r${String(index)}`] ?? null);
