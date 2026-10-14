@@ -78,6 +78,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - The daily digest is posted by the every-minute cron during the first ten minutes after `DIGEST_HOUR`. A failed digest is retried each minute in that window. One that is still failing when it closes is skipped, and the next day's digest does not include its events.
 - The star radar runs in the cron at minutes 5, 15, 25, and so on (UTC). It sends at most one alert per run; another spiking repository is alerted at the next run. A failed alert is retried at the next run.
 - One cron run stays within the Workers Free plan's 50 subrequests, D1 queries included. The worst case is a Monday run that drains 5 deliveries (27), sends the daily digest (7, two of them GitHub) and the weekly one (4), and a star alert (7, two of them GitHub): 45. The radar shares a run with a digest when a digest is retried at minute 5, or when the digest hour falls at minute 5 UTC, as 09:00 in Asia/Kathmandu does at 03:15. Check this count before adding work to the cron.
+- Star alerts are at-least-once in the same way as digests: a check that stops after posting but before recording it is repeated at the next check.
 - Digests are at-least-once in one case: a run that stops after posting but before recording the send is retried once its five-minute claim expires.
 - Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
 - Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.
