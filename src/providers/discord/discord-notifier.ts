@@ -1,9 +1,11 @@
 import type { NotificationResult, Notifier } from '../../core/interfaces/notifier.js';
-import type { DailyDigest } from '../../core/models/daily-digest.js';
+import type { Digest } from '../../core/models/digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../../core/models/failure-classification.js';
+import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type { RepoEvent } from '../../core/models/repo-event.js';
 import {
   type DiscordWebhookPayload,
+  formatDiscordAlert,
   formatDiscordDigest,
   formatDiscordEmbed,
 } from './embed-formatter.js';
@@ -66,8 +68,12 @@ class DiscordNotifier implements Notifier {
     return this.post(formatDiscordEmbed(event));
   }
 
-  notifyDigest(digest: DailyDigest): Promise<NotificationResult> {
+  notifyDigest(digest: Digest): Promise<NotificationResult> {
     return this.post(formatDiscordDigest(digest));
+  }
+
+  notifyAlert(alert: MomentumAlert): Promise<NotificationResult> {
+    return this.post(formatDiscordAlert(alert));
   }
 
   private async post(payload: DiscordWebhookPayload): Promise<NotificationResult> {

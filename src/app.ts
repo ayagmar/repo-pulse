@@ -3,9 +3,11 @@ import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from './core/services/d1-digest-log.js';
 import { D1EventHistory } from './core/services/d1-event-history.js';
-import { DailyDigestSender } from './core/services/daily-digest.js';
+import { D1RadarLog } from './core/services/d1-radar-log.js';
+import { DigestSender } from './core/services/digest.js';
 import { DurableEventProcessor } from './core/services/durable-event-processor.js';
 import { logger } from './core/services/logger.js';
+import { MomentumRadar } from './core/services/momentum-radar.js';
 import { NotificationDispatcher } from './core/services/notification-dispatcher.js';
 import type { HttpEnv } from './http/app-env.js';
 import { createAdminAuthMiddleware } from './http/middleware/admin-auth.js';
@@ -14,6 +16,7 @@ import { requestLogger } from './http/middleware/logger.js';
 import { createAdminRoutes } from './http/routes/admin.js';
 import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
+import { GitHubInsights } from './providers/github/github-insights.js';
 
 function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime'] {
   const config = createConfig(env);
@@ -73,13 +76,29 @@ export async function drainDueDeliveries(
   await runtime.eventProcessor.drainDueDeliveries(options);
 }
 
-export async function sendDailyDigest(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+function createInsights(apiToken: string | undefined): GitHubInsights | null {
+  return apiToken === undefined ? null : new GitHubInsights(apiToken);
+}
+
+export async function sendDueDigests(env: HttpEnv['Bindings'], now: Date): Promise<void> {
   const runtime = buildRuntime(env);
-  const sender = new DailyDigestSender(
+  const sender = new DigestSender(
     runtime.eventHistory,
     new D1DigestLog(env.DB),
     runtime.notificationDispatcher,
-    runtime.config.digest
+    runtime.config.digest,
+    createInsights(runtime.config.github.apiToken)
   );
-  await sender.sendDueDigest(now);
+  await sender.sendDueDigests(now);
+}
+
+export async function checkMomentum(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+  const runtime = buildRuntime(env);
+  const radar = new MomentumRadar(
+    runtime.eventHistory,
+    new D1RadarLog(env.DB),
+    runtime.notificationDispatcher,
+    createInsights(runtime.config.github.apiToken)
+  );
+  await radar.check(now);
 }

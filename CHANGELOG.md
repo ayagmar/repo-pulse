@@ -11,6 +11,18 @@
   sums up the previous day per repository. Days without activity get none. Migration
   `0005` adds the `digest_sends` table, where each provider claims a digest before
   posting, so overlapping cron runs post it once.
+- Weekly digest: on Mondays at the digest hour, a second message sums up the past seven
+  days per repository and lists the latest merged pull requests.
+- With an optional `GITHUB_TOKEN`, the daily digest lists repositories with commits on the
+  default branch since their latest release.
+- Star radar: a repository starred by at least 5 people in 3 hours, and 4 times its usual
+  rate over the previous two weeks, is announced at most once a day. With `GITHUB_TOKEN`
+  the alert lists notable new stargazers and top referrers. Migration `0006` adds the
+  `radar_alerts` table and an index on events by type and time.
+- A star that brings a repository to 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a
+  multiple of 10,000 stars is announced as a milestone.
+- The cron drains 5 deliveries per pass instead of 25 (`DELIVERY_DRAIN_BATCH_SIZE`), so a
+  run stays within the Workers Free plan's 50 subrequests.
 - A retry now resends only to the providers that failed, so a second provider cannot
   cause repeated Discord posts.
 

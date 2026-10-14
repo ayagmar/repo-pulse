@@ -32,11 +32,13 @@ Discord accepts GitHub webhooks directly: add `/github` to a channel's webhook U
 Repo Pulse is for when you want to choose what gets announced and keep a record of what was sent:
 
 - Pushes are announced only for the default branch, as one message with the latest commits. Bot pushes, branch deletions, and GitHub's own pull-request merge commits are skipped, because the merged pull request is announced already.
+- A star that reaches 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a multiple of 10,000 is announced as a milestone. A star removed and added back at that count is announced again.
+- When at least 5 people star a repository in 3 hours, and that is 4 times what it usually gets, one alert says so, at most once a day per repository. With a GitHub token, it names the most-followed new stargazers and the sites sending visitors.
 - Failed Discord sends are retried with backoff, following Discord's rate-limit headers, up to 5 attempts.
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
-- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity.
+- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. With a GitHub token, it also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days and lists the latest merged pull requests.
 
 ## Deploy
 
@@ -59,6 +61,16 @@ The button creates the D1 database in your Cloudflare account and asks for three
 | `DISCORD_WEBHOOK_URL` | the Discord channel's webhook URL (Server Settings → Integrations → Webhooks) |
 
 It then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
+
+### Optional: a GitHub token
+
+With a GitHub token, the daily digest also lists repositories with commits on the default branch since their latest release, and star alerts name notable stargazers and top referrers. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories and two permissions: **Contents: read** for releases and commits, and **Administration: read** for traffic referrers. Then add it:
+
+```bash
+npx wrangler secret put GITHUB_TOKEN
+```
+
+Without the token, or when GitHub does not answer, digests and alerts are posted without those details.
 
 ## Subscribe repositories
 
@@ -169,7 +181,7 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 | Retry max delay | `15m` |
 | Succeeded retention | `14 days` |
 | Processing lease | `5m` |
-| Drain batch size | `25` |
+| Drain batch size | `5` (keeps a run within the Free plan's 50 subrequests) |
 | Cron cadence | every minute |
 | Digest time | `09:00` in `DIGEST_TIME_ZONE` (`Africa/Casablanca`) |
 
@@ -180,7 +192,8 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 - **D1 ledger:** stores accepted deliveries, dedupe state, attempts, and retry metadata
 - **Event history:** keeps every accepted event in D1 after its delivery row is pruned
 - **Background processor:** drains due work, dispatches providers, reschedules transient failures, and prunes old succeeded rows
-- **Daily digest:** the cron posts one summary of the previous day from the event history
+- **Digests:** the cron posts one summary of the previous day, and on Mondays one of the past week, from the event history
+- **Star radar:** every ten minutes, the cron looks for repositories gaining stars much faster than usual and alerts once a day per repository
 - **Admin surface:** exposes status, health, delivery history, retries, OpenAPI, and Swagger UI
 
 Related docs:

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendDailyDigest } from '../app.js';
+import { sendDueDigests } from '../app.js';
+import type { DigestPeriod } from '../core/models/digest.js';
 import type { RepoEvent } from '../core/models/repo-event.js';
 import {
   createRepoEvent,
@@ -8,7 +9,7 @@ import {
 } from '../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from '../core/services/d1-digest-log.js';
-import { dueDigestWindow } from '../core/services/daily-digest.js';
+import { dueDigestWindow } from '../core/services/digest.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
 const HOUR_MS = 60 * 60_000;
@@ -96,8 +97,31 @@ function release(name: string, tagName: string): RepoEvent {
   });
 }
 
-describe('daily digest schedule', () => {
-  function digestsIn2026(timeZone: string, hour: number): DigestWindowResult[] {
+function mergedPullRequest(name: string, number: number, title: string): RepoEvent {
+  return createRepoEvent(REPO_EVENT_TYPES.PULL_REQUEST_MERGED, {
+    action: REPO_EVENT_ACTIONS.CLOSED,
+    repository: repository(name),
+    sender,
+    pullRequest: {
+      number,
+      title,
+      url: `https://github.com/myorg/${name}/pull/${String(number)}`,
+      state: 'closed',
+      merged: true,
+      body: null,
+      draft: false,
+      headBranch: 'feature',
+      baseBranch: 'main',
+    },
+  });
+}
+
+describe('digest schedule', () => {
+  function digestsIn2026(
+    timeZone: string,
+    hour: number,
+    period: DigestPeriod = 'daily'
+  ): DigestWindowResult[] {
     const windows: DigestWindowResult[] = [];
     // These zones are offset from UTC by whole or half hours, so half-hour steps land on
     // every digest's due time, and no due period is sampled twice.
@@ -106,7 +130,7 @@ describe('daily digest schedule', () => {
       time < Date.parse('2027-01-01T00:00:00.000Z');
       time += 30 * 60_000
     ) {
-      const window = dueDigestWindow(new Date(time), timeZone, hour);
+      const window = dueDigestWindow(new Date(time), timeZone, hour, period);
       if (window) {
         windows.push(window);
       }
@@ -143,6 +167,27 @@ describe('daily digest schedule', () => {
     }
   );
 
+  it.each(['Africa/Casablanca', 'America/New_York'])(
+    'in %s, covers each week once, Monday 09:00 to Monday 09:00, across clock changes',
+    (timeZone) => {
+      const weeks = digestsIn2026(timeZone, 9, 'weekly');
+
+      // 2026 has 52 Mondays, the first on 5 January.
+      expect(weeks).toHaveLength(52);
+      for (const [index, week] of weeks.entries()) {
+        expect(new Date(`${week.date}T12:00:00.000Z`).getUTCDay()).toBe(1);
+        expect(localWallClock(week.start, timeZone)).toMatch(/ 09:00$/);
+        expect(localWallClock(week.end, timeZone)).toBe(`${week.date} 09:00`);
+        const hours = (week.end.getTime() - week.start.getTime()) / HOUR_MS;
+        expect([167, 168, 169]).toContain(hours);
+        const next = weeks[index + 1];
+        if (next) {
+          expect(next.start).toEqual(week.end);
+        }
+      }
+    }
+  );
+
   it.each([
     ['Africa/Casablanca', 1],
     ['Africa/Casablanca', 2],
@@ -160,7 +205,7 @@ describe('daily digest schedule', () => {
   );
 });
 
-describe('daily digest', () => {
+describe('digests', () => {
   const cleanups: (() => void)[] = [];
   const fetchMock = vi.fn();
 
@@ -172,18 +217,22 @@ describe('daily digest', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     while (cleanups.length > 0) {
       cleanups.pop()?.();
     }
   });
 
-  function createDigestEnv(): ReturnType<typeof createTestEnv> {
+  function createDigestEnv(
+    overrides: Parameters<typeof createTestEnv>[1] = {}
+  ): ReturnType<typeof createTestEnv> {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);
     const env = createTestEnv(tempDatabase.databasePath, {
       DIGEST_TIME_ZONE: 'Africa/Casablanca',
       DIGEST_HOUR: '9',
+      ...overrides,
     });
     cleanups.push(() => {
       env.DB.close();
@@ -209,11 +258,67 @@ describe('daily digest', () => {
     }
   }
 
-  function postedEmbeds(): { title: string; description: string; footer: { text: string } }[] {
-    return fetchMock.mock.calls.map((call) => {
-      const init = call[1] as RequestInit;
-      return (JSON.parse(init.body as string) as { embeds: [never] }).embeds[0];
-    });
+  function postedEmbeds(): {
+    title: string;
+    description: string;
+    fields?: { name: string; value: string }[];
+    footer: { text: string };
+  }[] {
+    return fetchMock.mock.calls
+      .filter((call) => String(call[0]).startsWith('https://discord.com/'))
+      .map((call) => {
+        const init = call[1] as RequestInit;
+        return (JSON.parse(init.body as string) as { embeds: [never] }).embeds[0];
+      });
+  }
+
+  /** What the fake GitHub knows about each repository's latest release. */
+  const releases: Record<string, { tag: string | null; publishedAt: string; aheadBy: number }> = {
+    'myorg/web': { tag: 'v1.0.0', publishedAt: '2026-09-30T12:00:00Z', aheadBy: 4 },
+    'myorg/cli': { tag: 'v2.1.0', publishedAt: '2026-10-01T12:00:00Z', aheadBy: 0 },
+    'myorg/docs': { tag: 'docs@3', publishedAt: '2026-08-20T12:00:00Z', aheadBy: 12 },
+    'myorg/draft': { tag: null, publishedAt: '', aheadBy: 0 },
+  };
+
+  /** Answers GitHub GraphQL queries from `releases`, one aliased field per repository. */
+  function fakeGitHub(init: RequestInit): Response {
+    const { query, variables } = JSON.parse(init.body as string) as {
+      query: string;
+      variables: Record<string, string>;
+    };
+    const data: Record<string, unknown> = {};
+    for (let index = 0; `owner${String(index)}` in variables; index += 1) {
+      const suffix = String(index);
+      const fullName = `${variables[`owner${suffix}`] ?? ''}/${variables[`name${suffix}`] ?? ''}`;
+      expect(query).toContain(
+        `r${suffix}: repository(owner: $owner${suffix}, name: $name${suffix})`
+      );
+      const release = releases[fullName];
+      if (!release) {
+        data[`r${suffix}`] = null;
+      } else if (query.includes('latestRelease')) {
+        data[`r${suffix}`] = {
+          url: `https://github.com/${fullName}`,
+          defaultBranchRef: { name: 'main' },
+          latestRelease:
+            release.tag === null
+              ? null
+              : { tagName: release.tag, publishedAt: release.publishedAt },
+        };
+      } else {
+        const matches =
+          variables[`tag${suffix}`] === `refs/tags/${release.tag ?? ''}` &&
+          variables[`branch${suffix}`] === 'main';
+        data[`r${suffix}`] = { ref: matches ? { compare: { aheadBy: release.aheadBy } } : null };
+      }
+    }
+    return Response.json({ data });
+  }
+
+  function githubRequests(): RequestInit[] {
+    return fetchMock.mock.calls
+      .filter((call) => call[0] === 'https://api.github.com/graphql')
+      .map((call) => call[1] as RequestInit);
   }
 
   it('posts one summary of the last day at 09:00 Morocco time, most active repository first', async () => {
@@ -224,8 +329,8 @@ describe('daily digest', () => {
     await record(env, '2026-10-14T20:00:00.000Z', [push('web', 3), release('web', 'v1.0.0')]);
     await record(env, '2026-10-15T09:00:00.000Z', [star('too-late')]);
 
-    await sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z'));
-    await sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
 
     expect(postedEmbeds()).toMatchObject([
       {
@@ -244,9 +349,9 @@ describe('daily digest', () => {
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
     fetchMock.mockResolvedValueOnce(new Response('upstream error', { status: 500 }));
 
-    await sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z'));
-    await sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z'));
-    await sendDailyDigest(env, new Date('2026-10-15T09:02:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:02:00.000Z'));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -256,11 +361,48 @@ describe('daily digest', () => {
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
 
     await Promise.all([
-      sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z')),
-      sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z')),
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Mondays, also posts the week with its latest merged pull requests', async () => {
+    const env = createDigestEnv();
+    // 2026-10-19 is a Monday.
+    await record(env, '2026-10-12T08:59:00.000Z', [mergedPullRequest('web', 1, 'Too early')]);
+    await record(env, '2026-10-13T10:00:00.000Z', [
+      mergedPullRequest('web', 2, 'Add login'),
+      mergedPullRequest('web', 3, 'Add logout'),
+    ]);
+    await record(env, '2026-10-16T10:00:00.000Z', [
+      mergedPullRequest('web', 4, 'Fix session expiry'),
+      mergedPullRequest('web', 5, 'Remember me'),
+      star('cli'),
+    ]);
+    await record(env, '2026-10-18T10:00:00.000Z', [push('web', 2)]);
+
+    await sendDueDigests(env, new Date('2026-10-19T09:00:00.000Z'));
+
+    expect(postedEmbeds()).toMatchObject([
+      {
+        title: '📊 Daily pulse: 1 event in 1 repository',
+        description: '**[myorg/web](https://github.com/myorg/web)** 2 commits',
+      },
+      {
+        title: '📦 Weekly pulse: 6 events in 2 repositories',
+        description: [
+          '**[myorg/web](https://github.com/myorg/web)** 2 commits · 4 PRs merged',
+          '↳ _…and 1 earlier PR_',
+          '↳ [#3](https://github.com/myorg/web/pull/3) Add logout',
+          '↳ [#4](https://github.com/myorg/web/pull/4) Fix session expiry',
+          '↳ [#5](https://github.com/myorg/web/pull/5) Remember me',
+          '**[myorg/cli](https://github.com/myorg/cli)** ⭐ +1',
+        ].join('\n'),
+        footer: { text: '12 Oct, 09:00 to 19 Oct, 09:00 · Africa/Casablanca' },
+      },
+    ]);
   });
 
   it('posts once when a late cron run overlaps the next one', async () => {
@@ -270,8 +412,8 @@ describe('daily digest', () => {
     vi.setSystemTime(new Date('2026-10-15T09:05:20.000Z'));
 
     await Promise.all([
-      sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z')),
-      sendDailyDigest(env, new Date('2026-10-15T09:05:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:05:00.000Z')),
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -303,6 +445,80 @@ describe('daily digest', () => {
     ).toBeNull();
   });
 
+  it('lists repositories with commits since their latest release, most commits first', async () => {
+    fetchMock.mockImplementation((url: string, init: RequestInit) =>
+      Promise.resolve(
+        url === 'https://api.github.com/graphql'
+          ? fakeGitHub(init)
+          : new Response(null, { status: 204 })
+      )
+    );
+    const env = createDigestEnv({ GITHUB_TOKEN: 'github-token' });
+    await record(env, '2026-09-01T12:00:00.000Z', [push('dormant', 1)]);
+    await record(env, '2026-09-25T12:00:00.000Z', [push('docs', 2), push('draft', 1)]);
+    await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1), push('cli', 1)]);
+
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+
+    expect(postedEmbeds()[0]?.fields).toEqual([
+      {
+        name: '🚢 Not released yet',
+        value: [
+          '[myorg/docs](https://github.com/myorg/docs/compare/docs%403...main) 12 commits since docs@3 (20 Aug 2026)',
+          '[myorg/web](https://github.com/myorg/web/compare/v1.0.0...main) 4 commits since v1.0.0 (30 Sept 2026)',
+        ].join('\n'),
+      },
+    ]);
+    // Only repositories active in the last 30 days are looked up.
+    expect(githubRequests().some((init) => (init.body as string).includes('dormant'))).toBe(false);
+    expect(new Headers(githubRequests()[0]?.headers).get('authorization')).toBe(
+      'Bearer github-token'
+    );
+  });
+
+  it('posts the daily digest without unreleased work when GitHub does not answer', async () => {
+    // Control the clock at the timeout API boundary instead of waiting for it.
+    const timeout = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url !== 'https://api.github.com/graphql') {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      queueMicrotask(() => {
+        timeout.abort(new DOMException('Timed out', 'TimeoutError'));
+      });
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Timed out', 'TimeoutError'));
+        });
+      });
+    });
+    const env = createDigestEnv({ GITHUB_TOKEN: 'github-token' });
+    await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
+
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+
+    expect(postedEmbeds()).toHaveLength(1);
+    expect(postedEmbeds()[0]?.fields).toBeUndefined();
+  });
+
+  it('still posts the daily digest when GitHub fails', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === 'https://api.github.com/graphql'
+          ? new Response('Bad credentials', { status: 401 })
+          : new Response(null, { status: 204 })
+      )
+    );
+    const env = createDigestEnv({ GITHUB_TOKEN: 'expired-token' });
+    await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
+
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+
+    expect(postedEmbeds()).toHaveLength(1);
+    expect(postedEmbeds()[0]?.fields).toBeUndefined();
+  });
+
   it('records a post from a stalled run, so the run that took over cannot resend it', async () => {
     const env = createDigestEnv();
     const log = new D1DigestLog(env.DB);
@@ -328,7 +544,7 @@ describe('daily digest', () => {
     const env = createDigestEnv();
     await record(env, '2026-10-13T12:00:00.000Z', [star('cli')]);
 
-    await sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

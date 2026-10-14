@@ -8,6 +8,7 @@ type ConfigEnvVarName =
   | 'NODE_ENV'
   | 'LOG_LEVEL'
   | 'GITHUB_WEBHOOK_SECRET'
+  | 'GITHUB_TOKEN'
   | 'WEBHOOK_MAX_BODY_BYTES'
   | 'ADMIN_API_TOKEN'
   | 'DISCORD_WEBHOOK_URL'
@@ -99,6 +100,8 @@ export function createConfig(env: ConfigEnv): {
   github: {
     webhookSecret: string;
     maxBodyBytes: number;
+    /** Read-only token for GitHub's API. Optional: without it, digests skip what it adds. */
+    apiToken: string | undefined;
   };
   admin: {
     apiToken: string;
@@ -123,6 +126,7 @@ export function createConfig(env: ConfigEnv): {
   const isDevelopment = nodeEnv === 'development';
   const webhookSecret = getEnvVar(env, 'GITHUB_WEBHOOK_SECRET', true);
   const adminApiToken = getEnvVar(env, 'ADMIN_API_TOKEN', true);
+  const githubToken = getEnvVar(env, 'GITHUB_TOKEN');
   const deliveryRetryBaseDelayMs = parsePositiveInteger(
     'DELIVERY_RETRY_BASE_DELAY_MS',
     getEnvVar(env, 'DELIVERY_RETRY_BASE_DELAY_MS'),
@@ -153,6 +157,7 @@ export function createConfig(env: ConfigEnv): {
         getEnvVar(env, 'WEBHOOK_MAX_BODY_BYTES'),
         WEBHOOK_DEFAULTS.maxBodyBytes
       ),
+      apiToken: githubToken === '' ? undefined : githubToken,
     },
 
     admin: {
@@ -184,7 +189,7 @@ export function createConfig(env: ConfigEnv): {
       drainBatchSize: parsePositiveInteger(
         'DELIVERY_DRAIN_BATCH_SIZE',
         getEnvVar(env, 'DELIVERY_DRAIN_BATCH_SIZE'),
-        25
+        DELIVERY_DEFAULTS.drainBatchSize
       ),
     },
 

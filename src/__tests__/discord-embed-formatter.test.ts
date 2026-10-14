@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RepositoryActivity } from '../core/models/daily-digest.js';
+import type { RepositoryActivity } from '../core/models/digest.js';
 import type {
   RepoEvent,
   RepoEventInput,
@@ -112,6 +112,30 @@ describe('formatDiscordEmbed', () => {
     expect(added.description).toContain('**100**');
     expect(removed.title).not.toBe(added.title);
     expect(removed.description).toContain('unstarred');
+  });
+
+  it('celebrates the star that reaches a milestone, and only that one', () => {
+    const starTitle = (count: number, type: 'created' | 'deleted' = 'created'): string =>
+      getFirstEmbed(
+        formatDiscordEmbed(
+          type === 'created'
+            ? createEvent(REPO_EVENT_TYPES.STAR_CREATED, {
+                action: REPO_EVENT_ACTIONS.CREATED,
+                star: { count },
+              })
+            : createEvent(REPO_EVENT_TYPES.STAR_DELETED, {
+                action: REPO_EVENT_ACTIONS.DELETED,
+                star: { count },
+              })
+        )
+      ).title;
+
+    expect(starTitle(10)).toBe('🎉 10 stars!');
+    expect(starTitle(1000)).toBe('🎉 1,000 stars!');
+    expect(starTitle(30_000)).toBe('🎉 30,000 stars!');
+    expect(starTitle(11)).toBe('⭐ New star');
+    expect(starTitle(15_000)).toBe('⭐ New star');
+    expect(starTitle(100, 'deleted')).toBe('💫 Star removed');
   });
 
   it('names the issue in the title and lists labels', () => {
@@ -348,7 +372,7 @@ describe('formatDiscordDigest', () => {
       forks: 0,
       commits: 1,
       pullRequestsOpened: 0,
-      pullRequestsMerged: 0,
+      pullRequestsMerged: [],
       issuesOpened: 0,
       issuesClosed: 0,
       releases: Array.from({ length: releaseCount }, (_, index) => ({
@@ -360,12 +384,14 @@ describe('formatDiscordDigest', () => {
 
   it('keeps a repository that published many releases, listing its latest three', () => {
     const payload = formatDiscordDigest({
+      period: 'daily',
       date: '2026-10-15',
       timeZone: 'UTC',
       windowStart: new Date('2026-10-14T09:00:00.000Z'),
       windowEnd: new Date('2026-10-15T09:00:00.000Z'),
       eventCount: 62,
       repositories: [activity('myorg/monorepo', 60), activity('myorg/cli', 0)],
+      unreleased: [],
     });
 
     const lines = payload.embeds[0]?.description?.split('\n') ?? [];

@@ -1,6 +1,7 @@
 import type { NotificationResult, Notifier } from '../interfaces/notifier.js';
-import type { DailyDigest } from '../models/daily-digest.js';
+import type { Digest } from '../models/digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
+import type { MomentumAlert } from '../models/momentum-alert.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { logger } from './logger.js';
 
@@ -44,11 +45,21 @@ export class NotificationDispatcher {
   }
 
   /**
-   * Dispatch a daily digest to every configured notifier not in `skipProviders`
+   * Dispatch a momentum alert to every configured notifier
+   * @returns Results from the notification attempts made
+   */
+  dispatchAlert(alert: MomentumAlert): Promise<NotificationResult[]> {
+    return this.sendToEach(undefined, (notifier) => notifier.notifyAlert(alert), {
+      alertRepository: alert.repository,
+    });
+  }
+
+  /**
+   * Dispatch a daily or weekly digest to every configured notifier not in `skipProviders`
    * @returns Results from the notification attempts made
    */
   dispatchDigest(
-    digest: DailyDigest,
+    digest: Digest,
     metadata: Pick<DispatchMetadata, 'skipProviders'> = {}
   ): Promise<NotificationResult[]> {
     return this.sendToEach(metadata.skipProviders, (notifier) => notifier.notifyDigest(digest), {

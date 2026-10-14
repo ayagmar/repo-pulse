@@ -49,6 +49,16 @@ export interface EventActivity {
   commitCount: number | null;
   releaseTagName: string | null;
   releaseUrl: string | null;
+  pullRequestNumber: number | null;
+  pullRequestTitle: string | null;
+  pullRequestUrl: string | null;
+}
+
+/** One `star.created` event, with the running total it brought the repository to. */
+export interface RecentStar {
+  login: string;
+  repositoryUrl: string;
+  starCount: number;
 }
 
 export class D1EventHistory {
@@ -64,13 +74,52 @@ export class D1EventHistory {
            json_extract(event_json, '$.repository.url') AS repositoryUrl,
            json_array_length(event_json, '$.push.commits') AS commitCount,
            json_extract(event_json, '$.release.tagName') AS releaseTagName,
-           json_extract(event_json, '$.release.url') AS releaseUrl
+           json_extract(event_json, '$.release.url') AS releaseUrl,
+           json_extract(event_json, '$.pullRequest.number') AS pullRequestNumber,
+           json_extract(event_json, '$.pullRequest.title') AS pullRequestTitle,
+           json_extract(event_json, '$.pullRequest.url') AS pullRequestUrl
          FROM events
          WHERE received_at >= ? AND received_at < ?
          ORDER BY received_at ASC, delivery_id ASC`
       )
       .bind(start.toISOString(), end.toISOString())
       .all<EventActivity>();
+
+    return rows.results;
+  }
+
+  /** Repositories with events received since `since`, most recently active first. */
+  async listActiveRepositories(since: Date, limit: number): Promise<string[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT repository
+         FROM events
+         WHERE received_at >= ?
+         GROUP BY repository
+         ORDER BY MAX(received_at) DESC
+         LIMIT ?`
+      )
+      .bind(since.toISOString(), limit)
+      .all<{ repository: string }>();
+
+    return rows.results.map((row) => row.repository);
+  }
+
+  /** A repository's `star.created` events received since `since`, newest first. */
+  async listRecentStars(repository: string, since: Date, limit: number): Promise<RecentStar[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT
+           json_extract(event_json, '$.sender.login') AS login,
+           json_extract(event_json, '$.repository.url') AS repositoryUrl,
+           json_extract(event_json, '$.star.count') AS starCount
+         FROM events
+         WHERE repository = ? AND event_type = 'star.created' AND received_at >= ?
+         ORDER BY received_at DESC, delivery_id DESC
+         LIMIT ?`
+      )
+      .bind(repository, since.toISOString(), limit)
+      .all<RecentStar>();
 
     return rows.results;
   }

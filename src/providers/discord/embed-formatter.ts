@@ -1,4 +1,5 @@
-import type { DailyDigest, RepositoryActivity } from '../../core/models/daily-digest.js';
+import type { Digest, RepositoryActivity, UnreleasedWork } from '../../core/models/digest.js';
+import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type {
   ForkEvent,
   IssueEvent,
@@ -52,6 +53,8 @@ const EXCERPT_LIMIT = 300;
 const COMMIT_SUBJECT_LIMIT = 72;
 const LISTED_COMMITS = 5;
 const LISTED_RELEASES = 3;
+const LISTED_PULL_REQUESTS = 3;
+const LISTED_UNRELEASED = 5;
 
 // GitHub's state colors, so a message reads like the badge it links to.
 const COLORS = {
@@ -67,6 +70,13 @@ const COLORS = {
   prerelease: 0xbf8700,
 } as const;
 
+/** Star counts worth celebrating; past the last one, every further 10,000. */
+const STAR_MILESTONES = new Set([10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000]);
+
+function isStarMilestone(count: number): boolean {
+  return STAR_MILESTONES.has(count) || (count > 10_000 && count % 10_000 === 0);
+}
+
 const GITHUB_ICON_URL = 'https://github.githubassets.com/favicons/favicon.png';
 
 function truncate(str: string, maxLength: number): string {
@@ -75,7 +85,7 @@ function truncate(str: string, maxLength: number): string {
 }
 
 function plural(count: number, noun: string): string {
-  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+  return `${count.toLocaleString('en-US')} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -123,8 +133,13 @@ function createEmbed(
 
 function formatStarEvent(event: StarEvent): DiscordWebhookPayload {
   const removed = event.type === REPO_EVENT_TYPES.STAR_DELETED;
+  const milestone = !removed && isStarMilestone(event.star.count);
   return createEmbed(event, {
-    title: removed ? '💫 Star removed' : '⭐ New star',
+    title: removed
+      ? '💫 Star removed'
+      : milestone
+        ? `🎉 ${event.star.count.toLocaleString('en-US')} stars!`
+        : '⭐ New star',
     url: event.repository.url,
     description: `${senderLink(event)} ${removed ? 'unstarred' : 'starred'} ${repoLink(event)}\n⭐ **${String(event.star.count)}** total`,
     color: COLORS.star,
@@ -291,7 +306,9 @@ function activitySummary(activity: RepositoryActivity): string {
       ? `⭐ ${activity.starsGained > 0 ? '+' : ''}${String(activity.starsGained)}`
       : null,
     activity.commits > 0 ? plural(activity.commits, 'commit') : null,
-    activity.pullRequestsMerged > 0 ? `${plural(activity.pullRequestsMerged, 'PR')} merged` : null,
+    activity.pullRequestsMerged.length > 0
+      ? `${plural(activity.pullRequestsMerged.length, 'PR')} merged`
+      : null,
     activity.pullRequestsOpened > 0 ? `${plural(activity.pullRequestsOpened, 'PR')} opened` : null,
     activity.issuesOpened > 0 ? `${plural(activity.issuesOpened, 'issue')} opened` : null,
     activity.issuesClosed > 0 ? `${plural(activity.issuesClosed, 'issue')} closed` : null,
@@ -300,6 +317,46 @@ function activitySummary(activity: RepositoryActivity): string {
   ].filter((item) => item !== null);
 
   return items.length > 0 ? items.join(' · ') : 'no net change';
+}
+
+/** The latest merged pull requests, one line each, for the weekly digest. */
+function mergedPullRequestLines(merged: RepositoryActivity['pullRequestsMerged']): string[] {
+  const listed = merged.slice(-LISTED_PULL_REQUESTS);
+  const lines = listed.map(
+    (pr) => `↳ [#${String(pr.number)}](${pr.url}) ${truncate(pr.title, COMMIT_SUBJECT_LIMIT)}`
+  );
+  if (merged.length > listed.length) {
+    lines.unshift(`↳ _…and ${plural(merged.length - listed.length, 'earlier PR')}_`);
+  }
+  return lines;
+}
+
+/** Repositories with the most commits since their latest release, as one embed field. */
+function unreleasedField(
+  unreleased: readonly UnreleasedWork[],
+  timeZone: string
+): NonNullable<DiscordEmbed['fields']> {
+  const releaseDate = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  const lines: string[] = [];
+  let length = 0;
+  const mostAhead = [...unreleased]
+    .sort((left, right) => right.commitsSinceRelease - left.commitsSinceRelease)
+    .slice(0, LISTED_UNRELEASED);
+  for (const work of mostAhead) {
+    const line = `[${work.repository}](${work.compareUrl}) ${plural(work.commitsSinceRelease, 'commit')} since ${work.tagName} (${releaseDate.format(work.releasedAt)})`;
+    if (length + line.length + 1 > FIELD_VALUE_LIMIT) {
+      break;
+    }
+    lines.push(line);
+    length += line.length + 1;
+  }
+
+  return lines.length > 0 ? [{ name: '🚢 Not released yet', value: lines.join('\n') }] : [];
 }
 
 function repositories(count: number): string {
@@ -318,33 +375,88 @@ function formatDigestTime(instant: Date, timeZone: string): string {
 }
 
 /**
- * Format a daily digest as one embed with a line per repository, most active first
+ * Format a digest as one embed with a line per repository, most active first. The
+ * weekly digest also lists each repository's latest merged pull requests.
  */
-export function formatDiscordDigest(digest: DailyDigest): DiscordWebhookPayload {
+export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
   const lines: string[] = [];
   let length = 0;
   for (const [index, activity] of digest.repositories.entries()) {
-    const line = `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`;
+    const block = [
+      `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`,
+      ...(digest.period === 'weekly' ? mergedPullRequestLines(activity.pullRequestsMerged) : []),
+    ].join('\n');
     // Leave room for the "and N more" line.
-    if (length + line.length + 1 > DESCRIPTION_LIMIT - 64) {
+    if (length + block.length + 1 > DESCRIPTION_LIMIT - 64) {
       lines.push(`_…and ${repositories(digest.repositories.length - index)} more_`);
       break;
     }
-    lines.push(line);
-    length += line.length + 1;
+    lines.push(block);
+    length += block.length + 1;
+  }
+
+  const fields = unreleasedField(digest.unreleased, digest.timeZone);
+  const heading = digest.period === 'weekly' ? '📦 Weekly pulse' : '📊 Daily pulse';
+  return {
+    embeds: [
+      {
+        title: `${heading}: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`,
+        description: lines.join('\n'),
+        color: COLORS.push,
+        timestamp: digest.windowEnd.toISOString(),
+        ...(fields.length > 0 ? { fields } : {}),
+        footer: {
+          text: `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`,
+          icon_url: GITHUB_ICON_URL,
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Format a momentum alert: how fast stars are coming in, who starred, and where
+ * visitors come from
+ */
+export function formatDiscordAlert(alert: MomentumAlert): DiscordWebhookPayload {
+  const usual =
+    alert.expectedStars < 0.05
+      ? 'up from almost none'
+      : `against about ${alert.expectedStars.toFixed(1)} usually`;
+  const fields: NonNullable<DiscordEmbed['fields']> = [];
+  if (alert.notableStargazers.length > 0) {
+    fields.push({
+      name: 'Notable stargazers',
+      value: alert.notableStargazers
+        .map(
+          (stargazer) =>
+            `[${stargazer.login}](${stargazer.url}) · ${plural(stargazer.followers, 'follower')}`
+        )
+        .join('\n'),
+    });
+  }
+  if (alert.referrers.length > 0) {
+    fields.push({
+      name: 'Top referrers, last 14 days',
+      value: alert.referrers
+        .map(
+          (referrer) =>
+            `${referrer.name} · ${plural(referrer.views, 'view')} from ${plural(referrer.uniqueVisitors, 'visitor')}`
+        )
+        .join('\n'),
+    });
   }
 
   return {
     embeds: [
       {
-        title: `📊 Daily pulse: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`,
-        description: lines.join('\n'),
-        color: COLORS.push,
-        timestamp: digest.windowEnd.toISOString(),
-        footer: {
-          text: `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`,
-          icon_url: GITHUB_ICON_URL,
-        },
+        title: truncate(`🚀 ${alert.repository} is taking off`, TITLE_LIMIT),
+        url: alert.url,
+        description: `⭐ **${plural(alert.recentStars, 'star')}** in the last ${plural(alert.windowHours, 'hour')}, ${usual}. **${alert.totalStars.toLocaleString('en-US')}** total.`,
+        color: COLORS.star,
+        timestamp: alert.detectedAt.toISOString(),
+        ...(fields.length > 0 ? { fields } : {}),
+        footer: { text: alert.repository, icon_url: GITHUB_ICON_URL },
       },
     ],
   };

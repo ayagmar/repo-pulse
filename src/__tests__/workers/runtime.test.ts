@@ -14,7 +14,7 @@ import {
 } from '../../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
-import { dueDigestWindow } from '../../core/services/daily-digest.js';
+import { dueDigestWindow } from '../../core/services/digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
 import worker from '../../index.js';
@@ -174,6 +174,7 @@ describe('Workers runtime integration', () => {
       isConfigured: () => true,
       notify: () => Promise.resolve({ success: true, provider: 'test' }),
       notifyDigest: () => Promise.reject(new Error('Not used in this test')),
+      notifyAlert: () => Promise.reject(new Error('Not used in this test')),
     });
     const processor = new DurableEventProcessor(ledger, dispatcher);
     await processor.enqueue(event, {
@@ -201,6 +202,7 @@ describe('Workers runtime integration', () => {
       dueDigestWindow(new Date('2026-10-15T08:00:00.000Z'), 'Africa/Casablanca', 9)
     ).toBeNull();
     expect(dueDigestWindow(new Date('2026-10-15T09:00:00.000Z'), 'Africa/Casablanca', 9)).toEqual({
+      period: 'daily',
       date: '2026-10-15',
       start: new Date('2026-10-14T09:00:00.000Z'),
       end: new Date('2026-10-15T09:00:00.000Z'),

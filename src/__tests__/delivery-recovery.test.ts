@@ -144,6 +144,7 @@ describe('delivery recovery and ownership', () => {
       isConfigured: () => true,
       notify: () => Promise.resolve({ success: true, provider: 'discord' }),
       notifyDigest: () => Promise.reject(new Error('Not used in this test')),
+      notifyAlert: () => Promise.reject(new Error('Not used in this test')),
     });
     const processor = new DurableEventProcessor(ledger, dispatcher, { processingLeaseMs: 1000 });
     vi.spyOn(db, 'batch').mockRejectedValueOnce(new Error('D1 unavailable'));
