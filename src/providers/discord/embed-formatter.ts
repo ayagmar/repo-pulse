@@ -68,6 +68,13 @@ const COLORS = {
   prerelease: 0xbf8700,
 } as const;
 
+/** Star counts worth celebrating; past the last one, every further 10,000. */
+const STAR_MILESTONES = new Set([10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000]);
+
+function isStarMilestone(count: number): boolean {
+  return STAR_MILESTONES.has(count) || (count > 10_000 && count % 10_000 === 0);
+}
+
 const GITHUB_ICON_URL = 'https://github.githubassets.com/favicons/favicon.png';
 
 function truncate(str: string, maxLength: number): string {
@@ -124,8 +131,13 @@ function createEmbed(
 
 function formatStarEvent(event: StarEvent): DiscordWebhookPayload {
   const removed = event.type === REPO_EVENT_TYPES.STAR_DELETED;
+  const milestone = !removed && isStarMilestone(event.star.count);
   return createEmbed(event, {
-    title: removed ? '💫 Star removed' : '⭐ New star',
+    title: removed
+      ? '💫 Star removed'
+      : milestone
+        ? `🎉 ${event.star.count.toLocaleString('en-US')} stars!`
+        : '⭐ New star',
     url: event.repository.url,
     description: `${senderLink(event)} ${removed ? 'unstarred' : 'starred'} ${repoLink(event)}\n⭐ **${String(event.star.count)}** total`,
     color: COLORS.star,

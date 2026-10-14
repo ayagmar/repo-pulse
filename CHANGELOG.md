@@ -13,6 +13,8 @@
   posting, so overlapping cron runs post it once.
 - Weekly digest: on Mondays at the digest hour, a second message sums up the past seven
   days per repository and lists the latest merged pull requests.
+- A star that brings a repository to 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a
+  multiple of 10,000 stars is announced as a milestone.
 - A retry now resends only to the providers that failed, so a second provider cannot
   cause repeated Discord posts.
 

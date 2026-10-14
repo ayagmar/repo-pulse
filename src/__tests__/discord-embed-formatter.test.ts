@@ -114,6 +114,30 @@ describe('formatDiscordEmbed', () => {
     expect(removed.description).toContain('unstarred');
   });
 
+  it('celebrates the star that reaches a milestone, and only that one', () => {
+    const starTitle = (count: number, type: 'created' | 'deleted' = 'created'): string =>
+      getFirstEmbed(
+        formatDiscordEmbed(
+          type === 'created'
+            ? createEvent(REPO_EVENT_TYPES.STAR_CREATED, {
+                action: REPO_EVENT_ACTIONS.CREATED,
+                star: { count },
+              })
+            : createEvent(REPO_EVENT_TYPES.STAR_DELETED, {
+                action: REPO_EVENT_ACTIONS.DELETED,
+                star: { count },
+              })
+        )
+      ).title;
+
+    expect(starTitle(10)).toBe('🎉 10 stars!');
+    expect(starTitle(1000)).toBe('🎉 1,000 stars!');
+    expect(starTitle(30_000)).toBe('🎉 30,000 stars!');
+    expect(starTitle(11)).toBe('⭐ New star');
+    expect(starTitle(15_000)).toBe('⭐ New star');
+    expect(starTitle(100, 'deleted')).toBe('💫 Star removed');
+  });
+
   it('names the issue in the title and lists labels', () => {
     const embed = getFirstEmbed(
       formatDiscordEmbed(
