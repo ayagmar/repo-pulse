@@ -132,9 +132,12 @@ export class DurableEventProcessor {
 
   private async processDelivery(delivery: ClaimedDelivery): Promise<void> {
     try {
+      // A retry resends only to the providers that have not accepted this delivery yet.
+      const deliveredProviders = await this.ledger.listSucceededProviders(delivery.deliveryId);
       const attemptedAt = new Date();
       const results = await this.dispatcher.dispatch(delivery.event, {
         deliveryId: delivery.deliveryId,
+        skipProviders: deliveredProviders,
       });
 
       await this.ledger.recordProviderAttempts(

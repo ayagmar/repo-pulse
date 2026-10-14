@@ -5,6 +5,7 @@ import { logger } from './logger.js';
 
 interface DispatchMetadata {
   deliveryId?: string;
+  skipProviders?: ReadonlySet<string>;
 }
 
 /**
@@ -30,16 +31,19 @@ export class NotificationDispatcher {
   }
 
   /**
-   * Dispatch an event to all configured notifiers
-   * @returns Results from all notification attempts
+   * Dispatch an event to every configured notifier not in `skipProviders`
+   * @returns Results from the notification attempts made
    */
   async dispatch(event: RepoEvent, metadata: DispatchMetadata = {}): Promise<NotificationResult[]> {
     if (this.notifiers.length === 0) {
       throw new Error('No notification providers configured');
     }
 
+    const notifiers = this.notifiers.filter(
+      (notifier) => metadata.skipProviders?.has(notifier.name) !== true
+    );
     const results = await Promise.all(
-      this.notifiers.map(async (notifier) => {
+      notifiers.map(async (notifier) => {
         try {
           return {
             notifier,

@@ -273,6 +273,19 @@ export class D1DeliveryLedger {
     await this.db.batch(statements);
   }
 
+  async listSucceededProviders(deliveryId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .prepare(
+        `SELECT DISTINCT provider_name AS provider
+         FROM provider_attempts
+         WHERE delivery_id = ? AND success = 1`
+      )
+      .bind(deliveryId)
+      .all<{ provider: string }>();
+
+    return new Set(rows.results.map((row) => row.provider));
+  }
+
   async markDeliverySucceeded(
     deliveryId: string,
     finishedAt: Date,

@@ -70,6 +70,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 
 - Accepted supported deliveries are persisted before `POST /webhook` returns `202`.
 - Duplicate retained delivery IDs return `200` without enqueueing new work.
+- A retry resends only to the providers that have not accepted the delivery yet.
 - Provider sends remain at-least-once: interruption between sending and persisting success can repeat a send.
 - Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
 - Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.

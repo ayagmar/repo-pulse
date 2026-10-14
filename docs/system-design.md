@@ -86,7 +86,7 @@ stateDiagram-v2
 - D1 is the canonical persistence boundary.
 - `delivery_id` is the dedupe key.
 - Delivery rows store normalized event payload, status, attempt counters, retry timing, lease metadata, and latest failure context.
-- Provider attempt rows preserve historical send attempts per delivery and provider.
+- Provider attempt rows preserve historical send attempts per delivery and provider. A retry skips the providers that already succeeded for that delivery.
 
 ### Event history
 

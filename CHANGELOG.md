@@ -7,6 +7,8 @@
   them private, because they were stored without repository visibility.
 - Events now record whether their repository is private.
 - `GET /admin/events` lists the 50 most recent events.
+- A retry now resends only to the providers that failed, so a second provider cannot
+  cause repeated Discord posts.
 
 ## 1.0.0 (2026-10-13)
 
