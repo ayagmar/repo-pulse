@@ -7,6 +7,7 @@ import {
   REPO_EVENT_TYPES,
 } from '../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
+import { D1DigestLog } from '../core/services/d1-digest-log.js';
 import { dueDigestWindow } from '../core/services/daily-digest.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
@@ -272,6 +273,32 @@ describe('daily digest', () => {
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a claim taken over from a stalled run when the stalled run gives up', async () => {
+    const env = createDigestEnv();
+    const log = new D1DigestLog(env.DB);
+    const lease = 5 * 60_000;
+
+    const stalled = await log.claim(
+      'daily:2026-10-15',
+      'discord',
+      new Date('2026-10-15T09:00:00Z'),
+      lease
+    );
+    const takeover = await log.claim(
+      'daily:2026-10-15',
+      'discord',
+      new Date('2026-10-15T09:06:00Z'),
+      lease
+    );
+    expect(stalled).not.toBeNull();
+    expect(takeover).not.toBeNull();
+    await log.release('daily:2026-10-15', 'discord', stalled ?? '');
+
+    expect(
+      await log.claim('daily:2026-10-15', 'discord', new Date('2026-10-15T09:07:00Z'), lease)
+    ).toBeNull();
   });
 
   it('posts nothing after a day without activity', async () => {

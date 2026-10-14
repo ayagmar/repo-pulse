@@ -194,12 +194,19 @@ export class DailyDigestSender {
     }
 
     const digestId = `daily:${window.date}`;
-    const claimedProviders = new Set<string>();
+    /** Provider name to the time of its claim. */
+    const claimedProviders = new Map<string, string>();
     for (const notifier of this.dispatcher.getNotifiers()) {
       // `now` is the cron's scheduled time. A late run must not backdate its claim, or
       // its lease would end early and an on-time run could post the digest again.
-      if (await this.digestLog.claim(digestId, notifier.name, new Date(), DIGEST_CLAIM_LEASE_MS)) {
-        claimedProviders.add(notifier.name);
+      const claimedAt = await this.digestLog.claim(
+        digestId,
+        notifier.name,
+        new Date(),
+        DIGEST_CLAIM_LEASE_MS
+      );
+      if (claimedAt !== null) {
+        claimedProviders.set(notifier.name, claimedAt);
       }
     }
     if (claimedProviders.size === 0) {
@@ -208,8 +215,8 @@ export class DailyDigestSender {
 
     const events = await this.history.listActivityBetween(window.start, window.end);
     if (events.length === 0) {
-      for (const provider of claimedProviders) {
-        await this.digestLog.release(digestId, provider);
+      for (const [provider, claimedAt] of claimedProviders) {
+        await this.digestLog.release(digestId, provider, claimedAt);
       }
       return;
     }
@@ -233,10 +240,14 @@ export class DailyDigestSender {
     });
 
     for (const result of results) {
+      const claimedAt = claimedProviders.get(result.provider);
+      if (claimedAt === undefined) {
+        continue;
+      }
       if (result.success) {
-        await this.digestLog.markSent(digestId, result.provider, new Date());
+        await this.digestLog.markSent(digestId, result.provider, claimedAt, new Date());
       } else {
-        await this.digestLog.release(digestId, result.provider);
+        await this.digestLog.release(digestId, result.provider, claimedAt);
       }
     }
 
