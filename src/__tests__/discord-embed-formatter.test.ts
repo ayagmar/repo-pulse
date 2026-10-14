@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RepositoryActivity } from '../core/models/daily-digest.js';
 import type {
   RepoEvent,
   RepoEventInput,
@@ -10,7 +11,7 @@ import {
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
 } from '../core/models/repo-event.js';
-import { formatDiscordEmbed } from '../providers/discord/embed-formatter.js';
+import { formatDiscordDigest, formatDiscordEmbed } from '../providers/discord/embed-formatter.js';
 
 type BaseEventPayload = Pick<RepoEvent, 'repository' | 'sender'>;
 
@@ -335,5 +336,43 @@ describe('formatDiscordEmbed', () => {
     expect(embed.author?.name).toBe('testuser');
     expect(embed.author?.url).toBe('https://github.com/testuser');
     expect(embed.footer?.text).toBe('owner/test-repo');
+  });
+});
+
+describe('formatDiscordDigest', () => {
+  function activity(repository: string, releaseCount: number): RepositoryActivity {
+    return {
+      repository,
+      url: `https://github.com/${repository}`,
+      starsGained: 0,
+      forks: 0,
+      commits: 1,
+      pullRequestsOpened: 0,
+      pullRequestsMerged: 0,
+      issuesOpened: 0,
+      issuesClosed: 0,
+      releases: Array.from({ length: releaseCount }, (_, index) => ({
+        tagName: `pkg@1.2.${String(index)}`,
+        url: `https://github.com/${repository}/releases/tag/pkg@1.2.${String(index)}`,
+      })),
+    };
+  }
+
+  it('keeps a repository that published many releases, listing its latest three', () => {
+    const payload = formatDiscordDigest({
+      date: '2026-10-15',
+      timeZone: 'UTC',
+      windowStart: new Date('2026-10-14T09:00:00.000Z'),
+      windowEnd: new Date('2026-10-15T09:00:00.000Z'),
+      eventCount: 62,
+      repositories: [activity('myorg/monorepo', 60), activity('myorg/cli', 0)],
+    });
+
+    const lines = payload.embeds[0]?.description?.split('\n') ?? [];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('**[myorg/monorepo]');
+    expect(lines[0]).toContain('[pkg@1.2.59]');
+    expect(lines[0]).toMatch(/ and 57 more$/);
+    expect(lines[1]).toContain('**[myorg/cli]');
   });
 });

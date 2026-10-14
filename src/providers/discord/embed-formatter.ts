@@ -51,6 +51,7 @@ const FIELD_VALUE_LIMIT = 1024;
 const EXCERPT_LIMIT = 300;
 const COMMIT_SUBJECT_LIMIT = 72;
 const LISTED_COMMITS = 5;
+const LISTED_RELEASES = 3;
 
 // GitHub's state colors, so a message reads like the badge it links to.
 const COLORS = {
@@ -276,6 +277,14 @@ export function formatDiscordEmbed(event: RepoEvent): DiscordWebhookPayload {
   }
 }
 
+function releasedSummary(releases: RepositoryActivity['releases']): string {
+  const listed = releases
+    .slice(-LISTED_RELEASES)
+    .map((release) => `[${release.tagName}](${release.url})`);
+  const earlier = releases.length - listed.length;
+  return `released ${listed.join(', ')}${earlier > 0 ? ` and ${String(earlier)} more` : ''}`;
+}
+
 function activitySummary(activity: RepositoryActivity): string {
   const items = [
     activity.starsGained !== 0
@@ -287,9 +296,7 @@ function activitySummary(activity: RepositoryActivity): string {
     activity.issuesOpened > 0 ? `${plural(activity.issuesOpened, 'issue')} opened` : null,
     activity.issuesClosed > 0 ? `${plural(activity.issuesClosed, 'issue')} closed` : null,
     activity.forks > 0 ? plural(activity.forks, 'fork') : null,
-    activity.releases.length > 0
-      ? `released ${activity.releases.map((release) => `[${release.tagName}](${release.url})`).join(', ')}`
-      : null,
+    activity.releases.length > 0 ? releasedSummary(activity.releases) : null,
   ].filter((item) => item !== null);
 
   return items.length > 0 ? items.join(' · ') : 'no net change';
