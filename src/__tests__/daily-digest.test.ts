@@ -260,6 +260,20 @@ describe('daily digest', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('posts once when a late cron run overlaps the next one', async () => {
+    const env = createDigestEnv();
+    await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
+    // The 09:00 run starts at 09:05:20, as the 09:05 run does.
+    vi.setSystemTime(new Date('2026-10-15T09:05:20.000Z'));
+
+    await Promise.all([
+      sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z')),
+      sendDailyDigest(env, new Date('2026-10-15T09:05:00.000Z')),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('posts nothing after a day without activity', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-13T12:00:00.000Z', [star('cli')]);

@@ -196,7 +196,9 @@ export class DailyDigestSender {
     const digestId = `daily:${window.date}`;
     const claimedProviders = new Set<string>();
     for (const notifier of this.dispatcher.getNotifiers()) {
-      if (await this.digestLog.claim(digestId, notifier.name, now, DIGEST_CLAIM_LEASE_MS)) {
+      // `now` is the cron's scheduled time. A late run must not backdate its claim, or
+      // its lease would end early and an on-time run could post the digest again.
+      if (await this.digestLog.claim(digestId, notifier.name, new Date(), DIGEST_CLAIM_LEASE_MS)) {
         claimedProviders.add(notifier.name);
       }
     }
