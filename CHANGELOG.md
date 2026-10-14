@@ -21,6 +21,8 @@
   `radar_alerts` table and an index on events by type and time.
 - A star that brings a repository to 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a
   multiple of 10,000 stars is announced as a milestone.
+- The cron drains 5 deliveries per pass instead of 25 (`DELIVERY_DRAIN_BATCH_SIZE`), so a
+  run stays within the Workers Free plan's 50 subrequests.
 - A retry now resends only to the providers that failed, so a second provider cannot
   cause repeated Discord posts.
 

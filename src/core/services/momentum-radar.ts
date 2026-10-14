@@ -9,8 +9,9 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 
 /**
- * The every-minute cron checks for spikes at minutes 5, 15, 25, and so on, away from
- * the digest at the top of the hour, so both fit in one run's subrequest budget.
+ * The every-minute cron checks for spikes at minutes 5, 15, 25, and so on (UTC). A run
+ * can also send digests, so docs/operations.md counts the worst case against the Free
+ * plan's 50 subrequests.
  */
 const CHECK_INTERVAL_MINUTES = 10;
 const CHECK_MINUTE = 5;
