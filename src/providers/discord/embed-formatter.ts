@@ -1,4 +1,4 @@
-import type { DailyDigest, RepositoryActivity } from '../../core/models/daily-digest.js';
+import type { Digest, RepositoryActivity } from '../../core/models/digest.js';
 import type {
   ForkEvent,
   IssueEvent,
@@ -52,6 +52,7 @@ const EXCERPT_LIMIT = 300;
 const COMMIT_SUBJECT_LIMIT = 72;
 const LISTED_COMMITS = 5;
 const LISTED_RELEASES = 3;
+const LISTED_PULL_REQUESTS = 3;
 
 // GitHub's state colors, so a message reads like the badge it links to.
 const COLORS = {
@@ -291,7 +292,9 @@ function activitySummary(activity: RepositoryActivity): string {
       ? `⭐ ${activity.starsGained > 0 ? '+' : ''}${String(activity.starsGained)}`
       : null,
     activity.commits > 0 ? plural(activity.commits, 'commit') : null,
-    activity.pullRequestsMerged > 0 ? `${plural(activity.pullRequestsMerged, 'PR')} merged` : null,
+    activity.pullRequestsMerged.length > 0
+      ? `${plural(activity.pullRequestsMerged.length, 'PR')} merged`
+      : null,
     activity.pullRequestsOpened > 0 ? `${plural(activity.pullRequestsOpened, 'PR')} opened` : null,
     activity.issuesOpened > 0 ? `${plural(activity.issuesOpened, 'issue')} opened` : null,
     activity.issuesClosed > 0 ? `${plural(activity.issuesClosed, 'issue')} closed` : null,
@@ -300,6 +303,18 @@ function activitySummary(activity: RepositoryActivity): string {
   ].filter((item) => item !== null);
 
   return items.length > 0 ? items.join(' · ') : 'no net change';
+}
+
+/** The latest merged pull requests, one line each, for the weekly digest. */
+function mergedPullRequestLines(merged: RepositoryActivity['pullRequestsMerged']): string[] {
+  const listed = merged.slice(-LISTED_PULL_REQUESTS);
+  const lines = listed.map(
+    (pr) => `↳ [#${String(pr.number)}](${pr.url}) ${truncate(pr.title, COMMIT_SUBJECT_LIMIT)}`
+  );
+  if (merged.length > listed.length) {
+    lines.unshift(`↳ _…and ${plural(merged.length - listed.length, 'earlier PR')}_`);
+  }
+  return lines;
 }
 
 function repositories(count: number): string {
@@ -318,26 +333,31 @@ function formatDigestTime(instant: Date, timeZone: string): string {
 }
 
 /**
- * Format a daily digest as one embed with a line per repository, most active first
+ * Format a digest as one embed with a line per repository, most active first. The
+ * weekly digest also lists each repository's latest merged pull requests.
  */
-export function formatDiscordDigest(digest: DailyDigest): DiscordWebhookPayload {
+export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
   const lines: string[] = [];
   let length = 0;
   for (const [index, activity] of digest.repositories.entries()) {
-    const line = `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`;
+    const block = [
+      `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`,
+      ...(digest.period === 'weekly' ? mergedPullRequestLines(activity.pullRequestsMerged) : []),
+    ].join('\n');
     // Leave room for the "and N more" line.
-    if (length + line.length + 1 > DESCRIPTION_LIMIT - 64) {
+    if (length + block.length + 1 > DESCRIPTION_LIMIT - 64) {
       lines.push(`_…and ${repositories(digest.repositories.length - index)} more_`);
       break;
     }
-    lines.push(line);
-    length += line.length + 1;
+    lines.push(block);
+    length += block.length + 1;
   }
 
+  const heading = digest.period === 'weekly' ? '📦 Weekly pulse' : '📊 Daily pulse';
   return {
     embeds: [
       {
-        title: `📊 Daily pulse: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`,
+        title: `${heading}: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`,
         description: lines.join('\n'),
         color: COLORS.push,
         timestamp: digest.windowEnd.toISOString(),

@@ -3,7 +3,7 @@ import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from './core/services/d1-digest-log.js';
 import { D1EventHistory } from './core/services/d1-event-history.js';
-import { DailyDigestSender } from './core/services/daily-digest.js';
+import { DigestSender } from './core/services/digest.js';
 import { DurableEventProcessor } from './core/services/durable-event-processor.js';
 import { logger } from './core/services/logger.js';
 import { NotificationDispatcher } from './core/services/notification-dispatcher.js';
@@ -73,13 +73,13 @@ export async function drainDueDeliveries(
   await runtime.eventProcessor.drainDueDeliveries(options);
 }
 
-export async function sendDailyDigest(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+export async function sendDueDigests(env: HttpEnv['Bindings'], now: Date): Promise<void> {
   const runtime = buildRuntime(env);
-  const sender = new DailyDigestSender(
+  const sender = new DigestSender(
     runtime.eventHistory,
     new D1DigestLog(env.DB),
     runtime.notificationDispatcher,
     runtime.config.digest
   );
-  await sender.sendDueDigest(now);
+  await sender.sendDueDigests(now);
 }

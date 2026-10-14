@@ -1,5 +1,5 @@
 import type { NotificationResult, Notifier } from '../interfaces/notifier.js';
-import type { DailyDigest } from '../models/daily-digest.js';
+import type { Digest } from '../models/digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { logger } from './logger.js';
@@ -48,7 +48,7 @@ export class NotificationDispatcher {
    * @returns Results from the notification attempts made
    */
   dispatchDigest(
-    digest: DailyDigest,
+    digest: Digest,
     metadata: Pick<DispatchMetadata, 'skipProviders'> = {}
   ): Promise<NotificationResult[]> {
     return this.sendToEach(metadata.skipProviders, (notifier) => notifier.notifyDigest(digest), {

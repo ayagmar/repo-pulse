@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendDailyDigest } from '../app.js';
+import { sendDueDigests } from '../app.js';
+import type { DigestPeriod } from '../core/models/digest.js';
 import type { RepoEvent } from '../core/models/repo-event.js';
 import {
   createRepoEvent,
@@ -8,7 +9,7 @@ import {
 } from '../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from '../core/services/d1-digest-log.js';
-import { dueDigestWindow } from '../core/services/daily-digest.js';
+import { dueDigestWindow } from '../core/services/digest.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
 const HOUR_MS = 60 * 60_000;
@@ -96,8 +97,31 @@ function release(name: string, tagName: string): RepoEvent {
   });
 }
 
-describe('daily digest schedule', () => {
-  function digestsIn2026(timeZone: string, hour: number): DigestWindowResult[] {
+function mergedPullRequest(name: string, number: number, title: string): RepoEvent {
+  return createRepoEvent(REPO_EVENT_TYPES.PULL_REQUEST_MERGED, {
+    action: REPO_EVENT_ACTIONS.CLOSED,
+    repository: repository(name),
+    sender,
+    pullRequest: {
+      number,
+      title,
+      url: `https://github.com/myorg/${name}/pull/${String(number)}`,
+      state: 'closed',
+      merged: true,
+      body: null,
+      draft: false,
+      headBranch: 'feature',
+      baseBranch: 'main',
+    },
+  });
+}
+
+describe('digest schedule', () => {
+  function digestsIn2026(
+    timeZone: string,
+    hour: number,
+    period: DigestPeriod = 'daily'
+  ): DigestWindowResult[] {
     const windows: DigestWindowResult[] = [];
     // These zones are offset from UTC by whole or half hours, so half-hour steps land on
     // every digest's due time, and no due period is sampled twice.
@@ -106,7 +130,7 @@ describe('daily digest schedule', () => {
       time < Date.parse('2027-01-01T00:00:00.000Z');
       time += 30 * 60_000
     ) {
-      const window = dueDigestWindow(new Date(time), timeZone, hour);
+      const window = dueDigestWindow(new Date(time), timeZone, hour, period);
       if (window) {
         windows.push(window);
       }
@@ -143,6 +167,27 @@ describe('daily digest schedule', () => {
     }
   );
 
+  it.each(['Africa/Casablanca', 'America/New_York'])(
+    'in %s, covers each week once, Monday 09:00 to Monday 09:00, across clock changes',
+    (timeZone) => {
+      const weeks = digestsIn2026(timeZone, 9, 'weekly');
+
+      // 2026 has 52 Mondays, the first on 5 January.
+      expect(weeks).toHaveLength(52);
+      for (const [index, week] of weeks.entries()) {
+        expect(new Date(`${week.date}T12:00:00.000Z`).getUTCDay()).toBe(1);
+        expect(localWallClock(week.start, timeZone)).toMatch(/ 09:00$/);
+        expect(localWallClock(week.end, timeZone)).toBe(`${week.date} 09:00`);
+        const hours = (week.end.getTime() - week.start.getTime()) / HOUR_MS;
+        expect([167, 168, 169]).toContain(hours);
+        const next = weeks[index + 1];
+        if (next) {
+          expect(next.start).toEqual(week.end);
+        }
+      }
+    }
+  );
+
   it.each([
     ['Africa/Casablanca', 1],
     ['Africa/Casablanca', 2],
@@ -160,7 +205,7 @@ describe('daily digest schedule', () => {
   );
 });
 
-describe('daily digest', () => {
+describe('digests', () => {
   const cleanups: (() => void)[] = [];
   const fetchMock = vi.fn();
 
@@ -224,8 +269,8 @@ describe('daily digest', () => {
     await record(env, '2026-10-14T20:00:00.000Z', [push('web', 3), release('web', 'v1.0.0')]);
     await record(env, '2026-10-15T09:00:00.000Z', [star('too-late')]);
 
-    await sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z'));
-    await sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
 
     expect(postedEmbeds()).toMatchObject([
       {
@@ -244,9 +289,9 @@ describe('daily digest', () => {
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
     fetchMock.mockResolvedValueOnce(new Response('upstream error', { status: 500 }));
 
-    await sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z'));
-    await sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z'));
-    await sendDailyDigest(env, new Date('2026-10-15T09:02:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:02:00.000Z'));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -256,11 +301,48 @@ describe('daily digest', () => {
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
 
     await Promise.all([
-      sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z')),
-      sendDailyDigest(env, new Date('2026-10-15T09:01:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z')),
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Mondays, also posts the week with its latest merged pull requests', async () => {
+    const env = createDigestEnv();
+    // 2026-10-19 is a Monday.
+    await record(env, '2026-10-12T08:59:00.000Z', [mergedPullRequest('web', 1, 'Too early')]);
+    await record(env, '2026-10-13T10:00:00.000Z', [
+      mergedPullRequest('web', 2, 'Add login'),
+      mergedPullRequest('web', 3, 'Add logout'),
+    ]);
+    await record(env, '2026-10-16T10:00:00.000Z', [
+      mergedPullRequest('web', 4, 'Fix session expiry'),
+      mergedPullRequest('web', 5, 'Remember me'),
+      star('cli'),
+    ]);
+    await record(env, '2026-10-18T10:00:00.000Z', [push('web', 2)]);
+
+    await sendDueDigests(env, new Date('2026-10-19T09:00:00.000Z'));
+
+    expect(postedEmbeds()).toMatchObject([
+      {
+        title: '📊 Daily pulse: 1 event in 1 repository',
+        description: '**[myorg/web](https://github.com/myorg/web)** 2 commits',
+      },
+      {
+        title: '📦 Weekly pulse: 6 events in 2 repositories',
+        description: [
+          '**[myorg/web](https://github.com/myorg/web)** 2 commits · 4 PRs merged',
+          '↳ _…and 1 earlier PR_',
+          '↳ [#3](https://github.com/myorg/web/pull/3) Add logout',
+          '↳ [#4](https://github.com/myorg/web/pull/4) Fix session expiry',
+          '↳ [#5](https://github.com/myorg/web/pull/5) Remember me',
+          '**[myorg/cli](https://github.com/myorg/cli)** ⭐ +1',
+        ].join('\n'),
+        footer: { text: '12 Oct, 09:00 to 19 Oct, 09:00 · Africa/Casablanca' },
+      },
+    ]);
   });
 
   it('posts once when a late cron run overlaps the next one', async () => {
@@ -270,8 +352,8 @@ describe('daily digest', () => {
     vi.setSystemTime(new Date('2026-10-15T09:05:20.000Z'));
 
     await Promise.all([
-      sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z')),
-      sendDailyDigest(env, new Date('2026-10-15T09:05:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z')),
+      sendDueDigests(env, new Date('2026-10-15T09:05:00.000Z')),
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -328,7 +410,7 @@ describe('daily digest', () => {
     const env = createDigestEnv();
     await record(env, '2026-10-13T12:00:00.000Z', [star('cli')]);
 
-    await sendDailyDigest(env, new Date('2026-10-15T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

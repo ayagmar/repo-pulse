@@ -36,7 +36,7 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
-- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity.
+- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. On Mondays a weekly digest covers the past seven days and lists the latest merged pull requests.
 
 ## Deploy
 
@@ -180,7 +180,7 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 - **D1 ledger:** stores accepted deliveries, dedupe state, attempts, and retry metadata
 - **Event history:** keeps every accepted event in D1 after its delivery row is pruned
 - **Background processor:** drains due work, dispatches providers, reschedules transient failures, and prunes old succeeded rows
-- **Daily digest:** the cron posts one summary of the previous day from the event history
+- **Digests:** the cron posts one summary of the previous day, and on Mondays one of the past week, from the event history
 - **Admin surface:** exposes status, health, delivery history, retries, OpenAPI, and Swagger UI
 
 Related docs:

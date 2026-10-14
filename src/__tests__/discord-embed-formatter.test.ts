@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RepositoryActivity } from '../core/models/daily-digest.js';
+import type { RepositoryActivity } from '../core/models/digest.js';
 import type {
   RepoEvent,
   RepoEventInput,
@@ -348,7 +348,7 @@ describe('formatDiscordDigest', () => {
       forks: 0,
       commits: 1,
       pullRequestsOpened: 0,
-      pullRequestsMerged: 0,
+      pullRequestsMerged: [],
       issuesOpened: 0,
       issuesClosed: 0,
       releases: Array.from({ length: releaseCount }, (_, index) => ({
@@ -360,6 +360,7 @@ describe('formatDiscordDigest', () => {
 
   it('keeps a repository that published many releases, listing its latest three', () => {
     const payload = formatDiscordDigest({
+      period: 'daily',
       date: '2026-10-15',
       timeZone: 'UTC',
       windowStart: new Date('2026-10-14T09:00:00.000Z'),

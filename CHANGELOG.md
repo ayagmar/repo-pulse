@@ -11,6 +11,8 @@
   sums up the previous day per repository. Days without activity get none. Migration
   `0005` adds the `digest_sends` table, where each provider claims a digest before
   posting, so overlapping cron runs post it once.
+- Weekly digest: on Mondays at the digest hour, a second message sums up the past seven
+  days per repository and lists the latest merged pull requests.
 - A retry now resends only to the providers that failed, so a second provider cannot
   cause repeated Discord posts.
 

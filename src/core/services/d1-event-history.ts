@@ -49,6 +49,9 @@ export interface EventActivity {
   commitCount: number | null;
   releaseTagName: string | null;
   releaseUrl: string | null;
+  pullRequestNumber: number | null;
+  pullRequestTitle: string | null;
+  pullRequestUrl: string | null;
 }
 
 export class D1EventHistory {
@@ -64,7 +67,10 @@ export class D1EventHistory {
            json_extract(event_json, '$.repository.url') AS repositoryUrl,
            json_array_length(event_json, '$.push.commits') AS commitCount,
            json_extract(event_json, '$.release.tagName') AS releaseTagName,
-           json_extract(event_json, '$.release.url') AS releaseUrl
+           json_extract(event_json, '$.release.url') AS releaseUrl,
+           json_extract(event_json, '$.pullRequest.number') AS pullRequestNumber,
+           json_extract(event_json, '$.pullRequest.title') AS pullRequestTitle,
+           json_extract(event_json, '$.pullRequest.url') AS pullRequestUrl
          FROM events
          WHERE received_at >= ? AND received_at < ?
          ORDER BY received_at ASC, delivery_id ASC`

@@ -1,4 +1,4 @@
-import type { DailyDigest, RepositoryActivity } from '../models/daily-digest.js';
+import type { Digest, DigestPeriod, RepositoryActivity } from '../models/digest.js';
 import { REPO_EVENT_TYPES } from '../models/repo-event.js';
 import type { D1DigestLog } from './d1-digest-log.js';
 import type { D1EventHistory, EventActivity } from './d1-event-history.js';
@@ -20,7 +20,10 @@ const SEND_WINDOW_MINUTES = 10;
  */
 const DIGEST_CLAIM_LEASE_MS = 5 * MINUTE_MS;
 
+const MONDAY = 1;
+
 interface DigestWindow {
+  period: DigestPeriod;
   date: string;
   start: Date;
   end: Date;
@@ -95,26 +98,40 @@ function localHourInstant(date: string, hour: number, timeZone: string): Date {
   return new Date(withOffsetBefore);
 }
 
-function previousDate(date: string): string {
+function shiftDate(date: string, days: number): string {
   const [year, month, day] = parseDate(date);
-  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function weekday(date: string): number {
+  const [year, month, day] = parseDate(date);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
 
 /**
- * The digest due at `now`, or null when none is. A digest covers the day up to the
- * digest hour: from that hour on the previous local day to that hour today. Both ends
- * come from the same local-hour instant, so consecutive digests meet exactly, even
- * across a clock change, when a window lasts 23 or 25 hours.
+ * The digest of `period` due at `now`, or null when none is. A daily digest covers the
+ * day up to the digest hour, from that hour on the previous local day; a weekly digest,
+ * due on Mondays, covers the seven days before. Both ends come from the same local-hour
+ * instant, so consecutive digests meet exactly, even across a clock change.
  */
-export function dueDigestWindow(now: Date, timeZone: string, hour: number): DigestWindow | null {
+export function dueDigestWindow(
+  now: Date,
+  timeZone: string,
+  hour: number,
+  period: DigestPeriod = 'daily'
+): DigestWindow | null {
   const today = localDateTime(now, timeZone).date;
   // A digest hour skipped by a clock change can move into the next local day, as 23:00
   // does in America/Nuuk each March, so yesterday's digest may be the one due.
-  for (const date of [today, previousDate(today)]) {
+  for (const date of [today, shiftDate(today, -1)]) {
+    if (period === 'weekly' && weekday(date) !== MONDAY) {
+      continue;
+    }
     const end = localHourInstant(date, hour, timeZone);
     const elapsed = now.getTime() - end.getTime();
     if (elapsed >= 0 && elapsed < SEND_WINDOW_MINUTES * MINUTE_MS) {
-      return { date, start: localHourInstant(previousDate(date), hour, timeZone), end };
+      const startDate = shiftDate(date, period === 'weekly' ? -7 : -1);
+      return { period, date, start: localHourInstant(startDate, hour, timeZone), end };
     }
   }
   return null;
@@ -128,7 +145,7 @@ function emptyActivity(event: EventActivity): RepositoryActivity {
     forks: 0,
     commits: 0,
     pullRequestsOpened: 0,
-    pullRequestsMerged: 0,
+    pullRequestsMerged: [],
     issuesOpened: 0,
     issuesClosed: 0,
     releases: [],
@@ -161,7 +178,17 @@ function summarizeRepositories(events: readonly EventActivity[]): RepositoryActi
         activity.pullRequestsOpened += 1;
         break;
       case REPO_EVENT_TYPES.PULL_REQUEST_MERGED:
-        activity.pullRequestsMerged += 1;
+        if (
+          event.pullRequestNumber !== null &&
+          event.pullRequestTitle !== null &&
+          event.pullRequestUrl !== null
+        ) {
+          activity.pullRequestsMerged.push({
+            number: event.pullRequestNumber,
+            title: event.pullRequestTitle,
+            url: event.pullRequestUrl,
+          });
+        }
         break;
       case REPO_EVENT_TYPES.ISSUE_OPENED:
         activity.issuesOpened += 1;
@@ -186,7 +213,9 @@ function summarizeRepositories(events: readonly EventActivity[]): RepositoryActi
   );
 }
 
-export class DailyDigestSender {
+const PERIODS: readonly DigestPeriod[] = ['daily', 'weekly'];
+
+export class DigestSender {
   constructor(
     private readonly history: D1EventHistory,
     private readonly digestLog: D1DigestLog,
@@ -194,17 +223,22 @@ export class DailyDigestSender {
     private readonly options: { timeZone: string; hour: number }
   ) {}
 
-  async sendDueDigest(now: Date): Promise<void> {
+  /** Send every digest due at `now`: the daily one, and on Mondays the weekly one too. */
+  async sendDueDigests(now: Date): Promise<void> {
     if (!this.dispatcher.hasNotifiers()) {
       return;
     }
 
-    const window = dueDigestWindow(now, this.options.timeZone, this.options.hour);
-    if (!window) {
-      return;
+    for (const period of PERIODS) {
+      const window = dueDigestWindow(now, this.options.timeZone, this.options.hour, period);
+      if (window) {
+        await this.sendDigest(window);
+      }
     }
+  }
 
-    const digestId = `daily:${window.date}`;
+  private async sendDigest(window: DigestWindow): Promise<void> {
+    const digestId = `${window.period}:${window.date}`;
     /** Provider name to the time of its claim. */
     const claimedProviders = new Map<string, string>();
     for (const notifier of this.dispatcher.getNotifiers()) {
@@ -232,7 +266,8 @@ export class DailyDigestSender {
       return;
     }
 
-    const digest: DailyDigest = {
+    const digest: Digest = {
+      period: window.period,
       date: window.date,
       timeZone: this.options.timeZone,
       windowStart: window.start,
@@ -262,9 +297,9 @@ export class DailyDigestSender {
       }
     }
 
-    logger.info('daily_digest.dispatched', {
-      component: 'daily_digest',
-      digestDate: window.date,
+    logger.info('digest.dispatched', {
+      component: 'digest',
+      digestId,
       eventCount: digest.eventCount,
       succeeded: results.filter((result) => result.success).map((result) => result.provider),
       failed: results.filter((result) => !result.success).map((result) => result.provider),

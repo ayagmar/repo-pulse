@@ -1,3 +1,11 @@
+export type DigestPeriod = 'daily' | 'weekly';
+
+interface MergedPullRequest {
+  number: number;
+  title: string;
+  url: string;
+}
+
 export interface RepositoryActivity {
   repository: string;
   url: string;
@@ -6,13 +14,14 @@ export interface RepositoryActivity {
   forks: number;
   commits: number;
   pullRequestsOpened: number;
-  pullRequestsMerged: number;
+  pullRequestsMerged: MergedPullRequest[];
   issuesOpened: number;
   issuesClosed: number;
   releases: { tagName: string; url: string }[];
 }
 
-export interface DailyDigest {
+export interface Digest {
+  period: DigestPeriod;
   /** Local date of the digest, YYYY-MM-DD. */
   date: string;
   timeZone: string;
