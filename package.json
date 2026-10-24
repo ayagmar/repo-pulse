@@ -2,7 +2,7 @@
   "name": "repo-pulse",
   "version": "1.0.0",
   "description": "Cloudflare Workers webhook service for GitHub repository events",
-  "packageManager": "npm@12.2.0",
+  "packageManager": "npm@12.2.1",
   "type": "module",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
@@ -40,25 +40,25 @@
     "hono": "^4.13.13"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
-    "@cloudflare/vitest-plugin": "^1.4.0",
-    "@commitlint/cli": "^21.2.3",
-    "@commitlint/config-conventional": "^21.2.3",
+    "@biomejs/biome": "2.5.15",
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^9.6.0",
-    "@vitest/coverage-v8": "^5.0.3",
+    "@vitest/coverage-v8": "^5.0.5",
     "better-sqlite3": "^13.0.3",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "husky": "^9.1.7",
-    "knip": "^6.41.0",
+    "knip": "^6.43.0",
     "lint-staged": "^17.6.0",
-    "npm-run-all2": "^9.0.3",
+    "npm-run-all2": "^9.0.4",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.71.1",
-    "vite": "^8.3.4",
-    "vitest": "^5.0.3",
-    "wrangler": "^4.149.0"
+    "typescript-eslint": "^8.72.0",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.152.0"
   },
   "lint-staged": {
     "*.{ts,tsx}": "biome check --write --no-errors-on-unmatched",
@@ -89,5 +89,9 @@
         "description": "Webhook URL of the Discord channel to post to (Server Settings → Integrations → Webhooks)."
       }
     }
+  },
+  "overrides": {
+    "undici": "7.30.1",
+    "zod": "4.6.7"
   }
 }
