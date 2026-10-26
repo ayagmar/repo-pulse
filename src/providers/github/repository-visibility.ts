@@ -1,3 +1,4 @@
+import type { RepositoryAdmission } from '../../core/models/public-feed.js';
 import { logger } from '../../core/services/logger.js';
 
 const API_URL = 'https://api.github.com';
@@ -7,8 +8,17 @@ const LOOKUP_TIMEOUT_MS = 3_000;
 /** GitHub's own limits on owner and repository names, as the feed contract states them. */
 const REPOSITORY_NAME_PATTERN = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
 
+/**
+ * `denied` is GitHub's definitive answer that a repository is not public (a `404`
+ * or `"private": true`); `unresolved` is a lookup that gave no answer.
+ */
+type Visibility = 'public' | 'denied' | 'unresolved';
+
+/** Of two answers to lookups sent in the same millisecond, the higher one is kept. */
+const PRECEDENCE: Record<Visibility, number> = { public: 0, unresolved: 1, denied: 2 };
+
 interface CachedVisibility {
-  isPublic: boolean;
+  visibility: Visibility;
   /** Counted from when the lookup was sent, so an answer never outlives its TTL. */
   expiresAt: number;
 }
@@ -18,7 +28,7 @@ interface CachedVisibility {
  * It asks GitHub without a token, or with a token that can read public
  * repositories only, so a private repository answers `404` whatever the token
  * owner can see. Only a `200` with `"private": false` admits; every other
- * answer, or no answer, counts as private. Recorded webhook events never admit
+ * answer, or no answer, leaves it out. Recorded webhook events never admit
  * a repository.
  */
 export class RepositoryVisibilityGate {
@@ -33,12 +43,16 @@ export class RepositoryVisibilityGate {
    * the others were pending does not admit its repository, and a repository needs
    * both this request's own answer and the cached one to say public. Build the
    * response without waiting on anything else after this resolves.
+   *
+   * `unresolved` counts the repositories left out without a definitive denial: a
+   * failed lookup, a cached failure, no lookup within the budget, or an answer
+   * that expired before it could be used.
    */
   async admit(
     repositories: readonly string[],
     lookupBudget: number,
     publicToken: string | undefined
-  ): Promise<Set<string>> {
+  ): Promise<RepositoryAdmission> {
     const candidates = [...new Set(repositories)].filter((repository) =>
       REPOSITORY_NAME_PATTERN.test(repository)
     );
@@ -58,40 +72,50 @@ export class RepositoryVisibilityGate {
     if (skipped > 0) {
       logger.warn('visibility.lookup_budget_exhausted', { component: 'github', omitted: skipped });
     }
-    return new Set(
-      candidates.filter(
-        (repository) =>
-          ownAnswers.get(repository) !== false && this.freshAnswer(repository) === true
-      )
-    );
+    const admitted = new Set<string>();
+    let unresolved = 0;
+    for (const repository of candidates) {
+      const own = ownAnswers.get(repository);
+      const fresh = this.freshAnswer(repository);
+      if ((own === undefined || own === 'public') && fresh === 'public') {
+        admitted.add(repository);
+      } else if (own !== 'denied' && fresh !== 'denied') {
+        unresolved += 1;
+      }
+    }
+    return { admitted, unresolved };
   }
 
   /** The cached answer for a repository, or undefined once it is 60 seconds old. */
-  private freshAnswer(repository: string): boolean | undefined {
+  private freshAnswer(repository: string): Visibility | undefined {
     const cached = this.cache.get(repository);
-    return cached && Date.now() < cached.expiresAt ? cached.isPublic : undefined;
+    return cached && Date.now() < cached.expiresAt ? cached.visibility : undefined;
   }
 
-  private async lookUp(repository: string, publicToken: string | undefined): Promise<boolean> {
+  private async lookUp(repository: string, publicToken: string | undefined): Promise<Visibility> {
     const expiresAt = Date.now() + VISIBILITY_TTL_MS;
-    const isPublic = await this.fetchIsPublic(repository, publicToken);
+    const visibility = await this.fetchVisibility(repository, publicToken);
     // A slower lookup must not replace a newer answer from a concurrent request.
-    // Lookups sent in the same millisecond keep the private answer.
+    // Lookups sent in the same millisecond keep the least public answer.
     const cached = this.cache.get(repository);
-    if (!cached || cached.expiresAt < expiresAt || (cached.expiresAt === expiresAt && !isPublic)) {
-      this.cache.set(repository, { isPublic, expiresAt });
+    if (
+      !cached ||
+      cached.expiresAt < expiresAt ||
+      (cached.expiresAt === expiresAt && PRECEDENCE[visibility] > PRECEDENCE[cached.visibility])
+    ) {
+      this.cache.set(repository, { visibility, expiresAt });
     }
-    return isPublic;
+    return visibility;
   }
 
   /**
    * `publicToken` only raises the rate limit from 60 to 5,000 lookups an hour.
    * Never pass a token that can read private repositories.
    */
-  private async fetchIsPublic(
+  private async fetchVisibility(
     repository: string,
     publicToken: string | undefined
-  ): Promise<boolean> {
+  ): Promise<Visibility> {
     const [owner = '', name = ''] = repository.split('/');
     try {
       const response = await fetch(
@@ -115,15 +139,22 @@ export class RepositoryVisibilityGate {
           repository,
           status: response.status,
         });
-        return false;
+        return response.status === 404 ? 'denied' : 'unresolved';
       }
       const body: unknown = await response.json();
-      return (
-        typeof body === 'object' && body !== null && 'private' in body && body.private === false
-      );
+      const isPrivate =
+        typeof body === 'object' && body !== null && 'private' in body ? body.private : undefined;
+      if (isPrivate === false) {
+        return 'public';
+      }
+      if (isPrivate === true) {
+        return 'denied';
+      }
+      logger.warn('visibility.lookup_unreadable', { component: 'github', repository });
+      return 'unresolved';
     } catch (error) {
       logger.warn('visibility.lookup_failed', { component: 'github', repository, error });
-      return false;
+      return 'unresolved';
     }
   }
 }

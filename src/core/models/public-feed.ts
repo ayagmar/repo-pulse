@@ -64,3 +64,11 @@ export interface PublicFeed {
   events: PublicFeedEvent[];
   starHistory: PublicFeedStarHistory[];
 }
+
+/** The outcome of a response's visibility check. */
+export interface RepositoryAdmission {
+  /** The repositories GitHub shows as public right now. */
+  admitted: Set<string>;
+  /** Repositories left out without a definitive denial (`404` or `"private": true`). */
+  unresolved: number;
+}
