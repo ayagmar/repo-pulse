@@ -54,11 +54,11 @@ cat ~/.config/repo-pulse/webhook-secret
 
 The button creates the D1 database in your Cloudflare account and asks for three secrets:
 
-| Secret | Value |
-| --- | --- |
-| `GITHUB_WEBHOOK_SECRET` | the contents of `~/.config/repo-pulse/webhook-secret` |
-| `ADMIN_API_TOKEN` | another random string, for example from `openssl rand -hex 32` |
-| `DISCORD_WEBHOOK_URL` | the Discord channel's webhook URL (Server Settings → Integrations → Webhooks) |
+| Secret                  | Value                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| `GITHUB_WEBHOOK_SECRET` | the contents of `~/.config/repo-pulse/webhook-secret`                         |
+| `ADMIN_API_TOKEN`       | another random string, for example from `openssl rand -hex 32`                |
+| `DISCORD_WEBHOOK_URL`   | the Discord channel's webhook URL (Server Settings → Integrations → Webhooks) |
 
 It then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
 
@@ -116,14 +116,14 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 
 ## Supported events
 
-| GitHub event | Internal event types |
-| --- | --- |
-| Stars | `star.created`, `star.deleted` |
-| Issues | `issue.opened`, `issue.closed`, `issue.reopened` |
+| GitHub event  | Internal event types                                                                         |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| Stars         | `star.created`, `star.deleted`                                                               |
+| Issues        | `issue.opened`, `issue.closed`, `issue.reopened`                                             |
 | Pull requests | `pull_request.opened`, `pull_request.closed`, `pull_request.merged`, `pull_request.reopened` |
-| Forks | `fork.created` |
-| Pushes | `push.default_branch` |
-| Releases | `release.published` (including pre-releases) |
+| Forks         | `fork.created`                                                                               |
+| Pushes        | `push.default_branch`                                                                        |
+| Releases      | `release.published` (including pre-releases)                                                 |
 
 Pushes are announced only for the repository's default branch, as one message with
 the latest commits. Fast-forwarding the default branch to commits that were pushed to
@@ -137,10 +137,10 @@ Unsupported and skipped events are acknowledged with `200` and ignored.
 
 ### Public routes
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/webhook` | GitHub webhook ingestion and acceptance |
-| `GET` | `/public/feed?limit=50` | recent public activity and star history, read by ayagmar.dev |
+| Method | Path                    | Purpose                                                      |
+| ------ | ----------------------- | ------------------------------------------------------------ |
+| `POST` | `/webhook`              | GitHub webhook ingestion and acceptance                      |
+| `GET`  | `/public/feed?limit=50` | recent public activity and star history, read by ayagmar.dev |
 
 `/public/feed` needs no token. It lists releases, stars, default-branch pushes and merged
 pull requests from the last 90 days, newest first (`limit` from 1 to 100, default 50), plus
@@ -161,16 +161,16 @@ All admin routes require:
 Authorization: Bearer <ADMIN_API_TOKEN>
 ```
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/admin/health` | lightweight operational health |
-| `GET` | `/admin/status` | service status plus ledger stats |
-| `GET` | `/admin/deliveries` | list persisted deliveries |
-| `GET` | `/admin/deliveries/:deliveryId` | inspect one delivery and attempts |
-| `POST` | `/admin/deliveries/:deliveryId/retry` | retry a failed delivery |
-| `GET` | `/admin/events` | list the 50 most recent events from the permanent history |
-| `GET` | `/admin/openapi.json` | authenticated OpenAPI document |
-| `GET` | `/admin/docs` | authenticated Swagger UI |
+| Method | Path                                  | Purpose                                                   |
+| ------ | ------------------------------------- | --------------------------------------------------------- |
+| `GET`  | `/admin/health`                       | lightweight operational health                            |
+| `GET`  | `/admin/status`                       | service status plus ledger stats                          |
+| `GET`  | `/admin/deliveries`                   | list persisted deliveries                                 |
+| `GET`  | `/admin/deliveries/:deliveryId`       | inspect one delivery and attempts                         |
+| `POST` | `/admin/deliveries/:deliveryId/retry` | retry a failed delivery                                   |
+| `GET`  | `/admin/events`                       | list the 50 most recent events from the permanent history |
+| `GET`  | `/admin/openapi.json`                 | authenticated OpenAPI document                            |
+| `GET`  | `/admin/docs`                         | authenticated Swagger UI                                  |
 
 ## Metrics and operational numbers
 
@@ -180,37 +180,37 @@ Repo Pulse exposes delivery-ledger metrics directly from the admin surface.
 
 Returned from `GET /admin/status`:
 
-| Metric | Meaning |
-| --- | --- |
-| `total` | total tracked deliveries |
-| `pending` | queued and waiting to be processed |
-| `processing` | currently leased by a worker |
-| `failed` | terminal failures after retry policy |
-| `succeeded` | successfully delivered notifications |
+| Metric       | Meaning                              |
+| ------------ | ------------------------------------ |
+| `total`      | total tracked deliveries             |
+| `pending`    | queued and waiting to be processed   |
+| `processing` | currently leased by a worker         |
+| `failed`     | terminal failures after retry policy |
+| `succeeded`  | successfully delivered notifications |
 
 Returned from `GET /admin/health`:
 
-| Field | Meaning |
-| --- | --- |
-| `status` | current service health indicator |
-| `providers` | configured notifier names |
+| Field               | Meaning                              |
+| ------------------- | ------------------------------------ |
+| `status`            | current service health indicator     |
+| `providers`         | configured notifier names            |
 | `trackedDeliveries` | current delivery count in the ledger |
 
 ### Runtime defaults
 
 These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy.ts`:
 
-| Setting | Value |
-| --- | --- |
-| Webhook max body | `1,048,576` bytes |
-| Max delivery attempts | `5` |
-| Retry base delay | `30s` |
-| Retry max delay | `15m` |
-| Succeeded retention | `14 days` |
-| Processing lease | `5m` |
-| Drain batch size | `5` (keeps a run within the Free plan's 50 subrequests) |
-| Cron cadence | every minute |
-| Digest time | `09:00` in `DIGEST_TIME_ZONE` (`Africa/Casablanca`) |
+| Setting               | Value                                                   |
+| --------------------- | ------------------------------------------------------- |
+| Webhook max body      | `1,048,576` bytes                                       |
+| Max delivery attempts | `5`                                                     |
+| Retry base delay      | `30s`                                                   |
+| Retry max delay       | `15m`                                                   |
+| Succeeded retention   | `14 days`                                               |
+| Processing lease      | `5m`                                                    |
+| Drain batch size      | `5` (keeps a run within the Free plan's 50 subrequests) |
+| Cron cadence          | every minute                                            |
+| Digest time           | `09:00` in `DIGEST_TIME_ZONE` (`Africa/Casablanca`)     |
 
 ## Architecture in one screen
 
