@@ -546,6 +546,23 @@ describe('public feed', () => {
     expect(response.status, text).toBe(503);
   });
 
+  it('answers an empty feed when every candidate leaves the star window at UTC midnight', async () => {
+    vi.setSystemTime(new Date('2026-10-26T23:59:59.900Z'));
+    // Removed stars: star history only, no published events.
+    visibility.set('ayagmar/ccdesk', 'public');
+    await record(star('ayagmar/ccdesk', 3, false, true), '2026-07-29T12:00:00.000Z');
+    visibility.set('ayagmar/runnerd', 'timeout');
+    await record(star('ayagmar/runnerd', 8, false, true), '2026-07-29T13:00:00.000Z');
+    beforeAnswer = (): undefined => {
+      vi.setSystemTime(new Date('2026-10-27T00:00:00.000Z'));
+    };
+
+    const { response, text } = await getFeed();
+
+    expect(response.status, text).toBe(200);
+    expect(JSON.parse(text)).toMatchObject({ events: [], starHistory: [] });
+  });
+
   it('never shows a repository on an answer older than 60 seconds when GitHub fails', async () => {
     visibility.set('ayagmar/runnerd', 'public');
     await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');

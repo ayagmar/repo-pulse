@@ -70,5 +70,5 @@ export interface RepositoryAdmission {
   /** The repositories GitHub shows as public right now. */
   admitted: Set<string>;
   /** Repositories left out without a definitive denial (`404` or `"private": true`). */
-  unresolved: number;
+  unresolved: Set<string>;
 }

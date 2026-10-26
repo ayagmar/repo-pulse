@@ -236,17 +236,22 @@ export async function buildPublicFeed(
 
   // Built without waiting on anything after the visibility check.
   const builtAt = new Date();
+  const starHistory = toStarHistory(material.starDays, builtAt);
   const feed: PublicFeed = {
     version: 1,
     generatedAt: builtAt.toISOString(),
     events: events.filter((event) => admitted.has(event.repo)),
-    starHistory: toStarHistory(material.starDays, builtAt)
+    starHistory: starHistory
       .filter((entry) => admitted.has(entry.repo))
       .slice(0, STAR_HISTORY_MAX_REPOSITORIES),
   };
-  // Decided on what is shown: past UTC midnight an admitted repository's only star
-  // day may have left the window.
-  if (feed.events.length === 0 && feed.starHistory.length === 0 && unresolved > 0) {
+  // Decided on the candidates at `builtAt`: past UTC midnight a repository's only
+  // star day may have left the window, admitted or not.
+  if (
+    feed.events.length === 0 &&
+    feed.starHistory.length === 0 &&
+    [...events, ...starHistory].some((item) => unresolved.has(item.repo))
+  ) {
     return 'visibility_unavailable';
   }
   return feed;

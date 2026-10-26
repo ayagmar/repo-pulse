@@ -44,7 +44,7 @@ export class RepositoryVisibilityGate {
    * both this request's own answer and the cached one to say public. Build the
    * response without waiting on anything else after this resolves.
    *
-   * `unresolved` counts the repositories left out without a definitive denial: a
+   * `unresolved` lists the repositories left out without a definitive denial: a
    * failed lookup, a cached failure, no lookup within the budget, or an answer
    * that expired before it could be used.
    */
@@ -73,14 +73,14 @@ export class RepositoryVisibilityGate {
       logger.warn('visibility.lookup_budget_exhausted', { component: 'github', omitted: skipped });
     }
     const admitted = new Set<string>();
-    let unresolved = 0;
+    const unresolved = new Set<string>();
     for (const repository of candidates) {
       const own = ownAnswers.get(repository);
       const fresh = this.freshAnswer(repository);
       if ((own === undefined || own === 'public') && fresh === 'public') {
         admitted.add(repository);
       } else if (own !== 'denied' && fresh !== 'denied') {
-        unresolved += 1;
+        unresolved.add(repository);
       }
     }
     return { admitted, unresolved };
