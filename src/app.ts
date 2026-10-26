@@ -1,3 +1,4 @@
+import type { MiddlewareHandler } from 'hono';
 import { Hono } from 'hono';
 import { createConfig } from './config/env.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
@@ -14,6 +15,7 @@ import { createAdminAuthMiddleware } from './http/middleware/admin-auth.js';
 import { createErrorHandler } from './http/middleware/error-handler.js';
 import { requestLogger } from './http/middleware/logger.js';
 import { createAdminRoutes } from './http/routes/admin.js';
+import { createPublicFeedRoutes } from './http/routes/public-feed.js';
 import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
 import { GitHubInsights } from './providers/github/github-insights.js';
@@ -50,10 +52,13 @@ export function createApp(): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
 
   // Reuse routes, but derive clients and configuration from each request's bindings.
-  app.use('*', async (c, next) => {
+  // The public feed needs neither, so a missing secret does not break it.
+  const runtime: MiddlewareHandler<HttpEnv> = async (c, next) => {
     c.set('runtime', buildRuntime(c.env));
     await next();
-  });
+  };
+  app.use('/webhook/*', runtime);
+  app.use('/admin/*', runtime);
   app.use('*', requestLogger);
   app.onError((error, c) =>
     createErrorHandler((c.env.NODE_ENV ?? 'development') === 'development')(error, c)
@@ -62,6 +67,7 @@ export function createApp(): Hono<HttpEnv> {
   app.route('/webhook', createWebhookRoutes());
   app.use('/admin/*', createAdminAuthMiddleware());
   app.route('/admin', createAdminRoutes());
+  app.route('/public', createPublicFeedRoutes());
 
   return app;
 }

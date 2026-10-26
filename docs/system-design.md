@@ -95,6 +95,17 @@ stateDiagram-v2
 - Each stored event includes `repository.private`, so readers can leave private repositories out. Events backfilled from the ledger by migration `0004` predate that field and are recorded as private.
 - `GET /admin/events` lists the 50 most recent events.
 
+### Public feed
+
+- `GET /public/feed` is unauthenticated and read-only. ayagmar.dev's signals Worker pulls it every 15 minutes. The contract (ADR 0012) and its JSON Schema live in ayagmar.dev; a copy of the schema validates the output in `src/__tests__/public-feed.test.ts`.
+- One D1 read per `limit` value builds the material: the newest `limit` events of the four published types from the last 90 days, and the last star count of each UTC day in those 90 days for every repository. Only events whose stored `repository.private` is JSON `false` are read, and only the fields the feed publishes. The events query walks `idx_events_received_at` newest first and stops after `limit` matches, so its rows read follow the share of feed events in recent history, not the size of the table (233 rows for `limit=100` on production data in October 2026, plus 145 for star history).
+- The material is kept in the isolate for 300 seconds, then in the Cache API for 300 seconds under `https://repo-pulse.internal/...`, a host the route never serves. On `*.workers.dev` the Cache API may store nothing; the isolate copy still holds D1 to one read per `limit` per isolate every 300 seconds.
+- A rate-limit binding (`FEED_RATE_LIMIT`, 10 requests a minute per `CF-Connecting-IP` and Cloudflare location) answers `429 {"error":"rate_limited"}`, so a loop on the public URL cannot use up the account's D1 reads, which webhooks and signals share.
+- Each response checks every repository it would show with `GET https://api.github.com/repos/{owner}/{repo}` (no redirects, three-second timeout). The request carries `GITHUB_PUBLIC_TOKEN` when set, a token that can read public repositories only, so a private repository answers `404` as it would without a token; never `GITHUB_TOKEN`. Only a `200` whose body has `"private": false` admits it; a `404`, a rate limit, an error, a timeout or an unreadable body leaves it out. Each answer is cached in the isolate for 60 seconds, counted from when the lookup was sent. The answers are read again after the last lookup of the response settles, so one that expired in the meantime does not count.
+- A response makes at most 40 GitHub lookups, so it stays within the Free plan's 50 subrequests with the cache and D1 reads. Repositories past that are left out of that response, oldest activity first.
+- Values that would break the schema, such as a URL outside `https://github.com/` or a malformed count, drop their event or star-history day.
+- The response is sent with `Cache-Control: no-store`, so no copy outlives the visibility check. Errors are `400 {"error":"invalid_query"}`, `405`, `429 {"error":"rate_limited"}` and `500 {"error":"internal_error"}`, without details.
+
 ### Digests
 
 - The every-minute cron checks the local time in `DIGEST_TIME_ZONE`. During the first ten minutes after `DIGEST_HOUR`, it summarizes the events received since that hour on the previous local day and sends one message per provider.

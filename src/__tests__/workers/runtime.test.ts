@@ -241,4 +241,62 @@ describe('Workers runtime integration', () => {
       ).all()
     ).resolves.toMatchObject({ results: [{ digestId: 'daily:2026-10-15', sent: 1 }] });
   });
+
+  it('serves the public feed from cached D1 material and checks visibility on every response', async () => {
+    // A stubbed GitHub: this suite makes no outbound requests.
+    let repositoryIsPublic = true;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() =>
+        Promise.resolve(
+          repositoryIsPublic
+            ? Response.json({ private: false })
+            : Response.json({ message: 'Not Found' }, { status: 404 })
+        )
+      );
+    // Today, so the stars stay inside the feed's 90-day window whenever this runs.
+    const today = new Date().toISOString().slice(0, 10);
+    for (const [deliveryId, receivedAt, count] of [
+      ['star-1', `${today}T00:00:00.000Z`, 1],
+      ['star-2', `${today}T00:00:00.001Z`, 2],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+         VALUES (?, 'star.created', 'myorg/repo', ?, ?)`
+      )
+        .bind(deliveryId, receivedAt, serializeRepoEvent({ ...event, star: { count } }))
+        .run();
+    }
+    const getFeed = async (): Promise<Response> => {
+      const context = createExecutionContext();
+      const response = await worker.fetch(
+        new Request('https://example.com/public/feed?limit=7'),
+        env,
+        context
+      );
+      await waitOnExecutionContext(context);
+      return response;
+    };
+
+    const first = await getFeed();
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({
+      events: [{ star: { count: 2 } }, { star: { count: 1 } }],
+      starHistory: [{ repo: 'myorg/repo', points: [{ date: today, stars: 2 }] }],
+    });
+
+    // The material is cached: the next response is built without D1.
+    await env.DB.prepare('DELETE FROM events').run();
+    const cached = await getFeed();
+    await expect(cached.json()).resolves.toMatchObject({ events: [{}, {}] });
+    expect(cached.headers.get('Cache-Control')).toBe('no-store');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+
+    repositoryIsPublic = false;
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+    await expect((await getFeed()).json()).resolves.toMatchObject({
+      events: [],
+      starHistory: [],
+    });
+  });
 });

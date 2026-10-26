@@ -72,6 +72,21 @@ npx wrangler secret put GITHUB_TOKEN
 
 Without the token, or when GitHub does not answer, digests and alerts are posted without those details.
 
+### Optional: a public-only GitHub token for the feed
+
+`/public/feed` asks GitHub whether each repository is public. Without a token those
+requests share GitHub's limit of 60 an hour per IP with every Worker on the same
+Cloudflare egress IP, so the feed can come back empty. Create a
+[fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
+with **Repository access: Public repositories** and no permissions, then add it:
+
+```bash
+npx wrangler secret put GITHUB_PUBLIC_TOKEN < ~/.config/repo-pulse/github-public-token
+```
+
+Do not reuse `GITHUB_TOKEN` here: it can read private repositories. With a public-only
+token a private repository still answers `404`, and the feed also requires `"private": false`.
+
 ## Subscribe repositories
 
 GitHub has no account-wide webhooks, so each repository needs its own. With the [GitHub CLI](https://cli.github.com/) logged in as a repository admin:
@@ -120,11 +135,21 @@ Unsupported and skipped events are acknowledged with `200` and ignored.
 
 ## API surface
 
-### Public route
+### Public routes
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/webhook` | GitHub webhook ingestion and acceptance |
+| `GET` | `/public/feed?limit=50` | recent public activity and star history, read by ayagmar.dev |
+
+`/public/feed` needs no token. It lists releases, stars, default-branch pushes and merged
+pull requests from the last 90 days, newest first (`limit` from 1 to 100, default 50), plus
+each repository's daily star count over the same 90 days. Each client may ask 10 times a
+minute. A repository appears only while GitHub's
+API says it is public, checked at most 60 seconds before the response,
+and only its events that were recorded as public. No sender, body, label, commit
+message or delivery state is published. The contract is
+[ADR 0012 in ayagmar.dev](https://github.com/ayagmar/ayagmar.dev/blob/e42eb2aea603bdaeeadccafffa32ef91d05f1825/docs/adr/0012-repo-pulse-public-feed.md).
 
 ### Admin routes
 
@@ -249,12 +274,14 @@ npm run build
 - notification dispatch is asynchronous and recoverable; provider sends are at-least-once when an invocation is interrupted
 - retries and stale-processing recovery are driven from D1 state plus cron
 - admin routes stay protected by bearer auth
+- the public feed shows a repository only while GitHub confirms it is public, never from an answer older than 60 seconds
 
 ## Repo navigation
 
 ```text
 src/http/routes/webhook.ts      webhook ingestion
 src/http/routes/admin.ts        admin API surface
+src/http/routes/public-feed.ts  public feed for ayagmar.dev
 src/http/openapi.ts             OpenAPI document + Swagger UI page
 src/core/services/d1-delivery-ledger.ts
 src/core/services/durable-event-processor.ts
