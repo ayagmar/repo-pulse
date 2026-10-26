@@ -529,6 +529,23 @@ describe('public feed', () => {
     await expectStatus(503);
   });
 
+  it('answers 503 when an admitted repository leaves the star window at UTC midnight', async () => {
+    vi.setSystemTime(new Date('2026-10-26T23:59:59.900Z'));
+    // ccdesk's only star day is the first of the 90; at midnight it leaves the window.
+    visibility.set('ayagmar/ccdesk', 'public');
+    await record(star('ayagmar/ccdesk', 3), '2026-07-29T12:00:00.000Z');
+    visibility.set('ayagmar/runnerd', 'timeout');
+    await record(star('ayagmar/runnerd', 8), '2026-10-26T12:00:00.000Z');
+    beforeAnswer = (): undefined => {
+      vi.setSystemTime(new Date('2026-10-27T00:00:00.000Z'));
+    };
+
+    // With limit=1 ccdesk is only in star history.
+    const { response, text } = await getFeed('?limit=1');
+
+    expect(response.status, text).toBe(503);
+  });
+
   it('never shows a repository on an answer older than 60 seconds when GitHub fails', async () => {
     visibility.set('ayagmar/runnerd', 'public');
     await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
@@ -571,10 +588,12 @@ describe('public feed', () => {
       await record(push(fullName), '2026-10-25T21:14:00.000Z');
     }
 
+    let cachedAnswers = 0;
     for (let seed = 1; seed <= 5; seed += 1) {
+      // Park-Miller: every product stays an exact integer.
       let state = seed;
       const random = (bound: number): number => {
-        state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+        state = (state * 48_271) % 2_147_483_647;
         return state % bound;
       };
       // What a correct isolate remembers: each repository's last answer and when it was asked.
@@ -589,15 +608,19 @@ describe('public feed', () => {
           answers = new Map();
         }
         vi.setSystemTime(new Date(Date.now() + random(90) * 1000));
+        let lookups = 0;
         for (const fullName of repositories) {
           const answer = answers.get(fullName);
           if (answer === undefined || Date.now() >= answer.askedAt + 60_000) {
+            lookups += 1;
             answers.set(fullName, {
               kind: visibility.get(fullName) ?? 'not_found',
               askedAt: Date.now(),
             });
           }
         }
+        cachedAnswers += repositories.length - lookups;
+        const lookupsBefore = githubLookups.length;
         const outcomes = repositories.map((fullName) =>
           outcome(answers.get(fullName)?.kind ?? 'not_found')
         );
@@ -606,6 +629,7 @@ describe('public feed', () => {
         const { response, text } = await getFeed();
 
         const label = `seed ${String(seed)}, step ${String(step)}`;
+        expect(githubLookups.length - lookupsBefore, label).toBe(lookups);
         if (admitted.length === 0 && outcomes.includes('unresolved')) {
           expect(response.status, label).toBe(503);
         } else {
@@ -615,6 +639,8 @@ describe('public feed', () => {
         }
       }
     }
+    // The sequences reuse cached answers, not only fresh lookups.
+    expect(cachedAnswers).toBeGreaterThan(100);
   });
 
   it('looks up at most 40 repositories per response and omits the rest', async () => {

@@ -213,7 +213,7 @@ async function loadMaterial(
  * shows as public right now. The material may come from a cache; the visibility
  * check runs for every response.
  *
- * `visibility_unavailable` when nothing was admitted and some repository was left
+ * `visibility_unavailable` when nothing is shown and some repository was left
  * out without a definitive denial, so an empty feed always means nothing is public,
  * never that GitHub could not be asked.
  */
@@ -233,13 +233,10 @@ export async function buildPublicFeed(
     ],
     VISIBILITY_LOOKUP_BUDGET
   );
-  if (admitted.size === 0 && unresolved > 0) {
-    return 'visibility_unavailable';
-  }
 
   // Built without waiting on anything after the visibility check.
   const builtAt = new Date();
-  return {
+  const feed: PublicFeed = {
     version: 1,
     generatedAt: builtAt.toISOString(),
     events: events.filter((event) => admitted.has(event.repo)),
@@ -247,4 +244,10 @@ export async function buildPublicFeed(
       .filter((entry) => admitted.has(entry.repo))
       .slice(0, STAR_HISTORY_MAX_REPOSITORIES),
   };
+  // Decided on what is shown: past UTC midnight an admitted repository's only star
+  // day may have left the window.
+  if (feed.events.length === 0 && feed.starHistory.length === 0 && unresolved > 0) {
+    return 'visibility_unavailable';
+  }
+  return feed;
 }
