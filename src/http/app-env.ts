@@ -6,7 +6,7 @@ import type { DurableEventProcessor } from '../core/services/durable-event-proce
 import type { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
 
 export interface HttpEnv {
-  Bindings: ConfigEnv & { DB: D1DatabaseLike };
+  Bindings: ConfigEnv & { DB: D1DatabaseLike; FEED_RATE_LIMIT: RateLimit };
   Variables: {
     runtime: {
       config: ReturnType<typeof createConfig>;

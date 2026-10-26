@@ -29,6 +29,10 @@
     "DIGEST_TIME_ZONE": "Africa/Casablanca",
     "DIGEST_HOUR": "9"
   },
+  // Best-effort limit on GET /public/feed per client IP and Cloudflare location.
+  "ratelimits": [
+    { "name": "FEED_RATE_LIMIT", "namespace_id": "2001", "simple": { "limit": 10, "period": 60 } }
+  ],
   "triggers": {
     "crons": ["* * * * *"]
   },

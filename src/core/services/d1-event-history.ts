@@ -127,9 +127,10 @@ export class D1EventHistory {
 
   /**
    * What the public feed is built from, before any visibility check: the newest
-   * `limit` events of the published types, and each repository's star count at
-   * the end of every UTC day since `since` that had a star change. Only events
-   * recorded as public are read, and only the fields the feed publishes.
+   * `limit` events of the published types received since `since`, and each
+   * repository's star count at the end of every UTC day since then that had a
+   * star change. Only events recorded as public are read, and only the fields the
+   * feed publishes.
    */
   async readPublicFeedMaterial(limit: number, since: Date): Promise<PublicFeedMaterial> {
     // Only a JSON `false` in `$.repository.private` counts as recorded public: true,
@@ -137,6 +138,9 @@ export class D1EventHistory {
     // does not. Each field is read only when stored with its JSON type, because SQLite
     // would turn `true` into 1, a non-array into a length of 0, and an object into
     // its JSON text, nested fields included.
+    // The events query walks the time index newest first and stops after `limit`
+    // matches. The planner would otherwise pick the type index and sort every match;
+    // on a public route, D1 rows read must not grow with the history.
     const [events, starDays] = await Promise.all([
       this.db
         .prepare(
@@ -160,15 +164,16 @@ export class D1EventHistory {
                THEN json_extract(event_json, '$.pullRequest.title') END AS pullRequestTitle,
              CASE WHEN json_type(event_json, '$.pullRequest.url') = 'text'
                THEN json_extract(event_json, '$.pullRequest.url') END AS pullRequestUrl
-           FROM events
+           FROM events INDEXED BY idx_events_received_at
            WHERE event_type IN (
                'release.published', 'star.created', 'push.default_branch', 'pull_request.merged'
              )
+             AND received_at >= ?
              AND json_type(event_json, '$.repository.private') = 'false'
            ORDER BY received_at DESC, delivery_id DESC
            LIMIT ?`
         )
-        .bind(limit)
+        .bind(since.toISOString(), limit)
         .all<PublicFeedMaterial['events'][number]>(),
       this.db
         .prepare(

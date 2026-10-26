@@ -25,9 +25,17 @@ export interface MaterialCache {
   put(key: string, response: Response): Promise<void>;
 }
 
+/** Material read from D1 by this isolate, by `limit`. */
+export type MaterialMemory = Map<number, { material: PublicFeedMaterial; expiresAt: number }>;
+
 interface PublicFeedSources {
   readMaterial(limit: number, since: Date): Promise<PublicFeedMaterial>;
   admit(repositories: readonly string[], lookupBudget: number): Promise<Set<string>>;
+  /**
+   * Checked before the Cache API, which is per location and may store nothing on
+   * `*.workers.dev`: a warm isolate never reads D1 more than once per 300 seconds.
+   */
+  memory: MaterialMemory;
   /** The Cache API, or null where the runtime has none. */
   cache: MaterialCache | null;
   waitUntil(promise: Promise<unknown>): void;
@@ -164,6 +172,10 @@ async function loadMaterial(
   limit: number,
   now: Date
 ): Promise<PublicFeedMaterial> {
+  const remembered = sources.memory.get(limit);
+  if (remembered && now.getTime() < remembered.expiresAt) {
+    return remembered.material;
+  }
   const key = `${MATERIAL_CACHE_URL}?limit=${String(limit)}`;
   const cached = await sources.cache?.match(key);
   if (cached) {
@@ -171,6 +183,10 @@ async function loadMaterial(
   }
 
   const material = await sources.readMaterial(limit, starHistoryStart(now));
+  sources.memory.set(limit, {
+    material,
+    expiresAt: now.getTime() + MATERIAL_TTL_SECONDS * 1000,
+  });
   if (sources.cache) {
     sources.waitUntil(
       sources.cache

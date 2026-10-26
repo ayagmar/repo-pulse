@@ -232,8 +232,8 @@ describe('public feed', () => {
     return { response, text };
   }
 
-  async function feedRepositories(): Promise<string[]> {
-    const { text } = await getFeed();
+  async function feedRepositories(query = ''): Promise<string[]> {
+    const { text } = await getFeed(query);
     const feed = JSON.parse(text) as {
       events: { repo: string }[];
       starHistory: { repo: string }[];
@@ -298,7 +298,7 @@ describe('public feed', () => {
     visibility.set('ayagmar/ccdesk', 'public');
     visibility.set('ayagmar/secret', 'not_found');
     visibility.set('ayagmar/flagged', 'private');
-    // Before the 90-day window, so it does not count.
+    // Before the 90-day window, so neither an event nor a star-history day.
     await record(star('ayagmar/pi-mobile', 90), '2026-07-28T23:59:59.000Z');
     await record(star('ayagmar/pi-mobile', 111), '2026-07-29T00:00:00.000Z');
     await record(star('ayagmar/pi-mobile', 112), '2026-10-24T08:12:00.000Z');
@@ -377,12 +377,6 @@ describe('public feed', () => {
           repo: 'ayagmar/pi-mobile',
           at: '2026-07-29T00:00:00.000Z',
           star: { count: 111 },
-        },
-        {
-          type: 'star.created',
-          repo: 'ayagmar/pi-mobile',
-          at: '2026-07-28T23:59:59.000Z',
-          star: { count: 90 },
         },
       ],
       starHistory: [
@@ -534,13 +528,13 @@ describe('public feed', () => {
     visibility.set('ayagmar/runnerd', 'not_found');
     visibility.set('ayagmar/ccdesk', 'public');
     await record(push('ayagmar/ccdesk'), '2026-10-25T21:15:00.000Z');
-    cacheEntries.clear();
     vi.setSystemTime(new Date('2026-10-26T08:45:59.000Z'));
     beforeAnswer = (): undefined => {
       vi.setSystemTime(new Date('2026-10-26T08:46:00.000Z'));
     };
 
-    await expect(feedRepositories()).resolves.toEqual(['ayagmar/ccdesk']);
+    // Another limit, so the material is read again and includes ccdesk.
+    await expect(feedRepositories('?limit=49')).resolves.toEqual(['ayagmar/ccdesk']);
   });
 
   it('reads only well-formed events recorded as public', async () => {
@@ -703,5 +697,47 @@ describe('public feed', () => {
 
     await expect(feedRepositories()).resolves.toEqual(['ayagmar/runnerd']);
     expect(githubAuthorizations).toEqual(['Bearer public-token', 'Bearer public-token']);
+  });
+
+  it('reads D1 at most once per 300 seconds per isolate, even without the Cache API', async () => {
+    vi.stubGlobal('caches', undefined);
+    visibility.set('ayagmar/runnerd', 'public');
+    await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
+    await expect(feedRepositories()).resolves.toEqual(['ayagmar/runnerd']);
+
+    // Any further D1 read would see the history gone.
+    await env.DB.exec('DELETE FROM events');
+    vi.setSystemTime(new Date('2026-10-26T08:49:59.999Z'));
+    await expect(feedRepositories()).resolves.toEqual(['ayagmar/runnerd']);
+
+    vi.setSystemTime(new Date('2026-10-26T08:50:00.000Z'));
+    await expect(feedRepositories()).resolves.toEqual([]);
+  });
+
+  it('rate limits each client', async () => {
+    const allowed = new Map<string, number>([
+      ['198.51.100.1', 1],
+      ['198.51.100.2', 1],
+    ]);
+    env = {
+      ...env,
+      FEED_RATE_LIMIT: {
+        limit: ({ key }: { key: string }): Promise<{ success: boolean }> => {
+          const remaining = allowed.get(key) ?? 0;
+          allowed.set(key, remaining - 1);
+          return Promise.resolve({ success: remaining > 0 });
+        },
+      },
+    };
+    const fromClient = (ip: string): Promise<{ response: Response; text: string }> =>
+      getFeed('', { headers: { 'CF-Connecting-IP': ip } });
+
+    await expect(fromClient('198.51.100.1')).resolves.toHaveProperty('response.status', 200);
+    const limited = await fromClient('198.51.100.1');
+    await expect(fromClient('198.51.100.2')).resolves.toHaveProperty('response.status', 200);
+
+    expect(limited.response.status).toBe(429);
+    expect(limited.response.headers.get('Cache-Control')).toBe('no-store');
+    expect(JSON.parse(limited.text)).toEqual({ error: 'rate_limited' });
   });
 });

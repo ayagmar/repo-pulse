@@ -143,8 +143,9 @@ Unsupported and skipped events are acknowledged with `200` and ignored.
 | `GET` | `/public/feed?limit=50` | recent public activity and star history, read by ayagmar.dev |
 
 `/public/feed` needs no token. It lists releases, stars, default-branch pushes and merged
-pull requests, newest first (`limit` from 1 to 100, default 50), plus each repository's
-daily star count over the last 90 days. A repository appears only while GitHub's
+pull requests from the last 90 days, newest first (`limit` from 1 to 100, default 50), plus
+each repository's daily star count over the same 90 days. Each client may ask 10 times a
+minute. A repository appears only while GitHub's
 API says it is public, checked at most 60 seconds before the response,
 and only its events that were recorded as public. No sender, body, label, commit
 message or delivery state is published. The contract is

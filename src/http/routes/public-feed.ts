@@ -2,7 +2,11 @@ import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
 import { logger } from '../../core/services/logger.js';
-import { buildPublicFeed, type MaterialCache } from '../../core/services/public-feed.js';
+import {
+  buildPublicFeed,
+  type MaterialCache,
+  type MaterialMemory,
+} from '../../core/services/public-feed.js';
 import { RepositoryVisibilityGate } from '../../providers/github/repository-visibility.js';
 import type { HttpEnv } from '../app-env.js';
 
@@ -32,7 +36,11 @@ function defaultCache(): MaterialCache | null {
 }
 
 /** Every answer of this route: no shared caches, so none outlives the visibility check. */
-function feedJson(c: Context<HttpEnv>, body: unknown, status: 200 | 400 | 405 | 500): Response {
+function feedJson(
+  c: Context<HttpEnv>,
+  body: unknown,
+  status: 200 | 400 | 405 | 429 | 500
+): Response {
   c.header('Cache-Control', 'no-store');
   return c.json(body, status);
 }
@@ -45,6 +53,7 @@ export function createPublicFeedRoutes(
   gate: RepositoryVisibilityGate = new RepositoryVisibilityGate()
 ): Hono<HttpEnv> {
   const router = new Hono<HttpEnv>();
+  const memory: MaterialMemory = new Map();
 
   router.onError((error, c) => {
     logger.error('public_feed.failed', { component: 'public-feed', error });
@@ -52,6 +61,15 @@ export function createPublicFeedRoutes(
   });
 
   router.get('/feed', async (c) => {
+    // Per client and Cloudflare location, so a loop on this public URL cannot spend
+    // the account's D1 reads or GitHub lookups. signals asks every 15 minutes.
+    const { success } = await c.env.FEED_RATE_LIMIT.limit({
+      key: c.req.header('CF-Connecting-IP') ?? 'unknown',
+    });
+    if (!success) {
+      return feedJson(c, { error: 'rate_limited' }, 429);
+    }
+
     const limit = parseLimit(c.req.query('limit'));
     if (limit === null) {
       return feedJson(c, { error: 'invalid_query' }, 400);
@@ -65,6 +83,7 @@ export function createPublicFeedRoutes(
         // Never GITHUB_TOKEN: it can read private repositories.
         admit: (repositories, lookupBudget) =>
           gate.admit(repositories, lookupBudget, c.env.GITHUB_PUBLIC_TOKEN),
+        memory,
         cache: defaultCache(),
         waitUntil: (promise) => {
           c.executionCtx.waitUntil(promise);

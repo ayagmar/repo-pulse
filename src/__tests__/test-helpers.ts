@@ -102,7 +102,7 @@ type TestEnvOverrides = {
   [Key in keyof ConfigEnv]?: string | undefined;
 };
 
-type TestEnv = ConfigEnv & { DB: TestD1Database };
+type TestEnv = ConfigEnv & { DB: TestD1Database; FEED_RATE_LIMIT: RateLimit };
 
 export function createTestD1Database(databasePath: string): TestD1Database {
   const database = new Database(databasePath);
@@ -146,6 +146,7 @@ export function createTestD1Database(databasePath: string): TestD1Database {
 export function createTestEnv(databasePath: string, overrides: TestEnvOverrides = {}): TestEnv {
   return {
     DB: createTestD1Database(databasePath),
+    FEED_RATE_LIMIT: { limit: () => Promise.resolve({ success: true }) },
     NODE_ENV: 'test',
     LOG_LEVEL: 'error',
     GITHUB_WEBHOOK_SECRET: 'test-secret',
