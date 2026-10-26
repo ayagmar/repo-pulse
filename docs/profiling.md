@@ -32,7 +32,7 @@ Workers Scripts Read / Content Read-Only Workers permissions. Never put token va
 in command arguments, reports, or git.
 
 Choose the UUID of a version **actively serving traffic** from the current deployment.
-`latest` selects the newest *created* version, which may not be deployed. For a gradual
+`latest` selects the newest _created_ version, which may not be deployed. For a gradual
 rollout, identify the version and percentage you intend to measure.
 
 ```bash

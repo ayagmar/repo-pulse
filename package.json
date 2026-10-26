@@ -40,7 +40,7 @@
     "hono": "^4.13.13"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.3",
     "@cloudflare/vitest-plugin": "^1.4.7",
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
