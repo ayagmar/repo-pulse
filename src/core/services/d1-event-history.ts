@@ -1,3 +1,4 @@
+import type { PublicFeedMaterial } from '../models/public-feed.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
@@ -122,6 +123,79 @@ export class D1EventHistory {
       .all<RecentStar>();
 
     return rows.results;
+  }
+
+  /**
+   * What the public feed is built from, before any visibility check: the newest
+   * `limit` events of the published types, and each repository's star count at
+   * the end of every UTC day since `since` that had a star change. Only events
+   * recorded as public are read, and only the fields the feed publishes.
+   */
+  async readPublicFeedMaterial(limit: number, since: Date): Promise<PublicFeedMaterial> {
+    // Only a JSON `false` in `$.repository.private` counts as recorded public: true,
+    // a missing flag (events from before visibility was stored) or any other value
+    // does not. Each field is read only when stored with its JSON type, because SQLite
+    // would turn `true` into 1, a non-array into a length of 0, and an object into
+    // its JSON text, nested fields included.
+    const [events, starDays] = await Promise.all([
+      this.db
+        .prepare(
+          `SELECT
+             event_type AS type,
+             repository,
+             received_at AS at,
+             CASE WHEN json_type(event_json, '$.release.tagName') = 'text'
+               THEN json_extract(event_json, '$.release.tagName') END AS releaseTag,
+             CASE WHEN json_type(event_json, '$.release.url') = 'text'
+               THEN json_extract(event_json, '$.release.url') END AS releaseUrl,
+             CASE WHEN json_type(event_json, '$.star.count') = 'integer'
+               THEN json_extract(event_json, '$.star.count') END AS starCount,
+             CASE WHEN json_type(event_json, '$.push.compareUrl') = 'text'
+               THEN json_extract(event_json, '$.push.compareUrl') END AS compareUrl,
+             CASE WHEN json_type(event_json, '$.push.commits') = 'array'
+               THEN json_array_length(event_json, '$.push.commits') END AS commitCount,
+             CASE WHEN json_type(event_json, '$.pullRequest.number') = 'integer'
+               THEN json_extract(event_json, '$.pullRequest.number') END AS pullRequestNumber,
+             CASE WHEN json_type(event_json, '$.pullRequest.title') = 'text'
+               THEN json_extract(event_json, '$.pullRequest.title') END AS pullRequestTitle,
+             CASE WHEN json_type(event_json, '$.pullRequest.url') = 'text'
+               THEN json_extract(event_json, '$.pullRequest.url') END AS pullRequestUrl
+           FROM events
+           WHERE event_type IN (
+               'release.published', 'star.created', 'push.default_branch', 'pull_request.merged'
+             )
+             AND json_type(event_json, '$.repository.private') = 'false'
+           ORDER BY received_at DESC, delivery_id DESC
+           LIMIT ?`
+        )
+        .bind(limit)
+        .all<PublicFeedMaterial['events'][number]>(),
+      this.db
+        .prepare(
+          `SELECT repository, date, stars
+           FROM (
+             SELECT
+               repository,
+               substr(received_at, 1, 10) AS date,
+               CASE WHEN json_type(event_json, '$.star.count') = 'integer'
+                 THEN json_extract(event_json, '$.star.count') END AS stars,
+               ROW_NUMBER() OVER (
+                 PARTITION BY repository, substr(received_at, 1, 10)
+                 ORDER BY received_at DESC, delivery_id DESC
+               ) AS position
+             FROM events
+             WHERE event_type IN ('star.created', 'star.deleted')
+               AND received_at >= ?
+               AND json_type(event_json, '$.repository.private') = 'false'
+           )
+           WHERE position = 1
+           ORDER BY repository ASC, date ASC`
+        )
+        .bind(since.toISOString())
+        .all<PublicFeedMaterial['starDays'][number]>(),
+    ]);
+
+    return { events: events.results, starDays: starDays.results };
   }
 
   async listRecentEvents(limit = 50): Promise<EventHistoryEntry[]> {

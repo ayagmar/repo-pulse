@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `GET /public/feed`: an unauthenticated feed of recent releases, stars, default-branch
+  pushes and merged pull requests, plus 90 days of daily star counts, for ayagmar.dev
+  (ADR 0012 there). A repository is shown only while GitHub's API says it is public,
+  checked at most 60 seconds before each response. An optional `GITHUB_PUBLIC_TOKEN`, a
+  token limited to public repositories, raises the lookups' rate limit.
 - Permanent event history: every accepted event is kept in a new `events` D1 table, which
   is never pruned. Migration `0004` backfills the deliveries still in the ledger and marks
   them private, because they were stored without repository visibility.
