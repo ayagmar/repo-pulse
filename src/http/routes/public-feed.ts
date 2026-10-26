@@ -39,7 +39,7 @@ function defaultCache(): MaterialCache | null {
 function feedJson(
   c: Context<HttpEnv>,
   body: unknown,
-  status: 200 | 400 | 405 | 429 | 500
+  status: 200 | 400 | 405 | 429 | 500 | 503
 ): Response {
   c.header('Cache-Control', 'no-store');
   return c.json(body, status);
@@ -91,6 +91,10 @@ export function createPublicFeedRoutes(
       },
       limit
     );
+    if (feed === 'visibility_unavailable') {
+      // signals keeps its last snapshot instead of storing an empty feed.
+      return feedJson(c, { error: 'visibility_unavailable' }, 503);
+    }
     return feedJson(c, feed, 200);
   });
 

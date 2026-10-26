@@ -3,6 +3,7 @@ import type {
   PublicFeedEvent,
   PublicFeedMaterial,
   PublicFeedStarHistory,
+  RepositoryAdmission,
 } from '../models/public-feed.js';
 import { logger } from './logger.js';
 
@@ -30,7 +31,7 @@ export type MaterialMemory = Map<number, { material: PublicFeedMaterial; expires
 
 interface PublicFeedSources {
   readMaterial(limit: number, since: Date): Promise<PublicFeedMaterial>;
-  admit(repositories: readonly string[], lookupBudget: number): Promise<Set<string>>;
+  admit(repositories: readonly string[], lookupBudget: number): Promise<RepositoryAdmission>;
   /**
    * Checked before the Cache API, which is per location and may store nothing on
    * `*.workers.dev`: a warm isolate never reads D1 more than once per 300 seconds.
@@ -211,17 +212,21 @@ async function loadMaterial(
  * The public feed: recent activity and star history of the repositories GitHub
  * shows as public right now. The material may come from a cache; the visibility
  * check runs for every response.
+ *
+ * `visibility_unavailable` when nothing is shown and some repository was left
+ * out without a definitive denial, so an empty feed always means nothing is public,
+ * never that GitHub could not be asked.
  */
 export async function buildPublicFeed(
   sources: PublicFeedSources,
   limit: number
-): Promise<PublicFeed> {
+): Promise<PublicFeed | 'visibility_unavailable'> {
   const material = await loadMaterial(sources, limit, new Date());
   const events = material.events.map(toFeedEvent).filter((event) => event !== null);
 
   // Recent activity is checked first, so a lookup budget that runs out leaves out
   // the repositories with the oldest stars.
-  const admitted = await sources.admit(
+  const { admitted, unresolved } = await sources.admit(
     [
       ...events.map((event) => event.repo),
       ...toStarHistory(material.starDays, new Date()).map((entry) => entry.repo),
@@ -231,12 +236,23 @@ export async function buildPublicFeed(
 
   // Built without waiting on anything after the visibility check.
   const builtAt = new Date();
-  return {
+  const starHistory = toStarHistory(material.starDays, builtAt);
+  const feed: PublicFeed = {
     version: 1,
     generatedAt: builtAt.toISOString(),
     events: events.filter((event) => admitted.has(event.repo)),
-    starHistory: toStarHistory(material.starDays, builtAt)
+    starHistory: starHistory
       .filter((entry) => admitted.has(entry.repo))
       .slice(0, STAR_HISTORY_MAX_REPOSITORIES),
   };
+  // Decided on the candidates at `builtAt`: past UTC midnight a repository's only
+  // star day may have left the window, admitted or not.
+  if (
+    feed.events.length === 0 &&
+    feed.starHistory.length === 0 &&
+    [...events, ...starHistory].some((item) => unresolved.has(item.repo))
+  ) {
+    return 'visibility_unavailable';
+  }
+  return feed;
 }

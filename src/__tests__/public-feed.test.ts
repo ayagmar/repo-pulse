@@ -233,7 +233,8 @@ describe('public feed', () => {
   }
 
   async function feedRepositories(query = ''): Promise<string[]> {
-    const { text } = await getFeed(query);
+    const { response, text } = await getFeed(query);
+    expect(response.status, text).toBe(200);
     const feed = JSON.parse(text) as {
       events: { repo: string }[];
       starHistory: { repo: string }[];
@@ -468,6 +469,8 @@ describe('public feed', () => {
   });
 
   it('omits a repository whenever GitHub does not confirm it is public', async () => {
+    visibility.set('ayagmar/runnerd', 'public');
+    await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
     const answers: Visibility[] = [
       'private',
       'moved',
@@ -482,8 +485,82 @@ describe('public feed', () => {
       await record(push(`ayagmar/${answer.replaceAll('_', '-')}`), '2026-10-25T21:14:00.000Z');
     }
 
-    await expect(feedRepositories()).resolves.toEqual([]);
-    expect(githubLookups).toHaveLength(answers.length);
+    await expect(feedRepositories()).resolves.toEqual(['ayagmar/runnerd']);
+    expect(githubLookups).toHaveLength(answers.length + 1);
+  });
+
+  it('answers 503, never an empty feed, when no repository is admitted and a lookup failed', async () => {
+    const expectStatus = async (status: 200 | 503): Promise<void> => {
+      const { response, text } = await getFeed();
+      expect(response.status, text).toBe(status);
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(JSON.parse(text)).toMatchObject(
+        status === 503 ? { error: 'visibility_unavailable' } : { events: [], starHistory: [] }
+      );
+    };
+    // No candidates: nothing to hide.
+    await expectStatus(200);
+
+    // One definitive denial plus one timeout.
+    visibility.set('ayagmar/runnerd', 'not_found');
+    visibility.set('ayagmar/ccdesk', 'timeout');
+    await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
+    await record(push('ayagmar/ccdesk'), '2026-10-25T21:15:00.000Z');
+    app = createApp();
+    cacheEntries.clear();
+    await expectStatus(503);
+
+    // The cached failure still counts, without asking GitHub again.
+    vi.setSystemTime(new Date('2026-10-26T08:45:59.999Z'));
+    visibility.set('ayagmar/ccdesk', 'private');
+    await expectStatus(503);
+    expect(githubLookups).toHaveLength(2);
+
+    // Every candidate definitively denied: an empty feed.
+    vi.setSystemTime(new Date('2026-10-26T08:46:00.000Z'));
+    await expectStatus(200);
+
+    // Candidates the lookup budget leaves unattempted are unresolved too.
+    for (let index = 0; index < 41; index += 1) {
+      await record(push(`ayagmar/repo-${String(index)}`), '2026-10-25T22:00:00.000Z');
+    }
+    app = createApp();
+    cacheEntries.clear();
+    await expectStatus(503);
+  });
+
+  it('answers 503 when an admitted repository leaves the star window at UTC midnight', async () => {
+    vi.setSystemTime(new Date('2026-10-26T23:59:59.900Z'));
+    // ccdesk's only star day is the first of the 90; at midnight it leaves the window.
+    visibility.set('ayagmar/ccdesk', 'public');
+    await record(star('ayagmar/ccdesk', 3), '2026-07-29T12:00:00.000Z');
+    visibility.set('ayagmar/runnerd', 'timeout');
+    await record(star('ayagmar/runnerd', 8), '2026-10-26T12:00:00.000Z');
+    beforeAnswer = (): undefined => {
+      vi.setSystemTime(new Date('2026-10-27T00:00:00.000Z'));
+    };
+
+    // With limit=1 ccdesk is only in star history.
+    const { response, text } = await getFeed('?limit=1');
+
+    expect(response.status, text).toBe(503);
+  });
+
+  it('answers an empty feed when every candidate leaves the star window at UTC midnight', async () => {
+    vi.setSystemTime(new Date('2026-10-26T23:59:59.900Z'));
+    // Removed stars: star history only, no published events.
+    visibility.set('ayagmar/ccdesk', 'public');
+    await record(star('ayagmar/ccdesk', 3, false, true), '2026-07-29T12:00:00.000Z');
+    visibility.set('ayagmar/runnerd', 'timeout');
+    await record(star('ayagmar/runnerd', 8, false, true), '2026-07-29T13:00:00.000Z');
+    beforeAnswer = (): undefined => {
+      vi.setSystemTime(new Date('2026-10-27T00:00:00.000Z'));
+    };
+
+    const { response, text } = await getFeed();
+
+    expect(response.status, text).toBe(200);
+    expect(JSON.parse(text)).toMatchObject({ events: [], starHistory: [] });
   });
 
   it('never shows a repository on an answer older than 60 seconds when GitHub fails', async () => {
@@ -498,8 +575,89 @@ describe('public feed', () => {
     ] as const) {
       visibility.set('ayagmar/runnerd', failure);
       vi.setSystemTime(new Date(Date.parse('2026-10-26T08:45:00.000Z') + offsetSeconds * 1000));
-      await expect(feedRepositories(), failure).resolves.toEqual([]);
+      const { response, text } = await getFeed();
+      expect(response.status, failure).toBe(503);
+      expect(JSON.parse(text)).toEqual({ error: 'visibility_unavailable' });
     }
+  });
+
+  it('answers from GitHub answers under 60 seconds old across restarts', async () => {
+    const repositories = ['ayagmar/runnerd', 'ayagmar/ccdesk', 'ayagmar/glimpse'];
+    const kinds: Visibility[] = [
+      'public',
+      'public',
+      'private',
+      'not_found',
+      'moved',
+      'rate_limited',
+      'server_error',
+      'timeout',
+      'no_private_flag',
+      'unreadable',
+    ];
+    const outcome = (kind: Visibility): 'public' | 'denied' | 'unresolved' =>
+      kind === 'public'
+        ? 'public'
+        : kind === 'private' || kind === 'not_found'
+          ? 'denied'
+          : 'unresolved';
+    for (const fullName of repositories) {
+      await record(push(fullName), '2026-10-25T21:14:00.000Z');
+    }
+
+    let cachedAnswers = 0;
+    for (let seed = 1; seed <= 5; seed += 1) {
+      // Park-Miller: every product stays an exact integer.
+      let state = seed;
+      const random = (bound: number): number => {
+        state = (state * 48_271) % 2_147_483_647;
+        return state % bound;
+      };
+      // What a correct isolate remembers: each repository's last answer and when it was asked.
+      let answers = new Map<string, { kind: Visibility; askedAt: number }>();
+      app = createApp();
+      for (let step = 0; step < 40; step += 1) {
+        for (const fullName of repositories) {
+          visibility.set(fullName, kinds[random(kinds.length)] ?? 'public');
+        }
+        if (random(8) === 0) {
+          app = createApp();
+          answers = new Map();
+        }
+        vi.setSystemTime(new Date(Date.now() + random(90) * 1000));
+        let lookups = 0;
+        for (const fullName of repositories) {
+          const answer = answers.get(fullName);
+          if (answer === undefined || Date.now() >= answer.askedAt + 60_000) {
+            lookups += 1;
+            answers.set(fullName, {
+              kind: visibility.get(fullName) ?? 'not_found',
+              askedAt: Date.now(),
+            });
+          }
+        }
+        cachedAnswers += repositories.length - lookups;
+        const lookupsBefore = githubLookups.length;
+        const outcomes = repositories.map((fullName) =>
+          outcome(answers.get(fullName)?.kind ?? 'not_found')
+        );
+        const admitted = repositories.filter((_, index) => outcomes[index] === 'public');
+
+        const { response, text } = await getFeed();
+
+        const label = `seed ${String(seed)}, step ${String(step)}`;
+        expect(githubLookups.length - lookupsBefore, label).toBe(lookups);
+        if (admitted.length === 0 && outcomes.includes('unresolved')) {
+          expect(response.status, label).toBe(503);
+        } else {
+          expect(response.status, label).toBe(200);
+          const feed = JSON.parse(text) as { events: { repo: string }[] };
+          expect(feed.events.map((event) => event.repo).sort(), label).toEqual(admitted.sort());
+        }
+      }
+    }
+    // The sequences reuse cached answers, not only fresh lookups.
+    expect(cachedAnswers).toBeGreaterThan(100);
   });
 
   it('looks up at most 40 repositories per response and omits the rest', async () => {
@@ -677,8 +835,9 @@ describe('public feed', () => {
       );
     }
 
-    // The first response spends its 40 lookups on the most recently starred.
-    await expect(feedRepositories()).resolves.toEqual([]);
+    // The first response spends its 40 lookups on the most recently starred and,
+    // admitting none of them, cannot tell the rest are not public.
+    expect((await getFeed()).response.status).toBe(503);
     const { text } = await getFeed();
 
     const feed: unknown = JSON.parse(text);

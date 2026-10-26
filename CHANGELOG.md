@@ -6,7 +6,9 @@
   pushes and merged pull requests, plus 90 days of daily star counts, for ayagmar.dev
   (ADR 0012 there). A repository is shown only while GitHub's API says it is public,
   checked at most 60 seconds before each response. An optional `GITHUB_PUBLIC_TOKEN`, a
-  token limited to public repositories, raises the lookups' rate limit.
+  token limited to public repositories, raises the lookups' rate limit. When no repository
+  is admitted and a lookup failed, it answers `503 {"error":"visibility_unavailable"}`, so
+  an empty feed always means nothing is public.
 - Permanent event history: every accepted event is kept in a new `events` D1 table, which
   is never pruned. Migration `0004` backfills the deliveries still in the ledger and marks
   them private, because they were stored without repository visibility.

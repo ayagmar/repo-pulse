@@ -76,7 +76,7 @@ Without the token, or when GitHub does not answer, digests and alerts are posted
 
 `/public/feed` asks GitHub whether each repository is public. Without a token those
 requests share GitHub's limit of 60 an hour per IP with every Worker on the same
-Cloudflare egress IP, so the feed can come back empty. Create a
+Cloudflare egress IP, so the feed can answer `503`. Create a
 [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
 with **Repository access: Public repositories** and no permissions, then add it:
 
@@ -148,8 +148,10 @@ each repository's daily star count over the same 90 days. Each client may ask 10
 minute. A repository appears only while GitHub's
 API says it is public, checked at most 60 seconds before the response,
 and only its events that were recorded as public. No sender, body, label, commit
-message or delivery state is published. The contract is
-[ADR 0012 in ayagmar.dev](https://github.com/ayagmar/ayagmar.dev/blob/e42eb2aea603bdaeeadccafffa32ef91d05f1825/docs/adr/0012-repo-pulse-public-feed.md).
+message or delivery state is published. When no repository is admitted and GitHub
+did not answer for at least one of them, the feed answers
+`503 {"error":"visibility_unavailable"}` instead of an empty list. The contract is
+[ADR 0012 in ayagmar.dev](https://github.com/ayagmar/ayagmar.dev/blob/9ee31866d8751eb2de40c71536978d047d9a7c4b/docs/adr/0012-repo-pulse-public-feed.md).
 
 ### Admin routes
 
