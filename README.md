@@ -39,7 +39,7 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
 - Alerts say whether the person behind them is new or returning, across all your repositories: `👋 First time here`, or `↩️ Seen before: 12 events in 3 repos since 4 Mar 2026`. Your own events, bots and the logins in `PEOPLE_IGNORED_LOGINS` get no such line.
-- Optionally, issue alerts get **Close** and **Label…** buttons. Only the Discord users you list can use them, they act on the issue the alert was about, and the alert is updated to show what was done. See [SETUP.md](SETUP.md#discord-actions-optional).
+- Optionally, issue alerts get **Close** and **Label…** buttons. Only the Discord users you list can use them, they act on the issue the alert was about, only while its repository is public and not a fork, and the alert is updated to show what was done. See [SETUP.md](SETUP.md#discord-actions-optional).
 - Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. With a GitHub token, it also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days, lists the latest merged pull requests, and under "Who's showing up" names the week's five most active outside people, with `🆕` for those seen for the first time that week.
 
 ## Deploy
@@ -304,7 +304,7 @@ leaks only; an unlabelled random string still needs a reviewer.
 - retries and stale-processing recovery are driven from D1 state plus cron
 - admin routes stay protected by bearer auth
 - the public feed shows a repository only while GitHub confirms it is public, never from an answer older than 60 seconds
-- Discord buttons act only for allow-listed users, after Discord's signature is checked, on the issue recorded for the alert; a replayed request acts at most once
+- Discord buttons act only for allow-listed users, after Discord's signature is checked, on the issue recorded for the alert, only while GitHub confirms its repository is public and not a fork; a replayed request acts at most once
 
 ## Repo navigation
 
