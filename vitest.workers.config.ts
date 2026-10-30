@@ -14,6 +14,9 @@ export default defineConfig({
           GITHUB_WEBHOOK_SECRET: 'test-secret',
           ADMIN_API_TOKEN: 'admin-token',
           DISCORD_WEBHOOK_URL: '',
+          // wrangler.jsonc admits only App deliveries, which need App credentials these
+          // tests do not have; they send repository webhooks.
+          GITHUB_WEBHOOK_SOURCES: 'repository',
         },
       },
     }),
