@@ -191,8 +191,9 @@ export class RepositoryVisibilityGate {
         unknown
       >;
       return { id: fields.id, private: fields.private, fork: fields.fork };
-    } catch (error) {
-      logger.warn('visibility.lookup_failed', { component: 'github', repository, error });
+    } catch {
+      // A transport error can quote the request, Authorization header included.
+      logger.warn('visibility.lookup_failed', { component: 'github', repository });
       return 'unavailable';
     }
   }

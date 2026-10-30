@@ -659,6 +659,23 @@ describe('Discord interactions', () => {
         results: [],
       });
     });
+
+    it('keeps credentials out of logs when the repository check fails', async () => {
+      const { env } = await setup({ LOG_LEVEL: 'debug' });
+      const upstream = fakeUpstreams();
+      const sentinels = [INTERACTION_TOKEN, WEBHOOK_URL, 'test-public-token'];
+      upstream.lookup.current = (): Response => {
+        throw new Error(`request failed: Authorization: Bearer ${sentinels.join(' ')}`);
+      };
+
+      await send(env, signedRequest(submitLabels('bug')));
+
+      expect(receipts(upstream.calls)).toEqual([notEligible]);
+      expect(loggedText()).toContain('visibility.lookup_failed');
+      for (const sentinel of sentinels) {
+        expect(loggedText()).not.toContain(sentinel);
+      }
+    });
   });
 
   describe('durable outcomes', () => {
