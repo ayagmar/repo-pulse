@@ -22,7 +22,7 @@
     "WEBHOOK_MAX_BODY_BYTES": "1048576",
     // Which webhook deliveries are admitted: repository, app, or both during a cutover.
     // Kept here, not in the dashboard: `wrangler deploy` replaces dashboard vars.
-    "GITHUB_WEBHOOK_SOURCES": "repository,app",
+    "GITHUB_WEBHOOK_SOURCES": "app",
     "DELIVERY_MAX_ATTEMPTS": "5",
     "DELIVERY_RETRY_BASE_DELAY_MS": "30000",
     "DELIVERY_RETRY_MAX_DELAY_MS": "900000",
