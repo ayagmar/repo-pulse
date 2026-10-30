@@ -1,6 +1,6 @@
 import type { LogLevel } from '../core/services/logger.js';
 import { DELIVERY_DEFAULTS } from './delivery-policy.js';
-import { WEBHOOK_DEFAULTS } from './webhook-policy.js';
+import { WEBHOOK_DEFAULTS, WEBHOOK_SOURCES, type WebhookSource } from './webhook-policy.js';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
@@ -10,6 +10,10 @@ type ConfigEnvVarName =
   | 'GITHUB_WEBHOOK_SECRET'
   | 'GITHUB_TOKEN'
   | 'GITHUB_PUBLIC_TOKEN'
+  | 'GITHUB_WEBHOOK_SOURCES'
+  | 'GITHUB_APP_ID'
+  | 'GITHUB_APP_INSTALLATION_ID'
+  | 'GITHUB_APP_PRIVATE_KEY'
   | 'WEBHOOK_MAX_BODY_BYTES'
   | 'ADMIN_API_TOKEN'
   | 'DISCORD_WEBHOOK_URL'
@@ -91,6 +95,76 @@ function parseHour(value: string | undefined, defaultValue: number): number {
   return hour;
 }
 
+/**
+ * The webhook sources admitted: `repository` for per-repository webhooks, `app` for
+ * the GitHub App's deliveries. Unset means `repository`; an empty or unknown entry
+ * is an error rather than a silently narrower set.
+ */
+function parseWebhookSources(value: string | undefined): ReadonlySet<WebhookSource> {
+  if (value === undefined) {
+    return new Set(['repository']);
+  }
+
+  const sources = value.split(',').map((source) => source.trim());
+  for (const source of sources) {
+    if (!WEBHOOK_SOURCES.includes(source as WebhookSource)) {
+      throw new Error(
+        `Invalid GITHUB_WEBHOOK_SOURCES: expected a comma-separated list of ${WEBHOOK_SOURCES.join(', ')}`
+      );
+    }
+  }
+
+  return new Set(sources as WebhookSource[]);
+}
+
+interface GitHubAppConfig {
+  appId: string;
+  installationId: number;
+  /** PKCS#8 PEM. */
+  privateKey: string;
+}
+
+const PKCS8_HEADER = '-----BEGIN PRIVATE KEY-----';
+const PKCS1_HEADER = '-----BEGIN RSA PRIVATE KEY-----';
+
+/**
+ * The GitHub App's credentials, or undefined when none are set. Error messages
+ * name the variable, never its value.
+ */
+function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
+  const appId = getEnvVar(env, 'GITHUB_APP_ID') ?? '';
+  const installationId = getEnvVar(env, 'GITHUB_APP_INSTALLATION_ID') ?? '';
+  const privateKey = getEnvVar(env, 'GITHUB_APP_PRIVATE_KEY') ?? '';
+  const setCount = [appId, installationId, privateKey].filter((value) => value !== '').length;
+  if (setCount === 0) {
+    return undefined;
+  }
+  if (setCount < 3) {
+    throw new Error(
+      'Incomplete GitHub App config: set GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY together'
+    );
+  }
+
+  if (!/^\d+$/.test(appId.trim())) {
+    throw new Error('Invalid GITHUB_APP_ID: expected a number');
+  }
+  const trimmedKey = privateKey.trim();
+  if (trimmedKey.startsWith(PKCS1_HEADER)) {
+    throw new Error(
+      'Invalid GITHUB_APP_PRIVATE_KEY: expected PKCS#8, got PKCS#1. Convert it with `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pkcs8.pem`'
+    );
+  }
+  if (!trimmedKey.startsWith(PKCS8_HEADER)) {
+    throw new Error('Invalid GITHUB_APP_PRIVATE_KEY: expected a PKCS#8 PEM private key');
+  }
+
+  return {
+    appId: appId.trim(),
+    installationId: parsePositiveInteger('GITHUB_APP_INSTALLATION_ID', installationId, 0),
+    privateKey: trimmedKey,
+  };
+}
+
 export function createConfig(env: ConfigEnv): {
   server: {
     env: string;
@@ -103,6 +177,9 @@ export function createConfig(env: ConfigEnv): {
     maxBodyBytes: number;
     /** Read-only token for GitHub's API. Optional: without it, digests skip what it adds. */
     apiToken: string | undefined;
+    webhookSources: ReadonlySet<WebhookSource>;
+    /** When set, its installation token replaces `apiToken`. */
+    app: GitHubAppConfig | undefined;
   };
   admin: {
     apiToken: string;
@@ -128,6 +205,13 @@ export function createConfig(env: ConfigEnv): {
   const webhookSecret = getEnvVar(env, 'GITHUB_WEBHOOK_SECRET', true);
   const adminApiToken = getEnvVar(env, 'ADMIN_API_TOKEN', true);
   const githubToken = getEnvVar(env, 'GITHUB_TOKEN');
+  const webhookSources = parseWebhookSources(getEnvVar(env, 'GITHUB_WEBHOOK_SOURCES'));
+  const githubApp = parseGitHubApp(env);
+  if (webhookSources.has('app') && githubApp === undefined) {
+    throw new Error(
+      'Invalid GITHUB_WEBHOOK_SOURCES: app needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY'
+    );
+  }
   const deliveryRetryBaseDelayMs = parsePositiveInteger(
     'DELIVERY_RETRY_BASE_DELAY_MS',
     getEnvVar(env, 'DELIVERY_RETRY_BASE_DELAY_MS'),
@@ -159,6 +243,8 @@ export function createConfig(env: ConfigEnv): {
         WEBHOOK_DEFAULTS.maxBodyBytes
       ),
       apiToken: githubToken === '' ? undefined : githubToken,
+      webhookSources,
+      app: githubApp,
     },
 
     admin: {

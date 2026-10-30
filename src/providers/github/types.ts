@@ -16,6 +16,8 @@ export interface GitHubRepository {
   forks_count: number;
   language: string | null;
   default_branch?: string;
+  /** Read only for App deliveries, which are admitted only from repositories that are not forks. */
+  fork?: boolean;
 }
 
 export interface GitHubUser {
@@ -83,6 +85,8 @@ export interface GitHubWebhookPayload {
   action?: string;
   repository: GitHubRepository;
   sender: GitHubUser;
+  /** Present on GitHub App deliveries only. */
+  installation?: { id: number };
 
   // Event-specific fields
   star?: {

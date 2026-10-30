@@ -1,7 +1,19 @@
+import type { WebhookSource } from '../../config/webhook-policy.js';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { normalizeRepoFullName } from '../../core/repository-identity.js';
+import { requireBoolean, requireNumber, requireObject } from './mappers/validation.js';
 import { verifyGitHubSignature } from './signature.js';
 import type { GitHubWebhookPayload } from './types.js';
+
+/**
+ * Events about the webhook or the App installation itself. They are acknowledged
+ * once signed, with or without a repository, and never become notifications.
+ */
+const CONTROL_EVENTS: ReadonlySet<string> = new Set([
+  'ping',
+  'installation',
+  'installation_repositories',
+]);
 
 interface ParseGitHubWebhookInput {
   rawBody: string | Uint8Array;
@@ -11,12 +23,23 @@ interface ParseGitHubWebhookInput {
   secret: string;
 }
 
-interface ParsedGitHubWebhook {
-  deliveryId: string;
-  eventType: string;
-  payload: GitHubWebhookPayload;
-  repository: string;
-}
+type ParsedGitHubWebhook =
+  | {
+      kind: 'control';
+      deliveryId: string;
+      eventType: string;
+      payload: unknown;
+      repository?: undefined;
+    }
+  | {
+      kind: 'repository';
+      deliveryId: string;
+      eventType: string;
+      source: WebhookSource;
+      payload: GitHubWebhookPayload;
+      /** Undefined only for an App delivery, which is checked for admission first. */
+      repository: string | undefined;
+    };
 
 export class GitHubWebhookRequestError extends AppError {
   constructor(statusCode: 400 | 401 | 413, message: string) {
@@ -58,12 +81,53 @@ export async function parseGitHubWebhookRequest(
     throw new GitHubWebhookRequestError(400, 'Invalid JSON payload');
   }
 
+  if (CONTROL_EVENTS.has(input.eventType)) {
+    return { kind: 'control', deliveryId: input.deliveryId, eventType: input.eventType, payload };
+  }
+
+  const source = webhookSource(payload);
   return {
+    kind: 'repository',
     deliveryId: input.deliveryId,
     eventType: input.eventType,
+    source,
     payload: payload as GitHubWebhookPayload,
-    repository: extractGitHubRepositoryFullName(payload),
+    // A repository webhook without a repository is a bad request, as before. An App
+    // delivery may come from a repository it ignores, so it is checked first.
+    repository: source === 'repository' ? extractGitHubRepositoryFullName(payload) : undefined,
   };
+}
+
+/** App deliveries carry the installation they were sent for; repository webhooks do not. */
+function webhookSource(payload: unknown): WebhookSource {
+  return typeof payload === 'object' && payload !== null && 'installation' in payload
+    ? 'app'
+    : 'repository';
+}
+
+/**
+ * Why an App delivery is not admitted, or null when it is: it must come from the
+ * configured installation and from a public repository that is not a fork. A
+ * missing, null or mistyped field rejects it.
+ */
+export function rejectAppDelivery(payload: unknown, installationId: number): string | null {
+  try {
+    const body = requireObject(payload, 'payload');
+    const installation = requireObject(body.installation, 'installation');
+    if (requireNumber(installation.id, 'installation.id') !== installationId) {
+      return 'installation.id is not GITHUB_APP_INSTALLATION_ID';
+    }
+    const repository = requireObject(body.repository, 'repository');
+    if (requireBoolean(repository.private, 'repository.private')) {
+      return 'private repository';
+    }
+    if (requireBoolean(repository.fork, 'repository.fork')) {
+      return 'fork';
+    }
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Invalid payload';
+  }
 }
 
 export function extractGitHubRepositoryFullName(payload: unknown): string {

@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createConfig } from '../config/env.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
@@ -52,5 +53,73 @@ describe('createConfig', () => {
 
     env.DB.close();
     tempDatabase.cleanup();
+  });
+
+  describe('GitHub webhook sources and App', () => {
+    const base = { GITHUB_WEBHOOK_SECRET: 'test', ADMIN_API_TOKEN: 'test' };
+    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const app = {
+      GITHUB_APP_ID: '1',
+      GITHUB_APP_INSTALLATION_ID: '2',
+      GITHUB_APP_PRIVATE_KEY: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    };
+
+    it('admits repository webhooks only when the sources are unset', () => {
+      const config = createConfig(base);
+      expect([...config.github.webhookSources]).toEqual(['repository']);
+      expect(config.github.app).toBeUndefined();
+    });
+
+    it('rejects an empty or unknown source instead of admitting a narrower set', () => {
+      for (const value of ['', ' ', 'repository,', 'repo', 'repository,apps']) {
+        expect(
+          () => createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: value }),
+          value
+        ).toThrow('Invalid GITHUB_WEBHOOK_SOURCES');
+      }
+      expect([
+        ...createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: ' repository , app ' }).github
+          .webhookSources,
+      ]).toEqual(['repository', 'app']);
+    });
+
+    it('refuses app as a source without the App configured', () => {
+      expect(() => createConfig({ ...base, GITHUB_WEBHOOK_SOURCES: 'app' })).toThrow(
+        'Invalid GITHUB_WEBHOOK_SOURCES: app needs GITHUB_APP_ID'
+      );
+    });
+
+    it('rejects a partial or malformed App config without echoing the values', () => {
+      for (const missing of Object.keys(app)) {
+        const partial = { ...base, ...app, [missing]: '' };
+        expect(() => createConfig(partial), missing).toThrow('Incomplete GitHub App config');
+      }
+      expect(() => createConfig({ ...base, ...app, GITHUB_APP_ID: 'my-app' })).toThrow(
+        'Invalid GITHUB_APP_ID'
+      );
+      expect(() => createConfig({ ...base, ...app, GITHUB_APP_INSTALLATION_ID: '-2' })).toThrow(
+        'Invalid GITHUB_APP_INSTALLATION_ID'
+      );
+      const pkcs1 = keyPair.privateKey.export({ type: 'pkcs1', format: 'pem' });
+      expect(() => createConfig({ ...base, ...app, GITHUB_APP_PRIVATE_KEY: pkcs1 })).toThrow(
+        'openssl pkcs8 -topk8 -nocrypt'
+      );
+      let message = '';
+      try {
+        createConfig({ ...base, ...app, GITHUB_APP_PRIVATE_KEY: 'not-a-key-sentinel' });
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message).toContain('Invalid GITHUB_APP_PRIVATE_KEY');
+      expect(message).not.toContain('not-a-key-sentinel');
+    });
+
+    it('reads a complete App config', () => {
+      expect(createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: 'app' }).github.app).toEqual({
+        appId: '1',
+        installationId: 2,
+        privateKey: app.GITHUB_APP_PRIVATE_KEY.trim(),
+      });
+    });
   });
 });
