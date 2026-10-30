@@ -48,7 +48,7 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
     deliveryLedger,
     notificationDispatcher,
     config.deliveryLedger,
-    { history: eventHistory, ignoredLogins: config.people.ignoredLogins }
+    { ignoredLogins: config.people.ignoredLogins }
   );
 
   return {

@@ -93,7 +93,7 @@ stateDiagram-v2
 ### Event history
 
 - The `events` table keeps every accepted event, keyed by `delivery_id`, and is never pruned. It is the source for anything that reads past activity, such as a website feed or a digest.
-- The ledger inserts the history row in the same D1 batch as the delivery row. A redelivery that arrives after its delivery row was pruned is queued again but not recorded twice.
+- The ledger inserts the history row first, then in the same D1 batch the delivery row, which copies the event from the history row. A redelivery that arrives after its delivery row was pruned is queued again with the event as first recorded, not recorded twice.
 - Each stored event includes `repository.private`, so readers can leave private repositories out. Events backfilled from the ledger by migration `0004` predate that field and are recorded as private.
 - `GET /admin/events` lists the 50 most recent events.
 
@@ -101,9 +101,9 @@ stateDiagram-v2
 
 - People are identified by `sender.id` across all repositories; the login shown is the latest one seen. Migration `0007` indexes `events` on `json_extract(event_json, '$.sender.id'), received_at`, so reads about one person touch only that person's rows.
 - Outside people are everyone except the repository's owner, logins in `PEOPLE_IGNORED_LOGINS` (comma-separated, case-insensitive) and logins ending in `[bot]`. Events without a numeric sender id are left out too.
-- When `POST /webhook` accepts an event from an outside person, one query reads the sender's earlier events (count, distinct repositories, events in this repository, first seen) and stores them on the event as `senderHistory`. The Discord alert renders it as one line. The same query returns the event already recorded under this delivery id, if any; it is then stored again as it was, so a redelivery after its delivery row was pruned keeps its original text, with or without `senderHistory`.
-- The history is optional. If the read fails, `people.history_read_failed` is logged and the event is accepted without it; the alert has no history line rather than a wrong one. Persisting the delivery still fails the request as before.
-- The weekly digest groups the week's events, already read for the digest, by sender id and keeps outside people, most distinct repositories first, then most events, then lowest sender id, up to five. One more query reads each one's first event through the sender index; a person first seen inside the week is marked `🆕`. If that read fails, `people.digest_read_failed` is logged and the digest is posted without the section.
+- When `POST /webhook` accepts an event from an outside person, the history insert counts the sender's earlier events (count, distinct repositories, events in this repository, first seen) and stores them on the event as `senderHistory`, in the same statement. Two deliveries from one person arriving together are therefore counted in the order they are inserted, and only the first can be a first time. The Discord alert renders it as one line. A delivery id already recorded keeps its stored event, whoever the sender is and whatever `PEOPLE_IGNORED_LOGINS` says now, so a redelivery after its delivery row was pruned keeps its original text, with or without `senderHistory`.
+- The history is optional. If persisting with it fails, `people.history_read_failed` is logged, without the exception text, and the event is persisted again without it; the alert has no history line rather than a wrong one. If that fails too, the request fails as before.
+- The weekly digest groups the week's events, already read for the digest, by sender id and keeps outside people, most distinct repositories first, then most events, then lowest sender id, up to five. One more query reads each one's first event through the sender index; a person first seen inside the week is marked `🆕`. If that read fails, `people.digest_read_failed` is logged, without the exception text, and the digest is posted without the section.
 - `senderHistory` is optional on stored events. Events stored before it existed, and a previous release reading new events, both ignore it. The public feed reads fixed JSON paths and never publishes it.
 
 ### Public feed

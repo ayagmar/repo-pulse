@@ -3,7 +3,6 @@ import type { NotificationFailureResult } from '../interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import type { ClaimedDelivery, D1DeliveryLedger } from './d1-delivery-ledger.js';
-import type { D1EventHistory } from './d1-event-history.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
 import { isOutsidePerson } from './people.js';
@@ -25,9 +24,8 @@ interface DurableEventProcessorOptions {
   drainBatchSize?: number;
 }
 
-/** Where an outside sender's earlier events are read from when an event is accepted. */
+/** Who is never remembered, besides repository owners and bots. */
 interface PeopleOptions {
-  history: D1EventHistory;
   ignoredLogins: ReadonlySet<string>;
 }
 
@@ -92,52 +90,42 @@ export class DurableEventProcessor {
     return this.dispatcher.hasNotifiers();
   }
 
+  /**
+   * Persist an accepted event. For an outside person, the stored event also records
+   * what was seen from them before. That history is optional: if persisting with it
+   * fails, the event is persisted without it, and only that failure fails the request.
+   */
   async enqueue(
     event: RepoEvent,
     context: EventProcessingContext
   ): Promise<EventProcessorEnqueueResult> {
-    return this.ledger.persistAcceptedDelivery({
+    const input = {
       deliveryId: context.deliveryId,
       sourceEventType: context.sourceEventType,
       repository: context.repository,
-      event: await this.withSenderHistory(event, context),
+      event,
       maxAttempts: this.maxAttempts,
-    });
-  }
-
-  /**
-   * The event to persist: as first recorded when this delivery id was accepted before,
-   * else with the sender's history attached for an outside person. The history is
-   * optional, so a failed read persists the event without it.
-   */
-  private async withSenderHistory(
-    event: RepoEvent,
-    context: EventProcessingContext
-  ): Promise<RepoEvent> {
+    };
     if (
       this.people === null ||
       !isOutsidePerson(event.sender, event.repository.owner, this.people.ignoredLogins)
     ) {
-      return event;
+      return this.ledger.persistAcceptedDelivery(input);
     }
 
     try {
-      const read = await this.people.history.readSenderHistory(
-        context.deliveryId,
-        event.sender.id,
-        context.repository
-      );
-      return 'storedEvent' in read
-        ? read.storedEvent
-        : { ...event, senderHistory: read.senderHistory };
-    } catch (error) {
+      return await this.ledger.persistAcceptedDelivery({
+        ...input,
+        rememberSenderId: event.sender.id,
+      });
+    } catch {
+      // No exception text: D1 errors can quote bound values.
       logger.warn('people.history_read_failed', {
         component: 'event_processor',
         deliveryId: context.deliveryId,
         repository: context.repository,
-        error: error instanceof Error ? error.message : String(error),
       });
-      return event;
+      return this.ledger.persistAcceptedDelivery(input);
     }
   }
 

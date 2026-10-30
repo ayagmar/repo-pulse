@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, drainDueDeliveries } from '../app.js';
+import type { RepoEvent } from '../core/models/repo-event.js';
+import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { D1EventHistory } from '../core/services/d1-event-history.js';
 import type { D1PreparedStatementLike } from '../core/services/d1-types.js';
 import {
@@ -10,6 +12,7 @@ import {
   createTempDatabasePath,
   createTestD1Database,
   createTestEnv,
+  createTestRepoEvent,
 } from './test-helpers.js';
 
 const secret = 'test-secret';
@@ -252,9 +255,10 @@ describe('sender history', () => {
     }
   });
 
-  /** A migrated database, the history over it, and every query the history prepares. */
-  function createHistory(): {
+  /** A migrated database, a ledger over it, and every query the ledger prepares. */
+  function createLedger(): {
     raw: Database.Database;
+    ledger: D1DeliveryLedger;
     history: D1EventHistory;
     record: (deliveryId: string, repository: string, senderId: number, at: string) => void;
     queries: string[];
@@ -275,13 +279,14 @@ describe('sender history', () => {
 
     return {
       raw,
-      history: new D1EventHistory({
+      ledger: new D1DeliveryLedger({
         ...d1,
         prepare: (query): D1PreparedStatementLike => {
           queries.push(query);
           return d1.prepare(query);
         },
       }),
+      history: new D1EventHistory(d1),
       record: (deliveryId, repository, senderId, at): void => {
         insert.run(
           deliveryId,
@@ -299,38 +304,65 @@ describe('sender history', () => {
     };
   }
 
-  it('counts only the sender’s earlier events, through the sender index', async () => {
-    const { raw, history, record, queries } = createHistory();
+  function star(senderId: number, repository: string): RepoEvent {
+    const event = createTestRepoEvent();
+    return {
+      ...event,
+      repository: { ...event.repository, fullName: repository },
+      sender: { ...event.sender, id: senderId },
+    };
+  }
 
-    await expect(history.readSenderHistory('delivery-new', 7, 'myorg/cli')).resolves.toEqual({
-      senderHistory: {
-        firstSeenAt: null,
-        priorEvents: 0,
-        priorRepositories: 0,
-        priorInRepository: 0,
-      },
+  it('records only the sender’s earlier events, through the sender index', async () => {
+    const { raw, ledger, history, record, queries } = createLedger();
+    const persist = (
+      deliveryId: string,
+      senderId: number,
+      repository: string
+    ): ReturnType<D1DeliveryLedger['persistAcceptedDelivery']> =>
+      ledger.persistAcceptedDelivery({
+        deliveryId,
+        sourceEventType: 'star',
+        repository,
+        event: star(senderId, repository),
+        maxAttempts: 5,
+        rememberSenderId: senderId,
+      });
+    const stored = async (deliveryId: string): Promise<unknown> =>
+      (await history.listRecentEvents(200)).find((entry) => entry.deliveryId === deliveryId)?.event
+        .senderHistory;
+
+    await persist('new-sender', 7, 'myorg/cli');
+    await expect(stored('new-sender')).resolves.toEqual({
+      firstSeenAt: null,
+      priorEvents: 0,
+      priorRepositories: 0,
+      priorInRepository: 0,
     });
 
-    record('delivery-1', 'myorg/cli', 7, '2026-10-02T10:00:00.000Z');
-    record('delivery-2', 'myorg/web', 7, '2026-10-01T10:00:00.000Z');
-    record('delivery-3', 'myorg/web', 7, '2026-10-03T10:00:00.000Z');
-    record('delivery-4', 'myorg/cli', 8, '2026-09-01T10:00:00.000Z');
+    record('delivery-1', 'myorg/cli', 8, '2026-10-02T10:00:00.000Z');
+    record('delivery-2', 'myorg/web', 8, '2026-10-01T10:00:00.000Z');
+    record('delivery-3', 'myorg/web', 8, '2026-10-03T10:00:00.000Z');
+    record('delivery-4', 'myorg/cli', 9, '2026-09-01T10:00:00.000Z');
 
-    await expect(history.readSenderHistory('delivery-new', 7, 'myorg/cli')).resolves.toEqual({
-      senderHistory: {
-        firstSeenAt: '2026-10-01T10:00:00.000Z',
-        priorEvents: 3,
-        priorRepositories: 2,
-        priorInRepository: 1,
-      },
+    await persist('returning', 8, 'myorg/cli');
+    await expect(stored('returning')).resolves.toEqual({
+      firstSeenAt: '2026-10-01T10:00:00.000Z',
+      priorEvents: 3,
+      priorRepositories: 2,
+      priorInRepository: 1,
     });
-    await expect(history.readSenderHistory('delivery-3', 7, 'myorg/web')).resolves.toMatchObject({
-      storedEvent: { repository: { fullName: 'myorg/web' }, sender: { id: 7 } },
+    // A delivery id already recorded keeps its event, and the delivery copies it.
+    await expect(persist('delivery-3', 8, 'myorg/web')).resolves.toEqual({ outcome: 'accepted' });
+    await expect(stored('delivery-3')).resolves.toBeUndefined();
+    await expect(ledger.getDelivery('delivery-3')).resolves.toMatchObject({
+      event: { sender: { login: 'user8' }, timestamp: new Date('2026-10-03T10:00:00.000Z') },
     });
 
+    const insert = queries.find((query) => query.includes('$.senderHistory')) ?? '';
     const plan = raw
-      .prepare(`EXPLAIN QUERY PLAN ${queries[0] ?? ''}`)
-      .all('delivery-new', 'myorg/cli', 7) as { detail: string }[];
+      .prepare(`EXPLAIN QUERY PLAN ${insert}`)
+      .all('x', 'star.created', 'myorg/cli', '', '{}', 'myorg/cli', 7) as { detail: string }[];
     expect(plan.map((step) => step.detail)).toContainEqual(
       expect.stringContaining('USING INDEX idx_events_sender_received_at')
     );

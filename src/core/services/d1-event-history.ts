@@ -1,5 +1,5 @@
 import type { PublicFeedMaterial } from '../models/public-feed.js';
-import type { RepoEvent, SenderHistory } from '../models/repo-event.js';
+import type { RepoEvent } from '../models/repo-event.js';
 import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
 
@@ -16,13 +16,54 @@ interface EventHistoryRow {
 }
 
 /**
- * Prepare the history insert for an accepted delivery. The ledger batches it with
- * the delivery insert so an event is never queued without being recorded.
+ * Prepare the history insert for an accepted delivery. The ledger batches it before
+ * the delivery insert, which copies the stored event, so an event is never queued
+ * without being recorded, and a delivery id seen before keeps its first event.
+ *
+ * With `rememberSenderId`, the stored event gets `senderHistory`: what was recorded
+ * from that sender before. The same statement counts and inserts, so two deliveries
+ * from one sender racing each other are counted in the order they were inserted.
  */
 export function prepareEventHistoryInsert(
   db: D1DatabaseLike,
-  input: { deliveryId: string; repository: string; event: RepoEvent; receivedAt: string }
+  input: {
+    deliveryId: string;
+    repository: string;
+    event: RepoEvent;
+    receivedAt: string;
+    rememberSenderId?: number;
+  }
 ): D1PreparedStatementLike {
+  if (input.rememberSenderId !== undefined) {
+    return db
+      .prepare(
+        `INSERT OR IGNORE INTO events (
+           delivery_id,
+           event_type,
+           repository,
+           received_at,
+           event_json
+         )
+         SELECT ?, ?, ?, ?, json_set(?, '$.senderHistory', json_object(
+           'firstSeenAt', MIN(received_at),
+           'priorEvents', COUNT(*),
+           'priorRepositories', COUNT(DISTINCT repository),
+           'priorInRepository', COALESCE(SUM(repository = ?), 0)
+         ))
+         FROM events
+         WHERE json_extract(event_json, '$.sender.id') = ?`
+      )
+      .bind(
+        input.deliveryId,
+        input.event.type,
+        input.repository,
+        input.receivedAt,
+        serializeRepoEvent(input.event),
+        input.repository,
+        input.rememberSenderId
+      );
+  }
+
   return db
     .prepare(
       `INSERT OR IGNORE INTO events (
@@ -97,40 +138,6 @@ export class D1EventHistory {
       .all<EventActivity>();
 
     return rows.results;
-  }
-
-  /**
-   * The event already recorded for `deliveryId`, if any, so a redelivery keeps the text
-   * it was first accepted with; otherwise what was recorded from `senderId` so far. Both
-   * come from one query, and the counts read only the sender's rows through
-   * `idx_events_sender_received_at`.
-   */
-  async readSenderHistory(
-    deliveryId: string,
-    senderId: number,
-    repository: string
-  ): Promise<{ storedEvent: RepoEvent } | { senderHistory: SenderHistory }> {
-    const row = await this.db
-      .prepare(
-        `SELECT
-           (SELECT event_json FROM events WHERE delivery_id = ?) AS storedEventJson,
-           MIN(received_at) AS firstSeenAt,
-           COUNT(*) AS priorEvents,
-           COUNT(DISTINCT repository) AS priorRepositories,
-           COALESCE(SUM(repository = ?), 0) AS priorInRepository
-         FROM events
-         WHERE json_extract(event_json, '$.sender.id') = ?`
-      )
-      .bind(deliveryId, repository, senderId)
-      .first<SenderHistory & { storedEventJson: string | null }>();
-    if (row === null) {
-      throw new Error('Sender history query returned no row');
-    }
-
-    const { storedEventJson, ...senderHistory } = row;
-    return storedEventJson === null
-      ? { senderHistory }
-      : { storedEvent: deserializeRepoEvent(storedEventJson) };
   }
 
   /** When each sender's earliest recorded event was received, by sender id. */

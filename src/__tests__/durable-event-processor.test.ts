@@ -323,31 +323,23 @@ describe('DurableEventProcessor sender history', () => {
   const cleanups: (() => void)[] = [];
 
   afterEach(() => {
-    vi.restoreAllMocks();
     while (cleanups.length > 0) {
       cleanups.pop()?.();
     }
   });
 
-  function createProcessor(database: D1DatabaseLike): {
-    processor: DurableEventProcessor;
-    history: D1EventHistory;
-  } {
-    const history = new D1EventHistory(database);
+  function createProcessor(
+    database: D1DatabaseLike,
+    ignoredLogins: readonly string[] = ['owner-alt']
+  ): DurableEventProcessor {
     const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add(createNotifier(() => Promise.resolve({ success: true, provider: 'discord' })));
-    return {
-      processor: new DurableEventProcessor(
-        new D1DeliveryLedger(database),
-        dispatcher,
-        {},
-        {
-          history,
-          ignoredLogins: new Set(['owner-alt']),
-        }
-      ),
-      history,
-    };
+    return new DurableEventProcessor(
+      new D1DeliveryLedger(database),
+      dispatcher,
+      {},
+      { ignoredLogins: new Set(ignoredLogins) }
+    );
   }
 
   function createDatabase(): ReturnType<typeof createTestD1Database> {
@@ -377,13 +369,26 @@ describe('DurableEventProcessor sender history', () => {
     });
   }
 
-  async function storedHistory(history: D1EventHistory): Promise<Record<string, unknown>> {
-    const events = await history.listRecentEvents();
+  async function storedHistory(database: D1DatabaseLike): Promise<Record<string, unknown>> {
+    const events = await new D1EventHistory(database).listRecentEvents();
     return Object.fromEntries(events.map((entry) => [entry.deliveryId, entry.event.senderHistory]));
   }
 
+  /** The event the delivery row will post. */
+  async function queuedEvent(database: D1DatabaseLike, deliveryId: string): Promise<unknown> {
+    return (await new D1DeliveryLedger(database).getDelivery(deliveryId))?.event;
+  }
+
+  const firstTime = {
+    firstSeenAt: null,
+    priorEvents: 0,
+    priorRepositories: 0,
+    priorInRepository: 0,
+  };
+
   it('records an outside person’s earlier events, and nothing for the owner or bots', async () => {
-    const { processor, history } = createProcessor(createDatabase());
+    const database = createDatabase();
+    const processor = createProcessor(database);
 
     await enqueue(processor, 'first', starBy('alice'));
     await enqueue(processor, 'second', starBy('alice'));
@@ -396,9 +401,8 @@ describe('DurableEventProcessor sender history', () => {
       sender: { ...starBy('ghost').sender, id: null as unknown as number },
     });
 
-    const stored = await storedHistory(history);
-    expect(stored).toEqual({
-      first: { firstSeenAt: null, priorEvents: 0, priorRepositories: 0, priorInRepository: 0 },
+    await expect(storedHistory(database)).resolves.toEqual({
+      first: firstTime,
       second: {
         firstSeenAt: expect.any(String) as unknown,
         priorEvents: 1,
@@ -410,25 +414,82 @@ describe('DurableEventProcessor sender history', () => {
       bot: undefined,
       'no-id': undefined,
     });
+    await expect(queuedEvent(database, 'second')).resolves.toMatchObject({
+      senderHistory: { priorEvents: 1 },
+    });
   });
 
-  it('accepts the event without history when the history cannot be read', async () => {
-    const { processor, history } = createProcessor(createDatabase());
-    vi.spyOn(history, 'readSenderHistory').mockRejectedValue(new Error('D1 unavailable'));
+  it('counts two deliveries from one new person arriving together once each', async () => {
+    const database = createDatabase();
+    const processor = createProcessor(database);
+
+    await Promise.all([
+      enqueue(processor, 'left', starBy('alice')),
+      enqueue(processor, 'right', starBy('alice')),
+    ]);
+
+    const stored = await storedHistory(database);
+    expect(
+      Object.values(stored)
+        .map((history) => (history as typeof firstTime).priorEvents)
+        .sort()
+    ).toEqual([0, 1]);
+    for (const deliveryId of ['left', 'right']) {
+      await expect(queuedEvent(database, deliveryId)).resolves.toMatchObject({
+        senderHistory: stored[deliveryId],
+      });
+    }
+  });
+
+  it('accepts the event without history when the history cannot be recorded', async () => {
+    const database = createDatabase();
+    const processor = createProcessor({
+      ...database,
+      prepare: (query) => {
+        if (query.includes('$.senderHistory')) {
+          throw new Error('D1 unavailable');
+        }
+        return database.prepare(query);
+      },
+    });
 
     await expect(enqueue(processor, 'first', starBy('alice'))).resolves.toEqual({
       outcome: 'accepted',
     });
-    await expect(storedHistory(history)).resolves.toEqual({ first: undefined });
+    await expect(storedHistory(database)).resolves.toEqual({ first: undefined });
+    await expect(queuedEvent(database, 'first')).resolves.not.toHaveProperty('senderHistory');
   });
 
   it('still fails the request when the event cannot be persisted', async () => {
     const database = createDatabase();
-    const { processor } = createProcessor({
+    const processor = createProcessor({
       ...database,
       batch: () => Promise.reject(new Error('D1 unavailable')),
     });
 
     await expect(enqueue(processor, 'first', starBy('alice'))).rejects.toThrow('D1 unavailable');
+  });
+
+  it('requeues a pruned delivery with its first event, whoever is excluded now', async () => {
+    const database = createDatabase();
+    const firstAlice = starBy('alice');
+    const firstBot = starBy('renovate[bot]', 5);
+    await enqueue(createProcessor(database), 'alice', firstAlice);
+    await enqueue(createProcessor(database), 'bot', firstBot);
+    await database.prepare('DELETE FROM deliveries').run();
+
+    // Alice is ignored now, and both are redelivered as newly normalized events.
+    const later = createProcessor(database, ['alice']);
+    await enqueue(later, 'alice', { ...starBy('alice'), timestamp: new Date('2027-01-01') });
+    await enqueue(later, 'bot', {
+      ...starBy('renovate[bot]', 5),
+      timestamp: new Date('2027-01-01'),
+    });
+
+    await expect(queuedEvent(database, 'alice')).resolves.toEqual({
+      ...firstAlice,
+      senderHistory: firstTime,
+    });
+    await expect(queuedEvent(database, 'bot')).resolves.toEqual(firstBot);
   });
 });
