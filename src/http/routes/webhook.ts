@@ -194,7 +194,7 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
 
     let repository: string;
     try {
-      repository = inbound.repository ?? extractGitHubRepositoryFullName(inbound.payload);
+      repository = extractGitHubRepositoryFullName(inbound.payload);
     } catch (error) {
       if (error instanceof GitHubWebhookRequestError) {
         return jsonError(c, error);

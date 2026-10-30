@@ -1,4 +1,4 @@
-import type { WebhookSource } from '../../config/webhook-policy.js';
+import type { WebhookSource } from '../../config/env.js';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { normalizeRepoFullName } from '../../core/repository-identity.js';
 import { requireBoolean, requireNumber, requireObject } from './mappers/validation.js';
@@ -23,22 +23,18 @@ interface ParseGitHubWebhookInput {
   secret: string;
 }
 
+/**
+ * A signed delivery. Its repository is read only once the delivery is admitted, so
+ * one from an ignored source or repository is never refused for lacking it.
+ */
 type ParsedGitHubWebhook =
-  | {
-      kind: 'control';
-      deliveryId: string;
-      eventType: string;
-      payload: unknown;
-      repository?: undefined;
-    }
+  | { kind: 'control'; deliveryId: string; eventType: string; payload: unknown }
   | {
       kind: 'repository';
       deliveryId: string;
       eventType: string;
       source: WebhookSource;
       payload: GitHubWebhookPayload;
-      /** Undefined only for an App delivery, which is checked for admission first. */
-      repository: string | undefined;
     };
 
 export class GitHubWebhookRequestError extends AppError {
@@ -85,16 +81,12 @@ export async function parseGitHubWebhookRequest(
     return { kind: 'control', deliveryId: input.deliveryId, eventType: input.eventType, payload };
   }
 
-  const source = webhookSource(payload);
   return {
     kind: 'repository',
     deliveryId: input.deliveryId,
     eventType: input.eventType,
-    source,
+    source: webhookSource(payload),
     payload: payload as GitHubWebhookPayload,
-    // A repository webhook without a repository is a bad request, as before. An App
-    // delivery may come from a repository it ignores, so it is checked first.
-    repository: source === 'repository' ? extractGitHubRepositoryFullName(payload) : undefined,
   };
 }
 

@@ -1,8 +1,13 @@
 import type { LogLevel } from '../core/services/logger.js';
 import { DELIVERY_DEFAULTS } from './delivery-policy.js';
-import { WEBHOOK_DEFAULTS, WEBHOOK_SOURCES, type WebhookSource } from './webhook-policy.js';
+import { WEBHOOK_DEFAULTS } from './webhook-policy.js';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+
+/** Where a webhook delivery comes from: a repository's own webhook, or the GitHub App. */
+const WEBHOOK_SOURCES = ['repository', 'app'] as const;
+
+export type WebhookSource = (typeof WEBHOOK_SOURCES)[number];
 
 type ConfigEnvVarName =
   | 'NODE_ENV'

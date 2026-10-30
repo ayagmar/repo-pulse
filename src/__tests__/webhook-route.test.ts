@@ -447,6 +447,8 @@ describe('webhook sources', () => {
     info.mockClear();
 
     await expect(deliver('star', repositoryStar())).resolves.toMatchObject({ status: 200 });
+    // Not admitted, so not refused for lacking a repository either.
+    await expect(deliver('star', { sender: {} })).resolves.toMatchObject({ status: 200 });
     for (const rejected of [
       appStar({}, { id: installationId + 1 }),
       appStar({}, { id: String(installationId) }),
