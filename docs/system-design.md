@@ -36,6 +36,7 @@ sequenceDiagram
     participant D as Discord
 
     GH->>W: POST /webhook
+    W->>W: check GitHub headers
     W->>W: read raw body with byte limit
     W->>G: verify HMAC on raw body
     G-->>W: parsed inbound event
@@ -71,6 +72,8 @@ stateDiagram-v2
 
 ### Webhook edge
 
+- Before reading the body, in order: `X-GitHub-Event` and `X-GitHub-Delivery` present (`400`), then `X-Hub-Signature-256` is `sha256=` and 64 hex digits (`401`). A request refused there costs no body read, D1 query or provider call.
+- `POST /webhook` has no rate limit, unlike `/public/feed` and `/discord/interactions`. A limit before authentication can only key on the client address, and GitHub delivers every customer's webhooks from the same shared ranges: anyone can point their own webhooks at this URL and fill the bucket that the owner's deliveries share. GitHub does not retry a refused delivery, so that would lose alerts. A stranger can still make the Worker read and HMAC up to `WEBHOOK_MAX_BODY_BYTES` per request with well-formed headers; nothing after the HMAC runs for them.
 - Reads the raw request stream directly so HMAC verification matches GitHub’s original bytes.
 - Rejects oversized requests before JSON parsing.
 - Verifies the original bytes before UTF-8 decoding and JSON parsing.

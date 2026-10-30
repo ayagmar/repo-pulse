@@ -123,6 +123,7 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 ```
 
 - `POST /webhook` receives deliveries from repository webhooks and the GitHub App
+- refuses missing GitHub headers or a malformed signature before reading the body
 - verifies `X-Hub-Signature-256` against the exact raw body
 - admits only the sources in `GITHUB_WEBHOOK_SOURCES`, and App deliveries only from public repositories that are not forks
 - enforces request body size before JSON parsing

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `POST /webhook` refuses a request without `X-GitHub-Event` or `X-GitHub-Delivery`
+  (`400`), or without a `sha256=` signature of 64 hex digits (`401`), before reading
+  its body. Such a request used to be answered `413` first when its body was too large.
 - `GET /public/feed` reads its material once, at `limit=100`, and serves every `limit`
   from that copy, so asking for different limits no longer costs one D1 read each.
   Responses are unchanged.
