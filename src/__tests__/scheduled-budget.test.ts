@@ -41,20 +41,18 @@ function countQueries(db: D1DatabaseLike): { db: D1DatabaseLike; queries: () => 
     inner.set(wrapped, statement);
     return wrapped;
   };
-  return {
-    db: {
-      prepare: (query) => wrap(db.prepare(query)),
-      batch: (statements) => {
-        queries += 1;
-        return db.batch(statements.map((statement) => inner.get(statement) ?? statement));
-      },
-      exec: (sql) => {
-        queries += 1;
-        return db.exec(sql);
-      },
+  const counting: D1DatabaseLike = {
+    prepare: (query) => wrap(db.prepare(query)),
+    batch: (statements) => {
+      queries += 1;
+      return db.batch(statements.map((statement) => inner.get(statement) ?? statement));
     },
-    queries: () => queries,
+    exec: (sql) => {
+      queries += 1;
+      return db.exec(sql);
+    },
   };
+  return { db: counting, queries: () => queries };
 }
 
 function star(login: string, count: number): ReturnType<typeof createRepoEvent> {

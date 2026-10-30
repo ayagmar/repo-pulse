@@ -89,6 +89,10 @@ config-status:
 subscribe url +repos:
     scripts/subscribe.sh {{url}} {{repos}}
 
+# Remove the Repo Pulse webhook from GitHub repositories, recording each one first (--dry-run to preview)
+unsubscribe *args:
+    scripts/unsubscribe.sh {{args}}
+
 # Copy local Cloudflare secrets template
 setup-config:
     cp .dev.vars.example .dev.vars
