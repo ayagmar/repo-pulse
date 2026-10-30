@@ -53,6 +53,7 @@ Values configured in [`wrangler.jsonc`](../wrangler.jsonc):
 - `NODE_ENV`
 - `LOG_LEVEL`
 - `WEBHOOK_MAX_BODY_BYTES`
+- `GITHUB_WEBHOOK_SOURCES`: the webhook deliveries admitted, a comma-separated list of `repository` (per-repository webhooks) and `app` (the GitHub App). Unset means `repository`; an empty or unknown entry, or `app` without the App's three secrets, is a configuration error. Change it in `wrangler.jsonc` and deploy: a value set in the dashboard is replaced by the next `wrangler deploy`.
 - `DELIVERY_MAX_ATTEMPTS`
 - `DELIVERY_RETRY_BASE_DELAY_MS`
 - `DELIVERY_RETRY_MAX_DELAY_MS`
@@ -68,7 +69,10 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - `ADMIN_API_TOKEN`
 - `DISCORD_WEBHOOK_URL`
 - `GITHUB_PUBLIC_TOKEN` (optional): a fine-grained token with access to public repositories only and no permissions. `/public/feed` sends it with its visibility lookups to get GitHub's authenticated rate limit. It must not be able to read private repositories.
-- `GITHUB_TOKEN` (optional): a fine-grained token with read-only access to your repositories, with **Contents: read** and **Administration: read**. The daily digest uses it to list repositories with commits since their latest release. Star alerts use it for stargazer follower counts and traffic referrers, which need **Administration: read**.
+- `GITHUB_TOKEN` (optional): a fine-grained token with read-only access to your repositories, with **Contents: read** and **Administration: read**. The daily digest uses it to list repositories with commits since their latest release. Star alerts use it for stargazer follower counts and traffic referrers, which need **Administration: read**. Ignored when the GitHub App is configured.
+- `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` (optional, all three or none): the GitHub App. The key is the App's private key converted to PKCS#8 (`openssl pkcs8 -topk8 -nocrypt`); a PKCS#1 key is a configuration error. Set the key from its file and the IDs at the prompt, never as command-line arguments.
+
+Credentials and owner identifiers are never committed. `npm run check:secrets`, part of `npm run verify` and CI, fails on a private key, a GitHub token, a Discord webhook URL, or a value for one of these names that is not a placeholder, in any tracked file, and on any of these names in `wrangler.jsonc`. It does not catch an unlabelled random string.
 
 ## Operational Behavior
 
@@ -86,10 +90,39 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - Expired leases consume the retry budget; exhausted deliveries become failed, including legacy exhausted pending rows.
 - Outcome writes are fenced by processing attempt. Only failed deliveries can be atomically queued for admin retry.
 - Discord requests time out after ten seconds and are classified as transient failures.
+- A Discord or GitHub failure is recorded and logged as a fixed message (`Discord request failed: timeout`) or as the upstream status plus the `message` field of its JSON body, up to 200 characters, with every configured secret, any GitHub token or JWT, and any URL carrying a credential replaced by `[redacted]`. A token response is never logged.
 - Immediate processing is kicked off with `ctx.waitUntil()`.
 - Durable retries and stale lease recovery are driven by D1 state plus the cron trigger in [`wrangler.jsonc`](../wrangler.jsonc).
 - If persisting an outcome fails, processing remains leased and cron recovers it instead of making it permanently failed.
 - Retention pruning runs on the cron-driven drain path instead of every accepted webhook.
+
+## GitHub App
+
+### Admission
+
+- A delivery that carries `installation` comes from the App; any other is a repository webhook's. One whose source is not in `GITHUB_WEBHOOK_SOURCES` is answered `200` and ignored.
+- A repository webhook's delivery is processed as before.
+- An App delivery is admitted only when `installation.id` is a number equal to `GITHUB_APP_INSTALLATION_ID`, and `repository.private` and `repository.fork` are both `false`. A missing, null or mistyped field rejects it. Rejected deliveries are answered `200` and logged as `webhook.app_delivery_rejected` with the reason.
+- `ping`, `installation` and `installation_repositories` are acknowledged with `200` once signed, from either source and with or without a repository. Installation changes are logged as `webhook.installation_changed`, with the repositories added and removed.
+
+### Installation token
+
+- With the App configured, digests and star alerts use an installation token asking for Metadata, Contents and Administration read; `GITHUB_TOKEN` is ignored.
+- A cron run acquires the token once for the digest and the radar. If the mint fails, both go out without GitHub details, and the next run tries again.
+- A minted token is kept in isolate memory until five minutes before it expires, keyed by App, installation, permissions and repositories, so it is reused only for the same request.
+
+### Moving between repository webhooks and the GitHub App
+
+Never switch from one source to the other directly. Add the new source, wait for the overlap, then remove the old one:
+
+1. Set `GITHUB_WEBHOOK_SOURCES` to `repository,app` in `wrangler.jsonc` and deploy. Note the time S. During the overlap both sources are admitted, so an event can be posted twice.
+2. After the overlap, 10 minutes by default, set `app` and deploy. Note the time R.
+3. Check the overlap: list the App's deliveries (`GET /app/hook/deliveries`, as the App) and each repository webhook's (`gh api repos/<owner>/<repo>/hooks/<id>/deliveries`) from S minus the overlap to R plus the overlap. An event is lost only if its two copies (same event, action and repository) arrived further apart than the overlap; report any such pair.
+4. Once the App has run for a while, remove the repository webhooks with `just unsubscribe --dry-run <worker-url> owner/repo …`, then without `--dry-run`. Keep the inventory file it writes.
+
+To roll back: if the repository webhooks were removed, first recreate them with `just subscribe` for the repositories in the inventory file and check that each hook's ping answers `200`. Then set `repository,app`, deploy, wait the overlap, set `repository`, deploy. Never set `repository` alone while a repository the App covered has no webhook.
+
+Why nothing is dropped: adding a source cannot drop an event. When a source is removed at R, the other has been admitted since S, so an event is lost only when its copy from the remaining source arrived before S and its copy from the removed source after R: two copies of one event more than R − S apart. Workers still running the previous version after a deploy only extend the time the previous setting applies, which the overlap absorbs.
 
 ## Admin Endpoints
 
@@ -112,6 +145,7 @@ Notes:
 ## Verification Commands
 
 ```bash
+npm run check:secrets
 npm run typegen
 npm run typecheck
 npm run lint

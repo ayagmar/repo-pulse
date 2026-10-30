@@ -74,6 +74,8 @@ stateDiagram-v2
 - Reads the raw request stream directly so HMAC verification matches GitHub’s original bytes.
 - Rejects oversized requests before JSON parsing.
 - Verifies the original bytes before UTF-8 decoding and JSON parsing.
+- Acknowledges `ping`, `installation` and `installation_repositories` once signed, without a repository if need be.
+- Admits the sources in `GITHUB_WEBHOOK_SOURCES`: repository webhooks, the GitHub App (deliveries carrying `installation`), or both during a cutover. An App delivery is admitted only from the configured installation and from a public repository that is not a fork; the rest are acknowledged and ignored. The cutover rules are in [operations](operations.md#moving-between-repository-webhooks-and-the-github-app).
 - Rejects invalid supported payloads with standardized JSON errors; unsupported events are acknowledged and ignored.
 
 ### Domain mapping
@@ -112,7 +114,7 @@ stateDiagram-v2
 - The every-minute cron checks the local time in `DIGEST_TIME_ZONE`. During the first ten minutes after `DIGEST_HOUR`, it summarizes the events received since that hour on the previous local day and sends one message per provider.
 - Both ends of the window come from the same local-hour instant, so consecutive digests meet exactly. Across a clock change a window lasts 23 or 25 hours; Morocco, for example, moved to UTC+0 on 20 September 2026. A digest hour repeated by a clock change uses its first occurrence, and one skipped by a clock change moves forward by the gap, into the next day if need be (23:00 in America/Nuuk each March).
 - Each provider claims the digest in `digest_sends` before posting. A claim held by another run blocks a second post for five minutes; a failed post releases it so the next minute retries, and a sent digest is not repeated.
-- With `GITHUB_TOKEN` set, the daily digest asks GitHub's GraphQL API about the 20 repositories most recently active in the last 30 days: one query for each one's latest release and default branch, one for how many commits the branch has since that release's tag. Up to five repositories with new commits are listed, most commits first. If GitHub fails, the digest is posted without them and a warning is logged.
+- With the GitHub App configured, or `GITHUB_TOKEN` set, the daily digest asks GitHub's GraphQL API about the 20 repositories most recently active in the last 30 days: one query for each one's latest release and default branch, one for how many commits the branch has since that release's tag. Up to five repositories with new commits are listed, most commits first. If GitHub fails, the digest is posted without them and a warning is logged.
 - On Mondays a weekly digest is sent at the same hour. It covers the seven local days since the previous Monday's digest hour and lists up to three merged pull requests per repository. It is claimed under its own id, such as `weekly:2026-10-19`, next to `daily:2026-10-19`.
 - Days without events get no digest.
 
@@ -122,7 +124,7 @@ stateDiagram-v2
 - For repositories with at least 5, not cooling down, it also counts their stars in the 14 days before. A repository is spiking when its recent count is at least 4 times the average for a 3-hour window over those 14 days. A repository with less than 14 days of history looks quieter than it is, so its first spikes alert more easily.
 - Each check reads the stars of the last 3 hours, plus the 14-day stars of those candidates. A repository steadily starred by 5 or more people every 3 hours is a candidate at every check, so it costs its 14-day star count in D1 reads 144 times a day.
 - Each alert is claimed in `radar_alerts` as `stars:<owner/repo>` before it is posted. Once sent, it blocks another alert for that repository for 24 hours. If every provider fails, the claim is released. If the check fails before either, the claim's five-minute lease runs out before the next check, which retries.
-- With `GITHUB_TOKEN`, the alert looks up the last 20 stargazers' follower counts in one GraphQL request and lists up to three with at least 100 followers. It also lists the top three referrers from the traffic API. Either lookup can fail without blocking the alert.
+- With the GitHub App or `GITHUB_TOKEN`, the alert looks up the last 20 stargazers' follower counts in one GraphQL request and lists up to three with at least 100 followers. It also lists the top three referrers from the traffic API. Either lookup can fail without blocking the alert.
 
 ### Background processor
 

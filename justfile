@@ -83,7 +83,7 @@ knip-fix:
 
 # Check admin health status
 config-status:
-    @curl -s -H "Authorization: Bearer $$ADMIN_API_TOKEN" http://localhost:8787/admin/health | jq
+    @printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_API_TOKEN" | curl -s --config - http://localhost:8787/admin/health | jq
 
 # Add the Repo Pulse webhook to GitHub repositories (skips ones already subscribed)
 subscribe url +repos:

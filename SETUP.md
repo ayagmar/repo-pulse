@@ -1,12 +1,12 @@
 # Setup Guide
 
 Deploy Repo Pulse from a clone with Wrangler. The [Deploy to Cloudflare button](README.md#deploy)
-does the same without a local checkout; the GitHub webhook steps below apply to both.
+does the same without a local checkout; the GitHub App and webhook steps below apply to both.
 
 ## Prerequisites
 
 - Cloudflare account with Workers and D1 enabled
-- GitHub repository admin access, and the [GitHub CLI](https://cli.github.com/) to subscribe repositories
+- A GitHub account that owns the repositories, to create the GitHub App; or repository admin access and the [GitHub CLI](https://cli.github.com/) for repository webhooks
 - Discord webhook URL for the destination channel
 - Node 24 LTS recommended (`nvm use`); supported ranges are in `package.json`
 - npm 12.2.0 recommended (`npm install --global npm@12.2.0`)
@@ -81,9 +81,56 @@ npm run deploy
 sampled traces are enabled in Wrangler configuration; deployment is required for those
 settings to reach production.
 
-## GitHub webhooks
+## GitHub App
 
-With the [GitHub CLI](https://cli.github.com/) logged in as a repository admin, subscribe
+The recommended way to receive events: one App, installed on all your repositories,
+covers new ones without setup, and its short-lived installation token replaces
+`GITHUB_TOKEN`. Deploy first with `GITHUB_WEBHOOK_SOURCES` set to `repository` (the
+committed value), so App deliveries are acknowledged and ignored until the App is
+checked.
+
+1. Open **Settings → Developer settings → GitHub Apps → New GitHub App**.
+   - Webhook URL: `https://<your-worker>.workers.dev/webhook`
+   - Webhook secret: paste it with `wl-copy < ~/.config/repo-pulse/webhook-secret`
+     (macOS: `pbcopy`), the same secret the Worker has
+   - Repository permissions, all **Read-only**: Metadata, Contents, Issues,
+     Pull requests, Administration
+   - Subscribe to events: Star, Fork, Issues, Pull request, Push, Release
+   - Where can this GitHub App be installed: **Only on this account**
+2. Note the App ID. Generate a private key; GitHub downloads it as PKCS#1, and the
+   Worker needs PKCS#8:
+
+   ```bash
+   (umask 077; openssl pkcs8 -topk8 -nocrypt -in ~/Downloads/<app>.private-key.pem \
+     -out ~/.config/repo-pulse/app-key.pkcs8.pem)
+   ```
+
+3. **Install App → All repositories.** The installation ID is the number at the end
+   of the installation's settings URL.
+4. Set the secrets. The key comes from the file; type the two IDs at the prompts:
+
+   ```bash
+   npm exec -- wrangler secret put GITHUB_APP_PRIVATE_KEY < ~/.config/repo-pulse/app-key.pkcs8.pem
+   npm exec -- wrangler secret put GITHUB_APP_ID
+   npm exec -- wrangler secret put GITHUB_APP_INSTALLATION_ID
+   ```
+
+   Then delete both key files. GitHub can issue a new key at any time.
+5. In the App's **Advanced → Recent Deliveries**, deliveries should answer `200` with
+   `ignored`. Open one repository event and check that `installation.id` in its payload
+   is the installation ID you set.
+6. Switch `GITHUB_WEBHOOK_SOURCES` as [docs/operations.md](docs/operations.md#moving-between-repository-webhooks-and-the-github-app)
+   describes: to `repository,app` first, and to `app` after the overlap.
+
+The App's token asks for Metadata, Contents and Administration read only. A leaked App
+key gives read access to every repository the App is installed on, private ones
+included; to rotate it, generate a new key in the App, convert it, `wrangler secret put
+GITHUB_APP_PRIVATE_KEY`, deploy, check a digest, then delete the old key in GitHub.
+
+## Repository webhooks
+
+The alternative to the App: one webhook per repository. With the
+[GitHub CLI](https://cli.github.com/) logged in as a repository admin, subscribe
 repositories in one command. Repositories that already send to the URL are skipped:
 
 ```bash
@@ -115,13 +162,14 @@ Node tests use disposable SQLite data and controlled network fakes. `test:worker
 runs separately in local workerd with real simulated D1 bindings, no remote bindings,
 and test-only credentials. `benchmark:ledger` is an opt-in local SQLite measurement.
 
-After deployment, use your admin token through a protected environment variable:
+After deployment, send your admin token to curl through stdin, so it stays out of the
+process list and shell history (`printf` is a shell builtin):
 
 ```bash
-curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-  https://<your-worker>.workers.dev/admin/status
-curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-  https://<your-worker>.workers.dev/admin/health
+printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_API_TOKEN" |
+  curl --config - https://<your-worker>.workers.dev/admin/status
+printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_API_TOKEN" |
+  curl --config - https://<your-worker>.workers.dev/admin/health
 ```
 
 `/admin/docs` and `/admin/openapi.json` also require the bearer header. Opening the docs
