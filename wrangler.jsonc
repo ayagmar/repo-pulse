@@ -34,7 +34,7 @@
     // Close and Label buttons on issue alerts, answered at POST /discord/interactions.
     // `on` needs the Discord application's secrets and an application-owned webhook;
     // see docs/operations.md. `off` keeps alerts without buttons and the route at 404.
-    "DISCORD_ACTIONS": "off"
+    "DISCORD_ACTIONS": "on"
   },
   // Best-effort limit on GET /public/feed per client IP and Cloudflare location.
   "ratelimits": [
