@@ -154,6 +154,72 @@ GitHub pings each new webhook: `200` means the secret matches, `401` means it do
 Supported deliveries return `202` after persistence, not after Discord delivery. Duplicate
 retained delivery IDs return `200`; unsupported events are acknowledged and ignored.
 
+## Discord actions (optional)
+
+Close and Label buttons on issue alerts, for the Discord users you list. They need the
+GitHub App above and a Discord application. The Worker never holds a bot token: a bot
+token is used once, to create a webhook owned by the application, then reset. Do each
+step's check before the next.
+
+1. In the GitHub App's **Permissions & events**, set **Issues** to **Read and write**
+   and save. Accept the new permission on the installation (GitHub asks the owner to
+   review it). The Worker asks for it only on the repository a button acts on.
+2. In the [Discord Developer Portal](https://discord.com/developers/applications),
+   create an application. Note its **Application ID** and **Public Key**. In Discord,
+   turn on **Settings → Advanced → Developer Mode**, then right-click your name and copy
+   your user ID, and right-click the alerts channel and copy its ID.
+3. Under **Bot**, reset the token and copy it. Under **OAuth2 → URL Generator**, pick
+   the `bot` scope and the **Manage Webhooks** permission, open the URL and add the
+   application to your server. Keep the token in files only, never on a command line:
+
+   ```bash
+   (umask 077; wl-paste | tr -d '\n' > ~/.config/repo-pulse/discord-bot-token)  # macOS: pbpaste
+   (umask 077; printf 'header = "Authorization: Bot %s"\n' "$(cat ~/.config/repo-pulse/discord-bot-token)" \
+     > ~/.config/repo-pulse/discord-bot.curl)
+   ```
+
+   Create the webhook in the alerts channel and save its URL:
+
+   ```bash
+   (umask 077; curl -s --config ~/.config/repo-pulse/discord-bot.curl \
+     -H 'Content-Type: application/json' -d '{"name":"Repo Pulse"}' \
+     https://discord.com/api/v10/channels/<channel-id>/webhooks |
+     jq -j '"https://discord.com/api/webhooks/\(.id)/\(.token)"' \
+     > ~/.config/repo-pulse/discord-webhook-url)
+   ```
+
+   Check that the application owns it; this prints the Application ID:
+
+   ```bash
+   printf 'url = "%s"\n' "$(cat ~/.config/repo-pulse/discord-webhook-url)" |
+     curl -s --config - | jq -r .application_id
+   ```
+
+   Then reset the bot token in the Developer Portal, which revokes the old one, and
+   delete both bot files.
+4. Set the secrets with `DISCORD_ACTIONS` still `off`, and deploy. Type the application
+   ID, the public key and your user ID (several are comma-separated) at the prompts:
+
+   ```bash
+   npm exec -- wrangler secret put DISCORD_WEBHOOK_URL < ~/.config/repo-pulse/discord-webhook-url
+   npm exec -- wrangler secret put DISCORD_APPLICATION_ID
+   npm exec -- wrangler secret put DISCORD_PUBLIC_KEY
+   npm exec -- wrangler secret put DISCORD_ALLOWED_USER_IDS
+   npm run deploy
+   ```
+
+   Check that alerts still post, now through the new webhook. Delete the old webhook
+   once you are sure.
+5. Set `"DISCORD_ACTIONS": "on"` in `wrangler.jsonc` and run `npm run deploy`. Then, in
+   the Developer Portal, set **Interactions Endpoint URL** to
+   `https://<your-worker>.workers.dev/discord/interactions` and save. Discord saves it
+   only after the Worker answers its signed test requests.
+6. On a test issue, use **Label…**, then **Close**. Each should answer with a receipt only
+   you see, and the alert should list both actions with Close greyed out.
+
+To turn the buttons off, set `DISCORD_ACTIONS` back to `off` and deploy. Alerts keep
+posting through the application's webhook, without buttons.
+
 ## Verify
 
 ```bash
