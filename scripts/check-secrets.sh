@@ -22,6 +22,9 @@ use warnings;
 # Set only with `wrangler secret put`, never committed (credentials and owner identifiers).
 my $names = qr/(?:GITHUB_APP_PRIVATE_KEY|GITHUB_WEBHOOK_SECRET|ADMIN_API_TOKEN|DISCORD_WEBHOOK_URL|GITHUB_PUBLIC_TOKEN|GITHUB_TOKEN|GITHUB_APP_INSTALLATION_ID|GITHUB_APP_ID|DISCORD_APPLICATION_ID|DISCORD_PUBLIC_KEY|DISCORD_ALLOWED_USER_IDS|PEOPLE_IGNORED_LOGINS)/;
 
+# A number literal in code, such as an App or installation id.
+my $number = qr/-?(?:0[xX][0-9A-Fa-f_]+|[0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?n?)/;
+
 # The one Discord webhook URL tests may use.
 my $fixture_webhook = "https://discord.com/api/webhooks/0/test-only";
 
@@ -49,7 +52,9 @@ for my $file (@ARGV) {
   open(my $handle, "<", $file) or die "cannot read $file: $!\n";
   my $is_code = $file =~ /\.(?:[cm]?[jt]s|tsx)$/;
   my $pem_header_line = 0;
+  my @lines;
   while (my $text = <$handle>) {
+    push @lines, $text;
     my $line = $.;
     if ($pem_header_line && $text =~ /^\s*[A-Za-z0-9+\/=]{40,}\s*$/) {
       report($file, $pem_header_line, "PEM private key");
@@ -71,16 +76,23 @@ for my $file (@ARGV) {
     if ($file eq "wrangler.jsonc" && $text =~ /$names/) {
       report($file, $line, "credential or owner identifier in wrangler.jsonc; use wrangler secret put");
     }
-    while ($text =~ /(?<![A-Za-z0-9_])($names)["\x27`]?\s*[:=]\s*("(?:[^"\\]|\\.)*"|\x27(?:[^\x27\\]|\\.)*\x27|`[^`]*`|[^\s,;)}\]]*)/g) {
-      my ($name, $value) = ($1, $2);
-      my $quoted = $value =~ s/^(["\x27`])(.*)\1$/$2/s;
-      # In code, an unquoted value is an expression, not a literal.
-      next if !$quoted && ($is_code || $value =~ /^[{\[(]/);
-      report($file, $line, "$name is assigned a value that is not a placeholder")
-        unless is_placeholder($value);
-    }
   }
   close($handle);
+
+  # Assignments are matched over the whole file: a quoted value may sit on the line
+  # after its name. A bare value must stay on the same line, so `NAME=` followed by
+  # another line is read as empty.
+  my $content = join("", @lines);
+  while ($content =~ /(?<![A-Za-z0-9_])($names)["\x27`]?[ \t]*[:=][ \t]*(?:(\r?\n\s*)("(?:[^"\\]|\\.)*"|\x27(?:[^\x27\\]|\\.)*\x27|`[^`]*`|$number(?![\w.]))|("(?:[^"\\]|\\.)*"|\x27(?:[^\x27\\]|\\.)*\x27|`[^`]*`|[^\s,;)}\]]*))/g) {
+    my $name = $1;
+    my $value = defined $3 ? $3 : $4;
+    my $line = 1 + (substr($content, 0, $-[0]) =~ tr/\n//);
+    my $quoted = $value =~ s/^(["\x27`])(.*)\1$/$2/s;
+    # In code, an unquoted value is an expression, unless it is a number literal.
+    next if !$quoted && (($is_code && $value !~ /^$number$/) || $value =~ /^[{\[(]/);
+    report($file, $line, "$name is assigned a value that is not a placeholder")
+      unless is_placeholder($value);
+  }
 }
 exit $failed;
 '

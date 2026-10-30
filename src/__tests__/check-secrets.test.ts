@@ -87,6 +87,26 @@ describe('scripts/check-secrets.sh', () => {
       'wrangler.jsonc',
       `{ "vars": { ${leak.assignment('"GITHUB_APP_ID"', '"5"', ': ')} } }\n`,
     ],
+    [
+      'an admin token on the line after its name',
+      'src/__tests__/helpers.ts',
+      `export const env = {\n  ${leak.assignment('ADMIN_API_TOKEN', `\n    "${randomHex}"`, ':')},\n};\n`,
+    ],
+    [
+      'a webhook secret on the line after its name in YAML',
+      'config/example.yml',
+      `${leak.assignment('GITHUB_WEBHOOK_SECRET', `\n  "${randomHex}"`, ':')}\n`,
+    ],
+    [
+      'an App id as a number literal in code',
+      'src/__tests__/helpers.ts',
+      `export const env = { ${leak.assignment('GITHUB_APP_ID', '1234567', ': ')} };\n`,
+    ],
+    [
+      'an installation id as a number literal on the next line',
+      'src/__tests__/helpers.ts',
+      `export const env = {\n  ${leak.assignment('GITHUB_APP_INSTALLATION_ID', '\n    87654321', ':')},\n};\n`,
+    ],
   ])('fails on %s, naming the file and not the value', (_, path, content) => {
     const { status, stderr } = check({ [path]: content });
 
@@ -101,6 +121,9 @@ describe('scripts/check-secrets.sh', () => {
       '.dev.vars.example': [
         leak.assignment('GITHUB_WEBHOOK_SECRET', 'replace-with-github-webhook-secret'),
         leak.assignment('ADMIN_API_TOKEN', 'replace-with-admin-bearer-token'),
+        // An empty value, then the next variable: not read as the first one's value.
+        leak.assignment('GITHUB_TOKEN', ''),
+        'LOG_LEVEL="debug"',
         leak.assignment('DISCORD_WEBHOOK_URL', 'https://discord.com/api/webhooks/<id>/<token>'),
         '',
       ].join('\n'),
@@ -113,6 +136,9 @@ describe('scripts/check-secrets.sh', () => {
         `export const env = { ${leak.assignment('ADMIN_API_TOKEN', "'admin-token'", ': ')},`,
         `  ${leak.assignment('GITHUB_WEBHOOK_SECRET', "'test-secret'", ': ')},`,
         `  ${leak.assignment('GITHUB_APP_PRIVATE_KEY', 'privateKey', ': ')},`,
+        `  ${leak.assignment('GITHUB_APP_ID', '\n    String(appId)', ':')},`,
+        `  ${leak.assignment('GITHUB_APP_INSTALLATION_ID', 'installation.id', ': ')},`,
+        `  ${leak.assignment('ADMIN_API_TOKEN', "\n    'admin-token'", ':')},`,
         `  ${leak.assignment('DISCORD_WEBHOOK_URL', "'https://discord.com/api/webhooks/0/test-only'", ': ')} };`,
         '',
       ].join('\n'),
