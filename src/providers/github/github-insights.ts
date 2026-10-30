@@ -1,10 +1,15 @@
 import type { RepositoryInsights, UserProfile } from '../../core/interfaces/repository-insights.js';
 import type { UnreleasedWork } from '../../core/models/digest.js';
 import type { Referrer } from '../../core/models/momentum-alert.js';
+import {
+  boundedMessage,
+  type Redactor,
+  transportFailure,
+  upstreamFailure,
+} from '../../core/security/redact.js';
 import { logger } from '../../core/services/logger.js';
 
 const API_URL = 'https://api.github.com';
-const ERROR_DETAIL_LIMIT = 300;
 /** A digest or alert waits this long for GitHub, then goes out without its details. */
 const REQUEST_TIMEOUT_MS = 5_000;
 
@@ -46,10 +51,15 @@ function repositoryField(fields: AliasedField['field']): AliasedField['field'] {
 /**
  * Reads GitHub's API with a read-only token. GraphQL questions about several
  * repositories or users are asked in one request, with an alias per item and
- * variables for every name, so names never need escaping.
+ * variables for every name, so names never need escaping. Errors keep GitHub's
+ * status and message, with credentials redacted.
  */
 export class GitHubInsights implements RepositoryInsights {
-  constructor(private readonly token: string) {}
+  constructor(
+    /** The token for each request: a fixed one, or the App's installation token. */
+    private readonly token: () => Promise<string>,
+    private readonly redactor: Redactor
+  ) {}
 
   async listUnreleasedWork(repositories: readonly string[]): Promise<UnreleasedWork[]> {
     if (repositories.length === 0) {
@@ -169,7 +179,8 @@ export class GitHubInsights implements RepositoryInsights {
     });
     const body: { data?: Record<string, T | null> | null; errors?: { message: string }[] } =
       await response.json();
-    const messages = body.errors?.map((error) => error.message).join('; ');
+    const joined = body.errors?.map((error) => error.message).join('; ');
+    const messages = joined === undefined ? undefined : boundedMessage(joined, this.redactor);
     if (!body.data) {
       throw new Error(`GitHub GraphQL query failed: ${messages ?? 'no data'}`);
     }
@@ -184,21 +195,30 @@ export class GitHubInsights implements RepositoryInsights {
 
   /** GET `path`, or POST `body` as JSON to it. Throws on a non-2xx response. */
   private async request(path: string, body?: unknown): Promise<Response> {
-    const response = await fetch(`${API_URL}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${this.token}`,
-        'User-Agent': 'repo-pulse',
-        'X-GitHub-Api-Version': '2022-11-28',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    const token = await this.token();
+    const label = `GitHub ${path}`;
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'repo-pulse',
+          'X-GitHub-Api-Version': '2022-11-28',
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (error) {
+      // The exception can quote the request, so it is not kept as the cause.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(transportFailure(label, error));
+    }
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, ERROR_DETAIL_LIMIT);
-      throw new Error(`GitHub ${path} failed with ${String(response.status)}: ${detail}`);
+      const text = await response.text().catch(() => '');
+      throw new Error(upstreamFailure(label, response.status, text, this.redactor));
     }
     return response;
   }

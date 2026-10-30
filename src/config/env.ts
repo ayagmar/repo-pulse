@@ -117,8 +117,8 @@ function parseWebhookSources(value: string | undefined): ReadonlySet<WebhookSour
   return new Set(sources as WebhookSource[]);
 }
 
-interface GitHubAppConfig {
-  appId: string;
+export interface GitHubAppConfig {
+  appId: number;
   installationId: number;
   /** PKCS#8 PEM. */
   privateKey: string;
@@ -145,9 +145,6 @@ function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
     );
   }
 
-  if (!/^\d+$/.test(appId.trim())) {
-    throw new Error('Invalid GITHUB_APP_ID: expected a number');
-  }
   const trimmedKey = privateKey.trim();
   if (trimmedKey.startsWith(PKCS1_HEADER)) {
     throw new Error(
@@ -158,8 +155,9 @@ function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
     throw new Error('Invalid GITHUB_APP_PRIVATE_KEY: expected a PKCS#8 PEM private key');
   }
 
+  // Both are set by now, so the default of 0 is never used.
   return {
-    appId: appId.trim(),
+    appId: parsePositiveInteger('GITHUB_APP_ID', appId, 0),
     installationId: parsePositiveInteger('GITHUB_APP_INSTALLATION_ID', installationId, 0),
     privateKey: trimmedKey,
   };

@@ -116,7 +116,7 @@ describe('createConfig', () => {
 
     it('reads a complete App config', () => {
       expect(createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: 'app' }).github.app).toEqual({
-        appId: '1',
+        appId: 1,
         installationId: 2,
         privateKey: app.GITHUB_APP_PRIVATE_KEY.trim(),
       });

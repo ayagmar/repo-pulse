@@ -3,6 +3,7 @@ import type { Digest } from '../../core/models/digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../../core/models/failure-classification.js';
 import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type { RepoEvent } from '../../core/models/repo-event.js';
+import { type Redactor, transportFailure, upstreamFailure } from '../../core/security/redact.js';
 import {
   type DiscordWebhookPayload,
   formatDiscordAlert,
@@ -58,7 +59,10 @@ function parseRetryDelayMs(headers: Headers): number | undefined {
 class DiscordNotifier implements Notifier {
   readonly name = 'discord';
 
-  constructor(private readonly cfg: DiscordNotifierConfig) {}
+  constructor(
+    private readonly cfg: DiscordNotifierConfig,
+    private readonly redactor: Redactor
+  ) {}
 
   isConfigured(): boolean {
     return true;
@@ -95,11 +99,11 @@ class DiscordNotifier implements Notifier {
         body: JSON.stringify(payload),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // The exception can quote the webhook URL, so only its kind is kept.
       return {
         success: false,
         provider: this.name,
-        error: `Discord request failed: ${errorMessage}`,
+        error: transportFailure('Discord request', error),
         failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
       };
     }
@@ -111,8 +115,8 @@ class DiscordNotifier implements Notifier {
       };
     }
 
-    const errorText = await response.text().catch(() => 'Unknown error');
-    const error = `Discord API error: ${String(response.status)} ${errorText}`;
+    const errorText = await response.text().catch(() => '');
+    const error = upstreamFailure('Discord request', response.status, errorText, this.redactor);
 
     if (response.status === 429 || response.status >= 500) {
       const retryAfterMs = parseRetryDelayMs(response.headers);
@@ -137,7 +141,10 @@ class DiscordNotifier implements Notifier {
 /**
  * Factory function to create a Discord notifier from environment config
  */
-export function createDiscordNotifier(webhookUrl: string | undefined): DiscordNotifier | null {
+export function createDiscordNotifier(
+  webhookUrl: string | undefined,
+  redactor: Redactor
+): DiscordNotifier | null {
   if (webhookUrl === undefined || webhookUrl === '') {
     return null;
   }
@@ -146,9 +153,12 @@ export function createDiscordNotifier(webhookUrl: string | undefined): DiscordNo
     throw new Error('Invalid DISCORD_WEBHOOK_URL: expected a Discord webhook URL');
   }
 
-  return new DiscordNotifier({
-    webhookUrl,
-    username: 'Repo Pulse',
-    avatarUrl: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
-  });
+  return new DiscordNotifier(
+    {
+      webhookUrl,
+      username: 'Repo Pulse',
+      avatarUrl: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
+    },
+    redactor
+  );
 }

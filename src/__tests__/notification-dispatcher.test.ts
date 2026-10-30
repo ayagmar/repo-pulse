@@ -7,6 +7,7 @@ import {
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
 } from '../core/models/repo-event.js';
+import { Redactor } from '../core/security/redact.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
 
 function createMockNotifier(
@@ -54,7 +55,7 @@ describe('NotificationDispatcher', () => {
   let dispatcher: NotificationDispatcher;
 
   beforeEach(() => {
-    dispatcher = new NotificationDispatcher();
+    dispatcher = new NotificationDispatcher(new Redactor([]));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
 

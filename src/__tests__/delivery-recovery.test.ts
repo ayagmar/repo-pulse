@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FAILURE_CLASSIFICATIONS } from '../core/models/failure-classification.js';
+import { Redactor } from '../core/security/redact.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { DurableEventProcessor } from '../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
@@ -138,7 +139,7 @@ describe('delivery recovery and ownership', () => {
 
   it('recovers after a D1 outcome-write failure instead of making a delivery permanently failed', async () => {
     await enqueue();
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add({
       name: 'discord',
       isConfigured: () => true,
