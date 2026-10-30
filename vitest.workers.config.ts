@@ -17,6 +17,9 @@ export default defineConfig({
           // wrangler.jsonc admits only App deliveries, which need App credentials these
           // tests do not have; they send repository webhooks.
           GITHUB_WEBHOOK_SOURCES: 'repository',
+          // wrangler.jsonc turns Discord actions on, which needs credentials these tests do
+          // not have; the Ed25519 test turns them on with its own.
+          DISCORD_ACTIONS: 'off',
         },
       },
     }),
