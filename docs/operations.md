@@ -120,9 +120,49 @@ Never switch from one source to the other directly. Add the new source, wait for
 3. Check the overlap: list the App's deliveries (`GET /app/hook/deliveries`, as the App) and each repository webhook's (`gh api repos/<owner>/<repo>/hooks/<id>/deliveries`) from S minus the overlap to R plus the overlap. An event is lost only if its two copies (same event, action and repository) arrived further apart than the overlap; report any such pair.
 4. Once the App has run for a while, remove the repository webhooks with `just unsubscribe --dry-run <worker-url> owner/repo …`, then without `--dry-run`. Keep the inventory file it writes.
 
-To roll back: if the repository webhooks were removed, first recreate them with `just subscribe` for the repositories in the inventory file and check that each hook's ping answers `200`. Then set `repository,app`, deploy, wait the overlap, set `repository`, deploy. Never set `repository` alone while a repository the App covered has no webhook.
-
 Why nothing is dropped: adding a source cannot drop an event. When a source is removed at R, the other has been admitted since S, so an event is lost only when its copy from the remaining source arrived before S and its copy from the removed source after R: two copies of one event more than R − S apart. Workers still running the previous version after a deploy only extend the time the previous setting applies, which the overlap absorbs.
+
+### Rolling back to repository webhooks
+
+Keep `app` admitted until every repository the App covers has a working webhook. The removed-hook inventory is not enough: repositories created while the App was active, or never hooked, are in no inventory.
+
+1. List the public, non-fork, non-archived repositories the installation covers:
+
+   ```bash
+   gh api --paginate user/installations/<installation-id>/repositories \
+     --jq '.repositories[] | select(.private == false and .fork == false and .archived == false) | .full_name' |
+     sort > covered.txt
+   ```
+
+   If GitHub refuses that call for the CLI's token, the App is installed on all your repositories, so this lists the same set: `gh repo list <owner> --limit 1000 --visibility public --source --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | sort > covered.txt`. Archived repositories cannot take a webhook; their stars are no longer posted after the rollback.
+2. Add the missing webhooks while `app` is still admitted: `just subscribe <worker-url> $(cat covered.txt)`. It skips repositories already subscribed. GitHub pings each new hook, and the Worker acknowledges pings whatever the sources.
+3. Check coverage. This prints every repository without a hook whose last delivery answered `200`; it must print nothing:
+
+   ```bash
+   url=<worker-url>/webhook
+   while read -r repo; do
+     code="$(gh api "repos/$repo/hooks" --jq ".[] | select(.config.url == \"$url\") | .last_response.code")"
+     [ "$code" = 200 ] || echo "$repo: ${code:-no hook}"
+   done < covered.txt
+   ```
+
+4. Only then set `repository,app`, deploy, wait the overlap, set `repository`, deploy. Check that a star posts once.
+
+Never set `repository` alone while the check in step 3 prints anything.
+
+### Removing the App
+
+Only after a rollback has left `GITHUB_WEBHOOK_SOURCES` at `repository` and the coverage check passed. One or two of the three App secrets is a configuration error that fails every request, repository webhooks included, so stage the deletions as one new version and deploy it once:
+
+```bash
+npm exec -- wrangler versions secret delete GITHUB_APP_PRIVATE_KEY
+npm exec -- wrangler versions secret delete GITHUB_APP_ID
+npm exec -- wrangler versions secret delete GITHUB_APP_INSTALLATION_ID
+npm exec -- wrangler versions secret put GITHUB_TOKEN   # optional, for digest details; at the prompt
+npm exec -- wrangler versions deploy                    # the newest version, 100%
+```
+
+Then check `/admin/health` answers `200` and a star posts once, and uninstall the App in GitHub.
 
 ## Admin Endpoints
 
