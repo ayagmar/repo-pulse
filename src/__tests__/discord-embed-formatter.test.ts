@@ -361,6 +361,49 @@ describe('formatDiscordEmbed', () => {
     expect(embed.author?.url).toBe('https://github.com/testuser');
     expect(embed.footer?.text).toBe('owner/test-repo');
   });
+
+  it('says whether the sender is new or has been seen before, and nothing when unknown', () => {
+    const issue = createEvent(REPO_EVENT_TYPES.ISSUE_OPENED, {
+      action: REPO_EVENT_ACTIONS.OPENED,
+      issue: {
+        number: 7,
+        title: 'Crash on start',
+        url: 'https://github.com/owner/test-repo/issues/7',
+        state: 'open',
+        body: null,
+        labels: [],
+      },
+    });
+    const star = createEvent(REPO_EVENT_TYPES.STAR_CREATED, {
+      action: REPO_EVENT_ACTIONS.CREATED,
+      star: { count: 3 },
+    });
+    const firstTime = {
+      firstSeenAt: null,
+      priorEvents: 0,
+      priorRepositories: 0,
+      priorInRepository: 0,
+    };
+    const returning = {
+      firstSeenAt: '2026-03-04T23:30:00.000Z',
+      priorEvents: 12,
+      priorRepositories: 3,
+      priorInRepository: 1,
+    };
+
+    expect(getFirstEmbed(formatDiscordEmbed(issue))).not.toHaveProperty('description');
+    expect(
+      getFirstEmbed(formatDiscordEmbed({ ...issue, senderHistory: firstTime })).description
+    ).toBe('👋 First time here');
+    expect(getFirstEmbed(formatDiscordEmbed(star)).description).toBe(
+      '[testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo)\n⭐ **3** total'
+    );
+    expect(
+      getFirstEmbed(formatDiscordEmbed({ ...star, senderHistory: returning })).description
+    ).toBe(
+      '[testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo)\n⭐ **3** total\n\n↩️ Seen before: 12 events in 3 repos since 4 Mar 2026'
+    );
+  });
 });
 
 describe('formatDiscordDigest', () => {
@@ -392,6 +435,7 @@ describe('formatDiscordDigest', () => {
       eventCount: 62,
       repositories: [activity('myorg/monorepo', 60), activity('myorg/cli', 0)],
       unreleased: [],
+      people: [],
     });
 
     const lines = payload.embeds[0]?.description?.split('\n') ?? [];

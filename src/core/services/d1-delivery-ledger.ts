@@ -8,7 +8,7 @@ import type {
 import { DELIVERY_STATUSES } from '../models/delivery-ledger.js';
 import type { FailureClassification } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
-import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
+import { deserializeRepoEvent } from '../models/repo-event.js';
 import { prepareEventHistoryInsert } from './d1-event-history.js';
 import type { D1DatabaseLike } from './d1-types.js';
 
@@ -18,6 +18,8 @@ interface PersistDeliveryInput {
   repository: string;
   event: RepoEvent;
   maxAttempts: number;
+  /** Record what was seen from this sender before, on the stored event. */
+  rememberSenderId?: number;
 }
 
 interface DeliveryForProcessing {
@@ -122,6 +124,8 @@ export class D1DeliveryLedger {
 
   async persistAcceptedDelivery(input: PersistDeliveryInput): Promise<PersistDeliveryResult> {
     const acceptedAt = new Date().toISOString();
+    // The delivery copies the event as recorded in `events`: this one, or the one first
+    // accepted under this delivery id if its delivery row was pruned since.
     const insertDelivery = this.db
       .prepare(
         `INSERT OR IGNORE INTO deliveries (
@@ -140,27 +144,32 @@ export class D1DeliveryLedger {
           lease_expires_at,
           last_error,
           last_failure_classification
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL)`
+        )
+        SELECT ?, ?, event_type, ?, event_json, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL
+        FROM events
+        WHERE delivery_id = ?`
       )
       .bind(
         input.deliveryId,
         input.sourceEventType,
-        input.event.type,
         input.repository,
-        serializeRepoEvent(input.event),
         acceptedAt,
         DELIVERY_STATUSES.PENDING,
         acceptedAt,
-        input.maxAttempts
+        input.maxAttempts,
+        input.deliveryId
       );
-    const [deliveryResult] = await this.db.batch([
-      insertDelivery,
+    const [, deliveryResult] = await this.db.batch([
       prepareEventHistoryInsert(this.db, {
         deliveryId: input.deliveryId,
         repository: input.repository,
         event: input.event,
         receivedAt: acceptedAt,
+        ...(input.rememberSenderId !== undefined
+          ? { rememberSenderId: input.rememberSenderId }
+          : {}),
       }),
+      insertDelivery,
     ]);
 
     return deliveryResult?.meta.changes === 0 ? { outcome: 'duplicate' } : { outcome: 'accepted' };

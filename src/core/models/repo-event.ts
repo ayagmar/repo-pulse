@@ -159,12 +159,27 @@ interface RepoEventPayloadMap {
 
 export type RepoEventType = keyof RepoEventPayloadMap;
 
+/** What was recorded from the sender, across all repositories, before this event. */
+export interface SenderHistory {
+  /** ISO time of the sender's earliest recorded event, or null when there is none. */
+  firstSeenAt: string | null;
+  priorEvents: number;
+  priorRepositories: number;
+  priorInRepository: number;
+}
+
 interface BaseRepoEvent<TType extends RepoEventType, TAction extends string> {
   type: TType;
   action: TAction;
   repository: Repository;
   sender: User;
   timestamp: Date;
+  /**
+   * Set when the event was accepted, for outside people only. Absent for the owner,
+   * ignored logins and bots, for events stored before it existed, and when it could
+   * not be read.
+   */
+  senderHistory?: SenderHistory;
 }
 
 export type RepoEvent = {

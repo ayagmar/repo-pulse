@@ -29,6 +29,17 @@ export interface UnreleasedWork {
   commitsSinceRelease: number;
 }
 
+/** An outside person active during a weekly digest's window. */
+export interface PersonActivity {
+  /** The latest login seen for the person's GitHub user id. */
+  login: string;
+  url: string;
+  events: number;
+  repositories: number;
+  /** First seen inside the window. */
+  isNew: boolean;
+}
+
 export interface Digest {
   period: DigestPeriod;
   /** Local date of the digest, YYYY-MM-DD. */
@@ -41,4 +52,6 @@ export interface Digest {
   repositories: RepositoryActivity[];
   /** Daily digests only, and only when GitHub was asked and answered. */
   unreleased: UnreleasedWork[];
+  /** Weekly digests only, most active first, and only when the people read succeeded. */
+  people: PersonActivity[];
 }

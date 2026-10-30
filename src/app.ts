@@ -47,7 +47,8 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
   const eventProcessor = new DurableEventProcessor(
     deliveryLedger,
     notificationDispatcher,
-    config.deliveryLedger
+    config.deliveryLedger,
+    { ignoredLogins: config.people.ignoredLogins }
   );
 
   return {
@@ -133,7 +134,7 @@ export async function sendDueDigests(
     runtime.eventHistory,
     new D1DigestLog(env.DB),
     runtime.notificationDispatcher,
-    runtime.config.digest,
+    { ...runtime.config.digest, ignoredLogins: runtime.config.people.ignoredLogins },
     insights.get(runtime)
   );
   await sender.sendDueDigests(now);

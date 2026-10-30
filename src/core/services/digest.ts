@@ -1,10 +1,17 @@
 import type { RepositoryInsights } from '../interfaces/repository-insights.js';
-import type { Digest, DigestPeriod, RepositoryActivity, UnreleasedWork } from '../models/digest.js';
+import type {
+  Digest,
+  DigestPeriod,
+  PersonActivity,
+  RepositoryActivity,
+  UnreleasedWork,
+} from '../models/digest.js';
 import { REPO_EVENT_TYPES } from '../models/repo-event.js';
 import type { D1DigestLog } from './d1-digest-log.js';
 import type { D1EventHistory, EventActivity } from './d1-event-history.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
+import { isOutsidePerson } from './people.js';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -26,6 +33,9 @@ const MONDAY = 1;
 /** The daily digest checks repositories active this recently for unreleased work. */
 const UNRELEASED_LOOKBACK_MS = 30 * DAY_MS;
 const UNRELEASED_MAX_REPOSITORIES = 20;
+
+/** The weekly digest lists this many of the week's most active outside people. */
+const LISTED_PEOPLE = 5;
 
 interface DigestWindow {
   period: DigestPeriod;
@@ -218,6 +228,58 @@ function summarizeRepositories(events: readonly EventActivity[]): RepositoryActi
   );
 }
 
+interface WindowPerson {
+  senderId: number;
+  login: string;
+  url: string;
+  events: number;
+  repositories: Set<string>;
+}
+
+/**
+ * The window's most active outside people: most repositories, then most events, then
+ * lowest sender id. Events are oldest first, so each keeps the latest login seen.
+ */
+function mostActivePeople(
+  events: readonly EventActivity[],
+  ignoredLogins: ReadonlySet<string>
+): WindowPerson[] {
+  const bySender = new Map<number, WindowPerson>();
+  for (const event of events) {
+    if (
+      event.senderId === null ||
+      !isOutsidePerson(
+        { id: event.senderId, login: event.senderLogin },
+        event.repositoryOwner,
+        ignoredLogins
+      )
+    ) {
+      continue;
+    }
+    const person = bySender.get(event.senderId) ?? {
+      senderId: event.senderId,
+      login: '',
+      url: '',
+      events: 0,
+      repositories: new Set<string>(),
+    };
+    bySender.set(event.senderId, person);
+    person.login = event.senderLogin ?? person.login;
+    person.url = event.senderUrl ?? person.url;
+    person.events += 1;
+    person.repositories.add(event.repository);
+  }
+
+  return [...bySender.values()]
+    .sort(
+      (left, right) =>
+        right.repositories.size - left.repositories.size ||
+        right.events - left.events ||
+        left.senderId - right.senderId
+    )
+    .slice(0, LISTED_PEOPLE);
+}
+
 const PERIODS: readonly DigestPeriod[] = ['daily', 'weekly'];
 
 export class DigestSender {
@@ -225,7 +287,11 @@ export class DigestSender {
     private readonly history: D1EventHistory,
     private readonly digestLog: D1DigestLog,
     private readonly dispatcher: NotificationDispatcher,
-    private readonly options: { timeZone: string; hour: number },
+    private readonly options: {
+      timeZone: string;
+      hour: number;
+      ignoredLogins: ReadonlySet<string>;
+    },
     private readonly insights: RepositoryInsights | null = null
   ) {}
 
@@ -260,6 +326,35 @@ export class DigestSender {
         component: 'digest',
         error: error instanceof Error ? error.message : String(error),
       });
+      return [];
+    }
+  }
+
+  /**
+   * The window's most active outside people, each marked new when first seen inside the
+   * window, or none when their first-seen times cannot be read.
+   */
+  private async listPeople(
+    events: readonly EventActivity[],
+    window: DigestWindow
+  ): Promise<PersonActivity[]> {
+    const people = mostActivePeople(events, this.options.ignoredLogins);
+    if (people.length === 0) {
+      return [];
+    }
+
+    try {
+      const firstSeen = await this.history.readFirstSeen(people.map((person) => person.senderId));
+      return people.map((person) => ({
+        login: person.login,
+        url: person.url,
+        events: person.events,
+        repositories: person.repositories.size,
+        isNew: (firstSeen.get(person.senderId)?.getTime() ?? 0) >= window.start.getTime(),
+      }));
+    } catch {
+      // No exception text: D1 errors can quote bound values.
+      logger.warn('people.digest_read_failed', { component: 'digest' });
       return [];
     }
   }
@@ -303,6 +398,7 @@ export class DigestSender {
       eventCount: events.length,
       repositories: summarizeRepositories(events),
       unreleased: window.period === 'daily' ? await this.listUnreleasedWork(window.end) : [],
+      people: window.period === 'weekly' ? await this.listPeople(events, window) : [],
     };
     const unclaimedProviders = new Set(
       this.dispatcher

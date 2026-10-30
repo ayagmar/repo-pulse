@@ -38,7 +38,8 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
-- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. With a GitHub token, it also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days and lists the latest merged pull requests.
+- Alerts say whether the person behind them is new or returning, across all your repositories: `👋 First time here`, or `↩️ Seen before: 12 events in 3 repos since 4 Mar 2026`. Your own events, bots and the logins in `PEOPLE_IGNORED_LOGINS` get no such line.
+- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. With a GitHub token, it also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days, lists the latest merged pull requests, and under "Who's showing up" names the week's five most active outside people, with `🆕` for those seen for the first time that week.
 
 ## Deploy
 

@@ -5,6 +5,7 @@ import type { RepoEvent } from '../models/repo-event.js';
 import type { ClaimedDelivery, D1DeliveryLedger } from './d1-delivery-ledger.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
+import { isOutsidePerson } from './people.js';
 
 interface EventProcessingContext {
   deliveryId: string;
@@ -21,6 +22,11 @@ interface DurableEventProcessorOptions {
   succeededRetentionDays?: number;
   processingLeaseMs?: number;
   drainBatchSize?: number;
+}
+
+/** Who is never remembered, besides repository owners and bots. */
+interface PeopleOptions {
+  ignoredLogins: ReadonlySet<string>;
 }
 
 interface DrainDueDeliveriesOptions {
@@ -68,7 +74,8 @@ export class DurableEventProcessor {
   constructor(
     private readonly ledger: D1DeliveryLedger,
     private readonly dispatcher: NotificationDispatcher,
-    options: DurableEventProcessorOptions = {}
+    options: DurableEventProcessorOptions = {},
+    private readonly people: PeopleOptions | null = null
   ) {
     this.maxAttempts = options.maxAttempts ?? DELIVERY_DEFAULTS.maxAttempts;
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? DELIVERY_DEFAULTS.retryBaseDelayMs;
@@ -83,17 +90,43 @@ export class DurableEventProcessor {
     return this.dispatcher.hasNotifiers();
   }
 
+  /**
+   * Persist an accepted event. For an outside person, the stored event also records
+   * what was seen from them before. That history is optional: if persisting with it
+   * fails, the event is persisted without it, and only that failure fails the request.
+   */
   async enqueue(
     event: RepoEvent,
     context: EventProcessingContext
   ): Promise<EventProcessorEnqueueResult> {
-    return this.ledger.persistAcceptedDelivery({
+    const input = {
       deliveryId: context.deliveryId,
       sourceEventType: context.sourceEventType,
       repository: context.repository,
       event,
       maxAttempts: this.maxAttempts,
-    });
+    };
+    if (
+      this.people === null ||
+      !isOutsidePerson(event.sender, event.repository.owner, this.people.ignoredLogins)
+    ) {
+      return this.ledger.persistAcceptedDelivery(input);
+    }
+
+    try {
+      return await this.ledger.persistAcceptedDelivery({
+        ...input,
+        rememberSenderId: event.sender.id,
+      });
+    } catch {
+      // No exception text: D1 errors can quote bound values.
+      logger.warn('people.history_read_failed', {
+        component: 'event_processor',
+        deliveryId: context.deliveryId,
+        repository: context.repository,
+      });
+      return this.ledger.persistAcceptedDelivery(input);
+    }
   }
 
   retryDelivery(deliveryId: string): ReturnType<D1DeliveryLedger['retryFailedDelivery']> {
