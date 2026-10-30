@@ -1,8 +1,8 @@
 const REDACTED = '[redacted]';
 /** Upstream error messages are kept to this many characters, after redaction. */
 const MESSAGE_LIMIT = 200;
-/** Shorter values are too likely to match ordinary text, and no credential is that short. */
-const MIN_SECRET_LENGTH = 8;
+/** Shorter fragments of a key are too likely to match ordinary text. */
+const MIN_FRAGMENT_LENGTH = 8;
 const URL_PATTERN = /https?:\/\/[^\s"'<>`]+/g;
 const CREDENTIAL_QUERY = /[?&](?:access_token|token|key|secret|sig|signature|code|password)=/i;
 /** GitHub tokens and JWTs, recognizable whether or not this Worker issued them. */
@@ -30,10 +30,16 @@ export class Redactor {
     }
   }
 
+  /** Every configured value is redacted whole, however short. */
   add(secret: string): void {
-    for (const value of [secret, secret.trim(), ...pemBodyLines(secret)]) {
-      if (value.length >= MIN_SECRET_LENGTH) {
+    for (const value of [secret, secret.trim()]) {
+      if (value !== '') {
         this.secrets.add(value);
+      }
+    }
+    for (const fragment of pemBodyLines(secret)) {
+      if (fragment.length >= MIN_FRAGMENT_LENGTH) {
+        this.secrets.add(fragment);
       }
     }
   }

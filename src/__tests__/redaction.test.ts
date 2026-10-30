@@ -1,6 +1,6 @@
 import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, InvocationInsights, sendDueDigests } from '../app.js';
+import { createApp, drainDueDeliveries, InvocationInsights, sendDueDigests } from '../app.js';
 import { Redactor } from '../core/security/redact.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
@@ -182,6 +182,36 @@ describe('secrets in failures', () => {
     );
     expect(admin.status).toBe(200);
     expectNoSentinel(await admin.text());
+  });
+
+  it('redacts a configured secret however short it is', async () => {
+    vi.setSystemTime(new Date('2026-10-30T12:00:00Z'));
+    // Seven characters: config accepts it, so redaction must cover it too.
+    const shortToken = 'test-x7';
+    const env = createEnv({ ADMIN_API_TOKEN: shortToken });
+    const event = createTestRepoEvent();
+    await new D1DeliveryLedger(env.DB).persistAcceptedDelivery({
+      deliveryId: 'short-secret',
+      sourceEventType: 'star',
+      repository: event.repository.fullName,
+      event,
+      maxAttempts: 5,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ message: `Unknown token ${shortToken}` }, { status: 400 })
+        )
+    );
+
+    await drainDueDeliveries(env);
+
+    const stored = await storedErrors(env);
+    expect(stored).toContain('Discord request failed with 400: Unknown token [redacted]');
+    expect(stored).not.toContain(shortToken);
+    expect(logged()).not.toContain(shortToken);
   });
 
   it('keeps them out of a thrown notifier error', async () => {
