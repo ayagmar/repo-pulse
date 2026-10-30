@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, drainDueDeliveries, InvocationInsights, sendDueDigests } from '../app.js';
 import { Redactor } from '../core/security/redact.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
+import { D1EventHistory } from '../core/services/d1-event-history.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
 import { GitHubAppAuth, READ_TOKEN } from '../providers/github/app-auth.js';
 import { GitHubInsights } from '../providers/github/github-insights.js';
@@ -183,6 +184,101 @@ describe('secrets in failures', () => {
     );
     expect(admin.status).toBe(200);
     expectNoSentinel(await admin.text());
+  });
+
+  it('keeps them out of logs when the sender history cannot be recorded, and still posts', async () => {
+    vi.setSystemTime(new Date('2026-10-30T12:00:00Z'));
+    const env = createEnv();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const failingEnv = {
+      ...env,
+      DB: {
+        ...env.DB,
+        prepare: (query: string): ReturnType<typeof env.DB.prepare> => {
+          if (query.includes('$.senderHistory')) {
+            throw leakyError();
+          }
+          return env.DB.prepare(query);
+        },
+      },
+    };
+    const payload = JSON.stringify({
+      action: 'created',
+      repository: {
+        id: 1,
+        name: 'repo',
+        full_name: 'myorg/repo',
+        owner: { login: 'myorg' },
+        html_url: 'https://github.com/myorg/repo',
+        private: false,
+        description: null,
+        stargazers_count: 1,
+        forks_count: 0,
+        language: 'TypeScript',
+      },
+      sender: {
+        id: 1,
+        login: 'octocat',
+        avatar_url: 'https://avatars.githubusercontent.com/u/1',
+        html_url: 'https://github.com/octocat',
+      },
+    });
+
+    const execution = createExecutionContext();
+    const response = await createApp().fetch(
+      new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: {
+          'X-GitHub-Event': 'star',
+          'X-GitHub-Delivery': 'history-fails',
+          'X-Hub-Signature-256': `sha256=${createHmac('sha256', 'test-secret').update(payload).digest('hex')}`,
+        },
+        body: payload,
+      }),
+      failingEnv,
+      execution.executionCtx
+    );
+    await execution.waitForBackground();
+
+    expect(response.status).toBe(202);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const posted = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string;
+    expect(posted).not.toMatch(/First time here|Seen before/);
+    expect(logged()).toContain('people.history_read_failed');
+    expectNoSentinel(logged());
+  });
+
+  it('keeps them out of logs when the week’s people cannot be read, and still posts', async () => {
+    vi.setSystemTime(new Date('2026-10-14T12:00:00Z'));
+    const env = createEnv();
+    await new D1DeliveryLedger(env.DB).persistAcceptedDelivery({
+      deliveryId: 'weekly-star',
+      sourceEventType: 'star',
+      repository: 'myorg/repo',
+      event: createTestRepoEvent(),
+      maxAttempts: 5,
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const readFirstSeen = vi
+      .spyOn(D1EventHistory.prototype, 'readFirstSeen')
+      .mockRejectedValue(leakyError());
+    cleanups.push(() => {
+      readFirstSeen.mockRestore();
+    });
+
+    // Monday 19 October 2026 at the digest hour: only the weekly digest has events.
+    vi.setSystemTime(new Date('2026-10-19T09:00:00Z'));
+    await sendDueDigests(env, new Date('2026-10-19T09:00:00Z'));
+
+    expect(readFirstSeen).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const posted = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string;
+    expect(posted).toContain('Weekly pulse');
+    expect(posted).not.toContain("Who's showing up");
+    expect(logged()).toContain('people.digest_read_failed');
+    expectNoSentinel(logged());
   });
 
   it('redacts a configured secret however short it is', async () => {

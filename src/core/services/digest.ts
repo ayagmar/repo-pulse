@@ -352,11 +352,9 @@ export class DigestSender {
         repositories: person.repositories.size,
         isNew: (firstSeen.get(person.senderId)?.getTime() ?? 0) >= window.start.getTime(),
       }));
-    } catch (error) {
-      logger.warn('people.digest_read_failed', {
-        component: 'digest',
-        error: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
+      // No exception text: D1 errors can quote bound values.
+      logger.warn('people.digest_read_failed', { component: 'digest' });
       return [];
     }
   }
