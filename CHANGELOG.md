@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- People memory: alerts say whether the sender is new (`👋 First time here`) or returning
+  (`↩️ Seen before: N events in M repos since <date>`), counted across all repositories,
+  and the Monday digest lists the week's five most active outside people under "Who's
+  showing up", marking new ones `🆕`. Repository owners, `[bot]` logins and the logins in
+  the new `PEOPLE_IGNORED_LOGINS` secret are left out. Migration `0007` adds an index on
+  the sender id in `events`. When the history cannot be read, alerts and digests are
+  posted without it. A redelivery keeps the text it was first accepted with.
 - GitHub App: one App installed on all repositories can replace per-repository webhooks.
   `GITHUB_WEBHOOK_SOURCES` (`repository`, `app`, or both during a cutover) decides which
   deliveries are admitted; App deliveries from private repositories and forks are ignored.
