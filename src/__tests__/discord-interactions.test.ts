@@ -30,6 +30,7 @@ const STRANGER_ID = '100000000000000003';
 const MESSAGE_ID = '100000000000000004';
 const ISSUE_DELIVERY = '0b5a3a0e-1f6b-4c49-9d3c-6f2b0a1d2e3f';
 const STAR_DELIVERY = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const PRIVATE_DELIVERY = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const WEBHOOK_URL = 'https://discord.com/api/webhooks/0/test-only';
 const INTERACTION_TOKEN = 'test-interaction-token-SENTINEL';
 
@@ -65,12 +66,15 @@ interface Call {
 function fakeUpstreams(): {
   calls: Call[];
   github: { current: () => Response | Promise<Response> };
+  lookup: { current: () => Response | Promise<Response> };
   edit: { current: () => Response | Promise<Response> };
   receipt: { current: () => Response | Promise<Response> };
   mint: { current: (count: number) => Response | Promise<Response> };
 } {
   const calls: Call[] = [];
   const github = { current: (): Response => Response.json({}) };
+  // The public lookup of the test repository: public, not a fork, the stored id.
+  const lookup = { current: (): Response => Response.json({ id: 1, private: false, fork: false }) };
   const edit = { current: (): Response => Response.json({}) };
   const receipt = { current: (): Response => Response.json({}) };
   const mint = {
@@ -98,6 +102,9 @@ function fakeUpstreams(): {
           mint.current(calls.filter((entry) => entry.url.endsWith('/access_tokens')).length)
         );
       }
+      if (url === 'https://api.github.com/repos/myorg/repo' && call.method === 'GET') {
+        return Promise.resolve(lookup.current());
+      }
       if (url.startsWith('https://api.github.com/repos/')) {
         return Promise.resolve(github.current());
       }
@@ -110,11 +117,17 @@ function fakeUpstreams(): {
       return Promise.reject(new Error(`Unexpected request to ${url}`));
     })
   );
-  return { calls, github, edit, receipt, mint };
+  return { calls, github, lookup, edit, receipt, mint };
 }
 
 const writes = (calls: Call[]): Call[] =>
-  calls.filter((call) => call.url.startsWith('https://api.github.com/repos/'));
+  calls.filter(
+    (call) => call.url.startsWith('https://api.github.com/repos/') && call.method !== 'GET'
+  );
+const lookups = (calls: Call[]): Call[] =>
+  calls.filter(
+    (call) => call.url.startsWith('https://api.github.com/repos/') && call.method === 'GET'
+  );
 const receipts = (calls: Call[]): string[] =>
   calls
     .filter((call) => call.url.startsWith('https://discord.com/api/v10/'))
@@ -179,6 +192,10 @@ describe('Discord interactions', () => {
     for (const [deliveryId, event] of [
       [ISSUE_DELIVERY, issueEvent],
       [STAR_DELIVERY, createTestRepoEvent()],
+      [
+        PRIVATE_DELIVERY,
+        { ...issueEvent, repository: { ...issueEvent.repository, private: true } },
+      ],
     ] as const) {
       await env.DB.prepare(
         `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
@@ -576,6 +593,71 @@ describe('Discord interactions', () => {
       expect(writes(calls)).toHaveLength(1);
       expect(receipts(calls)).toEqual(['✅ Closed issue #12']);
       expect(edits(calls)).toEqual([]);
+    });
+  });
+
+  describe('repository eligibility', () => {
+    const notEligible =
+      'Nothing done: GitHub does not confirm myorg/repo is public and not a fork right now.';
+
+    it('asks GitHub with the public-only token, before any write token, whether the repository is public', async () => {
+      const { env } = await setup({ GITHUB_PUBLIC_TOKEN: 'test-public-token' });
+      const { calls } = fakeUpstreams();
+
+      await send(env, signedRequest(click(`v1:close:${ISSUE_DELIVERY}`)));
+
+      expect(lookups(calls).map((call) => call.authorization)).toEqual([
+        'Bearer test-public-token',
+      ]);
+      expect(calls.findIndex((call) => call.method === 'GET')).toBeLessThan(
+        calls.findIndex((call) => call.url.endsWith('/access_tokens'))
+      );
+      expect(writes(calls)).toHaveLength(1);
+    });
+
+    it('refuses an event recorded as private without asking GitHub', async () => {
+      const { env } = await setup();
+      const { calls } = fakeUpstreams();
+
+      await send(env, signedRequest(click(`v1:close:${PRIVATE_DELIVERY}`)));
+
+      expect(calls.filter((call) => call.url.startsWith('https://api.github.com/'))).toEqual([]);
+      expect(receipts(calls)).toEqual([notEligible]);
+    });
+
+    it.each([
+      ['a fork', (): Response => Response.json({ id: 1, private: false, fork: true })],
+      [
+        'made private since (404 to a public-only lookup)',
+        (): Response => new Response(null, { status: 404 }),
+      ],
+      ['private', (): Response => Response.json({ id: 1, private: true, fork: false })],
+      [
+        'replaced by another repository',
+        (): Response => Response.json({ id: 2, private: false, fork: false }),
+      ],
+      ['missing its fork flag', (): Response => Response.json({ id: 1, private: false })],
+      ['unavailable', (): Response => new Response(null, { status: 503 })],
+      [
+        'not answering',
+        (): Response => {
+          throw new Error('network down');
+        },
+      ],
+    ])('writes nothing to a repository that is %s', async (_case, answer) => {
+      const { env } = await setup();
+      const upstream = fakeUpstreams();
+      upstream.lookup.current = answer;
+
+      await send(env, signedRequest(submitLabels('bug')));
+
+      expect(lookups(upstream.calls)).toHaveLength(1);
+      expect(upstream.calls.filter((call) => call.url.endsWith('/access_tokens'))).toEqual([]);
+      expect(writes(upstream.calls)).toEqual([]);
+      expect(receipts(upstream.calls)).toEqual([notEligible]);
+      await expect(env.DB.prepare('SELECT * FROM discord_actions').all()).resolves.toMatchObject({
+        results: [],
+      });
     });
   });
 

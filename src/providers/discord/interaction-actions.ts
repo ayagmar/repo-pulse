@@ -1,5 +1,5 @@
 import type { IssueActionOutcome } from '../../core/models/issue-action.js';
-import { REPO_EVENT_TYPES } from '../../core/models/repo-event.js';
+import { REPO_EVENT_TYPES, type Repository } from '../../core/models/repo-event.js';
 import {
   boundedMessage,
   type Redactor,
@@ -34,6 +34,11 @@ interface IssueActionDependencies {
   actionLog: D1DiscordActions;
   eventHistory: Pick<D1EventHistory, 'findEvent'>;
   issues: GitHubIssueActions;
+  /**
+   * Whether GitHub says, right now, that the repository is public and not a fork,
+   * asked without the App's token.
+   */
+  isPublicSource: (repository: Repository) => Promise<boolean>;
   /** The application-owned webhook that posted the alert, and edits it. */
   webhookUrl: string;
   redactor: Redactor;
@@ -125,6 +130,21 @@ export async function runIssueAction(
   }
   if (event?.type !== REPO_EVENT_TYPES.ISSUE_OPENED) {
     await sendReceipt('Nothing done: this is not an issue alert.');
+    return;
+  }
+
+  // Alerts outlive a repository's visibility, and stored events do not record forks:
+  // only a repository recorded as public, and public and not a fork now, is written to.
+  // The event is stored JSON, so a missing `private` must not count as public.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare
+  if (event.repository.private !== false || !(await deps.isPublicSource(event.repository))) {
+    logger.warn('discord_action.not_eligible', {
+      ...logFields,
+      repository: event.repository.fullName,
+    });
+    await sendReceipt(
+      `Nothing done: GitHub does not confirm ${event.repository.fullName} is public and not a fork right now.`
+    );
     return;
   }
 

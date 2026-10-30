@@ -16,6 +16,7 @@ import {
 } from '../../providers/discord/interactions.js';
 import { GitHubAppAuth } from '../../providers/github/app-auth.js';
 import { GitHubIssueActions } from '../../providers/github/issue-actions.js';
+import { RepositoryVisibilityGate } from '../../providers/github/repository-visibility.js';
 import type { HttpEnv } from '../app-env.js';
 import { readBodyWithLimit } from '../read-body.js';
 
@@ -123,6 +124,9 @@ export function createDiscordInteractionRoutes(): Hono<HttpEnv> {
           actionLog: new D1DiscordActions(c.env.DB),
           eventHistory,
           issues: new GitHubIssueActions((request) => auth.installationToken(request), redactor),
+          // Never GITHUB_TOKEN or the App's token: they can read private repositories.
+          isPublicSource: (repository) =>
+            new RepositoryVisibilityGate().isPublicSource(repository, c.env.GITHUB_PUBLIC_TOKEN),
           webhookUrl,
           redactor,
         },
