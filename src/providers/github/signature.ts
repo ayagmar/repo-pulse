@@ -6,6 +6,15 @@ function toArrayBuffer(value: Uint8Array): ArrayBuffer {
   return buffer;
 }
 
+/** The digest in an `X-Hub-Signature-256` value, or null unless it is `sha256=` and 64 hex digits. */
+export function decodeSignatureHeader(signature: string | undefined): Uint8Array | null {
+  if (signature?.startsWith('sha256=') !== true) {
+    return null;
+  }
+  const digest = decodeHex(signature.slice('sha256='.length));
+  return digest?.byteLength === 32 ? digest : null;
+}
+
 /**
  * Verify GitHub webhook signature
  * @param payload Raw request body
@@ -18,12 +27,8 @@ export async function verifyGitHubSignature(
   signature: string | undefined,
   secret: string
 ): Promise<boolean> {
-  if (signature?.startsWith('sha256=') !== true) {
-    return false;
-  }
-
-  const receivedSignature = decodeHex(signature.slice('sha256='.length));
-  if (receivedSignature?.byteLength !== 32) {
+  const receivedSignature = decodeSignatureHeader(signature);
+  if (receivedSignature === null) {
     return false;
   }
 

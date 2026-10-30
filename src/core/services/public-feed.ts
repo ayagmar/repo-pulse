@@ -17,6 +17,8 @@ const STAR_HISTORY_MAX_REPOSITORIES = 50;
  */
 const VISIBILITY_LOOKUP_BUDGET = 40;
 const MATERIAL_TTL_SECONDS = 300;
+/** The largest `limit` a response may ask for: material is read once at this size. */
+export const PUBLIC_FEED_MAX_LIMIT = 100;
 /** A host the Worker never serves, so a cached entry can never be returned as a response. */
 const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-feed/material';
 
@@ -26,8 +28,10 @@ export interface MaterialCache {
   put(key: string, response: Response): Promise<void>;
 }
 
-/** Material read from D1 by this isolate, by `limit`. */
-export type MaterialMemory = Map<number, { material: PublicFeedMaterial; expiresAt: number }>;
+/** Material read from D1 by this isolate. */
+export interface MaterialMemory {
+  snapshot?: { material: PublicFeedMaterial; expiresAt: number };
+}
 
 interface PublicFeedSources {
   readMaterial(limit: number, since: Date): Promise<PublicFeedMaterial>;
@@ -168,31 +172,31 @@ function starHistoryStart(now: Date): Date {
   return new Date(today - (STAR_HISTORY_DAYS - 1) * DAY_MS);
 }
 
-async function loadMaterial(
-  sources: PublicFeedSources,
-  limit: number,
-  now: Date
-): Promise<PublicFeedMaterial> {
-  const remembered = sources.memory.get(limit);
+/**
+ * Material for the largest limit, shared by every `limit`: the events are newest
+ * first in a total order, so the first `limit` of them are what a read at `limit`
+ * returns.
+ */
+async function loadMaterial(sources: PublicFeedSources, now: Date): Promise<PublicFeedMaterial> {
+  const remembered = sources.memory.snapshot;
   if (remembered && now.getTime() < remembered.expiresAt) {
     return remembered.material;
   }
-  const key = `${MATERIAL_CACHE_URL}?limit=${String(limit)}`;
-  const cached = await sources.cache?.match(key);
+  const cached = await sources.cache?.match(MATERIAL_CACHE_URL);
   if (cached) {
     return cached.json();
   }
 
-  const material = await sources.readMaterial(limit, starHistoryStart(now));
-  sources.memory.set(limit, {
+  const material = await sources.readMaterial(PUBLIC_FEED_MAX_LIMIT, starHistoryStart(now));
+  sources.memory.snapshot = {
     material,
     expiresAt: now.getTime() + MATERIAL_TTL_SECONDS * 1000,
-  });
+  };
   if (sources.cache) {
     sources.waitUntil(
       sources.cache
         .put(
-          key,
+          MATERIAL_CACHE_URL,
           new Response(JSON.stringify(material), {
             headers: {
               'Content-Type': 'application/json',
@@ -221,8 +225,11 @@ export async function buildPublicFeed(
   sources: PublicFeedSources,
   limit: number
 ): Promise<PublicFeed | 'visibility_unavailable'> {
-  const material = await loadMaterial(sources, limit, new Date());
-  const events = material.events.map(toFeedEvent).filter((event) => event !== null);
+  const material = await loadMaterial(sources, new Date());
+  const events = material.events
+    .slice(0, limit)
+    .map(toFeedEvent)
+    .filter((event) => event !== null);
 
   // Recent activity is checked first, so a lookup budget that runs out leaves out
   // the repositories with the oldest stars.

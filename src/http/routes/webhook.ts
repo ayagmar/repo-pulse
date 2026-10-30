@@ -3,6 +3,7 @@ import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { logger } from '../../core/services/logger.js';
 import { EventMappingError, mapGitHubEvent } from '../../providers/github/event-mapper.js';
 import {
+  checkGitHubWebhookHeaders,
   extractGitHubRepositoryFullName,
   GitHubWebhookRequestError,
   parseGitHubWebhookRequest,
@@ -55,6 +56,26 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
 
   router.post('/', async (c) => {
     const { config, eventProcessor } = c.get('runtime');
+    const headers = {
+      signature: c.req.header('X-Hub-Signature-256'),
+      eventType: c.req.header('X-GitHub-Event'),
+      deliveryId: c.req.header('X-GitHub-Delivery'),
+    };
+    // Unauthenticated until the HMAC over the body checks out, so everything the
+    // headers alone can refuse is refused before the body is read.
+    try {
+      checkGitHubWebhookHeaders(headers);
+    } catch (error) {
+      if (error instanceof GitHubWebhookRequestError) {
+        return jsonError(c, error);
+      }
+
+      throw error;
+    }
+
+    // No rate limit: GitHub sends everyone's webhooks from shared addresses, so
+    // strangers' deliveries could fill a per-address limit and the owner's would be
+    // refused, never retried. See docs/system-design.md, "Webhook edge".
     const rawBody = await readBodyWithLimit(c.req.raw, config.github.maxBodyBytes);
     if (rawBody === null) {
       return jsonError(
@@ -70,10 +91,8 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
 
     try {
       inbound = await parseGitHubWebhookRequest({
+        ...headers,
         rawBody,
-        signature: c.req.header('X-Hub-Signature-256'),
-        eventType: c.req.header('X-GitHub-Event'),
-        deliveryId: c.req.header('X-GitHub-Delivery'),
         secret: config.github.webhookSecret,
       });
     } catch (error) {

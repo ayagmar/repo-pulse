@@ -538,3 +538,123 @@ describe('webhook sources', () => {
     expect(await recordedDeliveries()).toBe(0);
   });
 });
+
+describe('webhook gates before the body', () => {
+  const secret = 'test-secret';
+  let database: ReturnType<typeof createTempDatabasePath>;
+  let env: ReturnType<typeof createTestEnv>;
+  let bodyReads: number;
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    database = createTempDatabasePath();
+    env = createTestEnv(database.databasePath);
+    bodyReads = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    env.DB.close();
+    database.cleanup();
+  });
+
+  /** A body that counts every read, so a refused request can show it was never read. */
+  function countedBody(text: string): ReadableStream<Uint8Array> {
+    return new ReadableStream(
+      {
+        pull(controller): void {
+          bodyReads += 1;
+          controller.enqueue(new TextEncoder().encode(text));
+          controller.close();
+        },
+      },
+      // Nothing is pulled until someone reads.
+      { highWaterMark: 0 }
+    );
+  }
+
+  async function post(
+    headers: Record<string, string>,
+    body: string = createWebhookPayload()
+  ): Promise<{ status: number; body: unknown }> {
+    const execution = createExecutionContext();
+    const response = await createApp().fetch(
+      new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers,
+        body: countedBody(body),
+        duplex: 'half',
+      } as RequestInit),
+      env,
+      execution.executionCtx
+    );
+    await execution.waitForBackground();
+    return { status: response.status, body: await response.json() };
+  }
+
+  function signed(payload: string, eventType = 'star'): Record<string, string> {
+    return {
+      'X-GitHub-Event': eventType,
+      'X-GitHub-Delivery': 'delivery-gated',
+      'X-Hub-Signature-256': createSignature(payload, secret),
+    };
+  }
+
+  it('refuses missing or malformed headers without reading the body, D1 or providers', async () => {
+    const prepare = vi.spyOn(env.DB, 'prepare');
+    const payload = createWebhookPayload();
+    const valid = signed(payload);
+    const hex = createSignature(payload, secret).slice('sha256='.length);
+    const without = (name: string): Record<string, string> =>
+      Object.fromEntries(Object.entries(valid).filter(([key]) => key !== name));
+    const missingEvent = {
+      status: 400,
+      body: { code: 'invalid_webhook_request', message: 'Missing X-GitHub-Event header' },
+    };
+    const missingDelivery = {
+      status: 400,
+      body: { code: 'invalid_webhook_request', message: 'Missing X-GitHub-Delivery header' },
+    };
+    const badSignature = {
+      status: 401,
+      body: { code: 'invalid_webhook_signature', message: 'Invalid signature' },
+    };
+
+    for (const [headers, expected] of [
+      [without('X-GitHub-Event'), missingEvent],
+      [{ ...valid, 'X-GitHub-Event': '' }, missingEvent],
+      [without('X-GitHub-Delivery'), missingDelivery],
+      [{ ...valid, 'X-GitHub-Delivery': '' }, missingDelivery],
+      [without('X-Hub-Signature-256'), badSignature],
+      [{ ...valid, 'X-Hub-Signature-256': '' }, badSignature],
+      [{ ...valid, 'X-Hub-Signature-256': hex }, badSignature],
+      [{ ...valid, 'X-Hub-Signature-256': `sha1=${hex}` }, badSignature],
+      [{ ...valid, 'X-Hub-Signature-256': `sha256=${hex.slice(1)}` }, badSignature],
+      [{ ...valid, 'X-Hub-Signature-256': `sha256=${hex}00` }, badSignature],
+      [{ ...valid, 'X-Hub-Signature-256': `sha256=${'z'.repeat(64)}` }, badSignature],
+    ] as const) {
+      await expect(post(headers, payload), JSON.stringify(headers)).resolves.toMatchObject(
+        expected
+      );
+    }
+
+    expect(bodyReads).toBe(0);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('checks the signature over the body once the headers pass', async () => {
+    const payload = createWebhookPayload();
+    const ping = JSON.stringify({ zen: 'Keep it logically awesome.' });
+    const forged = { ...signed(payload), 'X-Hub-Signature-256': createSignature(payload, 'x') };
+
+    await expect(post(forged, payload)).resolves.toMatchObject({ status: 401 });
+    await expect(post(signed(ping, 'ping'), ping)).resolves.toMatchObject({ status: 200 });
+    await expect(post(signed(payload), payload)).resolves.toMatchObject({ status: 202 });
+    env.WEBHOOK_MAX_BODY_BYTES = '10';
+    await expect(post(signed(payload), payload)).resolves.toMatchObject({ status: 413 });
+
+    expect(bodyReads).toBe(4);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});

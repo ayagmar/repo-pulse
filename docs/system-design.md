@@ -36,6 +36,7 @@ sequenceDiagram
     participant D as Discord
 
     GH->>W: POST /webhook
+    W->>W: check GitHub headers
     W->>W: read raw body with byte limit
     W->>G: verify HMAC on raw body
     G-->>W: parsed inbound event
@@ -71,6 +72,8 @@ stateDiagram-v2
 
 ### Webhook edge
 
+- Before reading the body, in order: `X-GitHub-Event` and `X-GitHub-Delivery` present (`400`), then `X-Hub-Signature-256` is `sha256=` and 64 hex digits (`401`). A request refused there costs no body read, D1 query or provider call.
+- `POST /webhook` has no rate limit, unlike `/public/feed` and `/discord/interactions`. A limit before authentication can only key on the client address, and GitHub delivers every customer's webhooks from the same shared ranges: anyone can point their own webhooks at this URL and fill the bucket that the owner's deliveries share. GitHub does not retry a refused delivery, so that would lose alerts. A stranger can still make the Worker read and HMAC up to `WEBHOOK_MAX_BODY_BYTES` per request with well-formed headers; nothing after the HMAC runs for them.
 - Reads the raw request stream directly so HMAC verification matches GitHub’s original bytes.
 - Rejects oversized requests before JSON parsing.
 - Verifies the original bytes before UTF-8 decoding and JSON parsing.
@@ -109,8 +112,8 @@ stateDiagram-v2
 ### Public feed
 
 - `GET /public/feed` is unauthenticated and read-only. ayagmar.dev's signals Worker pulls it every 15 minutes. The contract (ADR 0012) and its JSON Schema live in ayagmar.dev; a copy of the schema validates the output in `src/__tests__/public-feed.test.ts`.
-- One D1 read per `limit` value builds the material: the newest `limit` events of the four published types from the last 90 days, and the last star count of each UTC day in those 90 days for every repository. Only events whose stored `repository.private` is JSON `false` are read, and only the fields the feed publishes. The events query walks `idx_events_received_at` newest first and stops after `limit` matches, so its rows read follow the share of feed events in recent history, not the size of the table (233 rows for `limit=100` on production data in October 2026, plus 145 for star history).
-- The material is kept in the isolate for 300 seconds, then in the Cache API for 300 seconds under `https://repo-pulse.internal/...`, a host the route never serves. On `*.workers.dev` the Cache API may store nothing; the isolate copy still holds D1 to one read per `limit` per isolate every 300 seconds.
+- One D1 read builds the material for every `limit`: the newest 100 events of the four published types from the last 90 days, and the last star count of each UTC day in those 90 days for every repository. Only events whose stored `repository.private` is JSON `false` are read, and only the fields the feed publishes. The events query walks `idx_events_received_at` newest first and stops after 100 matches, so its rows read follow the share of feed events in recent history, not the size of the table (233 rows on production data in October 2026, plus 145 for star history). A response takes the first `limit` events, so it is the same as reading `limit` events would give: the query orders by `received_at`, then `delivery_id`, which is unique.
+- The material is kept in the isolate for 300 seconds, then in the Cache API for 300 seconds under `https://repo-pulse.internal/...`, a host the route never serves. On `*.workers.dev` the Cache API may store nothing; the isolate copy still holds D1 to one read per isolate every 300 seconds, whatever `limit` clients ask for. Each new isolate or Cloudflare location still reads once, so many clients spread over locations can cost more than one read per 300 seconds, and the star-history query reads every star event of the 90 days, so its cost grows with the stars received.
 - A rate-limit binding (`FEED_RATE_LIMIT`, 10 requests a minute per `CF-Connecting-IP` and Cloudflare location) answers `429 {"error":"rate_limited"}`, so a loop on the public URL cannot use up the account's D1 reads, which webhooks and signals share.
 - Each response checks every repository it would show with `GET https://api.github.com/repos/{owner}/{repo}` (no redirects, three-second timeout). The request carries `GITHUB_PUBLIC_TOKEN` when set, a token that can read public repositories only, so a private repository answers `404` as it would without a token; never `GITHUB_TOKEN`. Only a `200` whose body has `"private": false` admits it; a `404`, a rate limit, an error, a timeout or an unreadable body leaves it out. A `404` or `"private": true` is a denial; anything else, including a repository the lookup budget did not reach, is unresolved. Each answer is cached in the isolate for 60 seconds, counted from when the lookup was sent. The answers are read again after the last lookup of the response settles, so one that expired in the meantime does not count.
 - A response makes at most 40 GitHub lookups, so it stays within the Free plan's 50 subrequests with the cache and D1 reads. Repositories past that are left out of that response, oldest activity first.

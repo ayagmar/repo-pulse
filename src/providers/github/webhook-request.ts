@@ -2,7 +2,7 @@ import type { WebhookSource } from '../../config/env.js';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { normalizeRepoFullName } from '../../core/repository-identity.js';
 import { requireBoolean, requireNumber, requireObject } from './mappers/validation.js';
-import { verifyGitHubSignature } from './signature.js';
+import { decodeSignatureHeader, verifyGitHubSignature } from './signature.js';
 import type { GitHubWebhookPayload } from './types.js';
 
 /**
@@ -15,11 +15,14 @@ const CONTROL_EVENTS: ReadonlySet<string> = new Set([
   'installation_repositories',
 ]);
 
-interface ParseGitHubWebhookInput {
-  rawBody: string | Uint8Array;
+interface GitHubWebhookHeaders {
   signature: string | undefined;
   eventType: string | undefined;
   deliveryId: string | undefined;
+}
+
+interface ParseGitHubWebhookInput extends GitHubWebhookHeaders {
+  rawBody: string | Uint8Array;
   secret: string;
 }
 
@@ -50,16 +53,34 @@ export class GitHubWebhookRequestError extends AppError {
   }
 }
 
-export async function parseGitHubWebhookRequest(
-  input: ParseGitHubWebhookInput
-): Promise<ParsedGitHubWebhook> {
-  if (input.eventType === undefined || input.eventType === '') {
+/**
+ * The event and delivery id of a request whose headers could belong to a GitHub
+ * delivery: both present, and a signature that is `sha256=` and 64 hex digits.
+ * Needs no body, so a request refused here costs no body read.
+ */
+export function checkGitHubWebhookHeaders(headers: GitHubWebhookHeaders): {
+  eventType: string;
+  deliveryId: string;
+} {
+  if (headers.eventType === undefined || headers.eventType === '') {
     throw new GitHubWebhookRequestError(400, 'Missing X-GitHub-Event header');
   }
 
-  if (input.deliveryId === undefined || input.deliveryId === '') {
+  if (headers.deliveryId === undefined || headers.deliveryId === '') {
     throw new GitHubWebhookRequestError(400, 'Missing X-GitHub-Delivery header');
   }
+
+  if (decodeSignatureHeader(headers.signature) === null) {
+    throw new GitHubWebhookRequestError(401, 'Invalid signature');
+  }
+
+  return { eventType: headers.eventType, deliveryId: headers.deliveryId };
+}
+
+export async function parseGitHubWebhookRequest(
+  input: ParseGitHubWebhookInput
+): Promise<ParsedGitHubWebhook> {
+  const { eventType, deliveryId } = checkGitHubWebhookHeaders(input);
 
   if (!(await verifyGitHubSignature(input.rawBody, input.signature, input.secret))) {
     throw new GitHubWebhookRequestError(401, 'Invalid signature');
@@ -77,14 +98,14 @@ export async function parseGitHubWebhookRequest(
     throw new GitHubWebhookRequestError(400, 'Invalid JSON payload');
   }
 
-  if (CONTROL_EVENTS.has(input.eventType)) {
-    return { kind: 'control', deliveryId: input.deliveryId, eventType: input.eventType, payload };
+  if (CONTROL_EVENTS.has(eventType)) {
+    return { kind: 'control', deliveryId, eventType, payload };
   }
 
   return {
     kind: 'repository',
-    deliveryId: input.deliveryId,
-    eventType: input.eventType,
+    deliveryId,
+    eventType,
     source: webhookSource(payload),
     payload: payload as GitHubWebhookPayload,
   };

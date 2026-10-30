@@ -121,7 +121,13 @@ describe('Workers runtime integration', () => {
     const response = await exports.default.fetch(
       new Request('https://example.com/webhook', {
         method: 'POST',
-        headers: { 'Content-Length': '10' },
+        // Well-formed GitHub headers, so the request gets as far as reading the body.
+        headers: {
+          'Content-Length': '10',
+          'X-GitHub-Event': 'ping',
+          'X-GitHub-Delivery': 'oversized',
+          'X-Hub-Signature-256': `sha256=${'0'.repeat(64)}`,
+        },
         body,
       })
     );

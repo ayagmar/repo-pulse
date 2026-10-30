@@ -8,6 +8,7 @@ import {
   REPO_EVENT_TYPES,
 } from '../core/models/repo-event.js';
 import { prepareEventHistoryInsert } from '../core/services/d1-event-history.js';
+import feedLimitsGolden from './fixtures/public-feed-limits.golden.json' with { type: 'json' };
 import feedSchema from './fixtures/repo-pulse-feed.input.json' with { type: 'json' };
 import { createExecutionContext, createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
@@ -691,8 +692,10 @@ describe('public feed', () => {
       vi.setSystemTime(new Date('2026-10-26T08:46:00.000Z'));
     };
 
-    // Another limit, so the material is read again and includes ccdesk.
-    await expect(feedRepositories('?limit=49')).resolves.toEqual(['ayagmar/ccdesk']);
+    // Cold material caches, so the material is read again and includes ccdesk.
+    cacheEntries.clear();
+    app = createApp();
+    await expect(feedRepositories()).resolves.toEqual(['ayagmar/ccdesk']);
   });
 
   it('reads only well-formed events recorded as public', async () => {
@@ -871,6 +874,101 @@ describe('public feed', () => {
 
     vi.setSystemTime(new Date('2026-10-26T08:50:00.000Z'));
     await expect(feedRepositories()).resolves.toEqual([]);
+  });
+
+  /**
+   * More published candidates than the largest limit, newest first: an unpublishable
+   * release (dropped after the limit is applied), private and unpublished activity
+   * the query skips, a star outside the window, and more repositories than one
+   * response may look up.
+   */
+  async function recordLimitScenario(): Promise<void> {
+    await record(star('o/r0', 1), '2026-07-01T00:00:00.000Z');
+    for (let index = 0; index < 45; index += 1) {
+      const fullName = `o/r${String(index)}`;
+      visibility.set(fullName, index % 9 === 4 ? 'not_found' : 'public');
+      await record(push(fullName), new Date(Date.UTC(2026, 9, 25, 2, index)).toISOString());
+    }
+    visibility.set('o/r10', 'rate_limited');
+    for (let index = 0; index < 60; index += 1) {
+      await record(
+        star(`o/r${String((index * 7) % 45)}`, index + 1, false, index % 11 === 0),
+        new Date(Date.UTC(2026, 7, 1 + index, 12)).toISOString()
+      );
+    }
+    await record(release('o/r1', 'v1.0.0'), '2026-10-25T20:00:00.000Z');
+    await record(pullRequest('o/r2', 'pull_request.merged'), '2026-10-25T21:00:00.000Z');
+    for (let index = 0; index < 5; index += 1) {
+      await record(release('o/r3', 'v'.repeat(201)), `2026-10-25T22:0${String(index)}:00.000Z`);
+      await record(push('o/r5', true), `2026-10-25T22:1${String(index)}:00.000Z`);
+      await record(issue('o/r6'), `2026-10-25T22:2${String(index)}:00.000Z`);
+    }
+  }
+
+  it('answers every limit as when material was read per limit', async () => {
+    await recordLimitScenario();
+    const cold: Record<string, string> = {};
+    for (const limit of [1, 20, 100]) {
+      app = createApp();
+      cacheEntries.clear();
+      cold[limit] = (await getFeed(`?limit=${String(limit)}`)).text;
+    }
+    app = createApp();
+    cacheEntries.clear();
+    const warm: Record<string, string> = {};
+    for (const limit of [100, 1, 20, 50]) {
+      warm[limit] = (await getFeed(`?limit=${String(limit)}`)).text;
+    }
+
+    expect({ cold, warm }).toEqual(feedLimitsGolden);
+  });
+
+  it('reads D1 once for every limit, from memory or the Cache API', async () => {
+    await recordLimitScenario();
+    const golden = feedLimitsGolden as {
+      cold: Record<string, string>;
+      warm: Record<string, string>;
+    };
+    expect((await getFeed('?limit=100')).text).toBe(golden.warm['100']);
+
+    // Any further D1 read would see the history gone.
+    await env.DB.exec('DELETE FROM events');
+    for (const limit of [1, 20, 50]) {
+      expect((await getFeed(`?limit=${String(limit)}`)).text, String(limit)).toBe(
+        golden.warm[String(limit)]
+      );
+    }
+    // Another isolate at the same location, so only the Cache API has the material.
+    app = createApp();
+    expect((await getFeed('?limit=20')).text).toBe(golden.cold['20']);
+    expect(cacheEntries.size).toBe(1);
+  });
+
+  it('serves every limit when the Cache API fails, and an empty history as an empty feed', async () => {
+    vi.stubGlobal('caches', {
+      default: {
+        match: (): Promise<undefined> => Promise.resolve(undefined),
+        put: (): Promise<void> => Promise.reject(new Error('cache unavailable')),
+      },
+    });
+    const warn = vi.mocked(console.warn);
+    warn.mockClear();
+
+    for (const limit of [1, 20, 100]) {
+      const { response, text } = await getFeed(`?limit=${String(limit)}`);
+      expect(response.status, String(limit)).toBe(200);
+      expect(JSON.parse(text)).toEqual({
+        version: 1,
+        generatedAt: '2026-10-26T08:45:00.000Z',
+        events: [],
+        starHistory: [],
+      });
+    }
+    expect(
+      warn.mock.calls.filter(([entry]) =>
+        String(entry).includes('public_feed.material_cache_failed')
+      )
+    ).toHaveLength(1);
   });
 
   it('rate limits each client', async () => {
