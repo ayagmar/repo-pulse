@@ -135,20 +135,11 @@ Keep `app` admitted until every repository the App covers has a working webhook.
    ```
 
    If GitHub refuses that call for the CLI's token, the App is installed on all your repositories, so this lists the same set: `gh repo list <owner> --limit 1000 --visibility public --source --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | sort > covered.txt`. Archived repositories cannot take a webhook; their stars are no longer posted after the rollback.
-2. Add the missing webhooks while `app` is still admitted: `just subscribe <worker-url> $(cat covered.txt)`. It skips repositories already subscribed. GitHub pings each new hook, and the Worker acknowledges pings whatever the sources.
-3. Check coverage. This prints every repository without a hook whose last delivery answered `200`; it must print nothing:
+2. Add the missing webhooks while `app` is still admitted: `just subscribe <worker-url> $(cat covered.txt)`. It skips any repository that already has a hook at that URL, even an inactive or incomplete one, so then run `just check-coverage --repair <worker-url> covered.txt`: it sets each matching hook that is inactive or misses events to active with the six events, never touching hooks at other URLs or reading the secret.
+3. Check coverage with `just check-coverage <worker-url> covered.txt`. A repository is covered only when a hook at exactly `<worker-url>/webhook` is active, subscribes to fork, issues, pull_request, push, release and star (or to everything), and answers a ping sent now with `200`. An earlier response does not count: a hook whose last delivery answered `202` is healthy, and one whose last answer was `200` may since have been disabled. It prints one line per uncovered repository, with the reason (`no hook`, `inactive`, `missing events: …`, `ping <status>`), and exits `1`; it must print nothing and exit `0`. The Worker acknowledges pings whatever the sources.
+4. Only then set `repository,app`, deploy, wait the overlap, run the check again, set `repository`, deploy. Check that a star posts once.
 
-   ```bash
-   url=<worker-url>/webhook
-   while read -r repo; do
-     code="$(gh api "repos/$repo/hooks" --jq ".[] | select(.config.url == \"$url\") | .last_response.code")"
-     [ "$code" = 200 ] || echo "$repo: ${code:-no hook}"
-   done < covered.txt
-   ```
-
-4. Only then set `repository,app`, deploy, wait the overlap, set `repository`, deploy. Check that a star posts once.
-
-Never set `repository` alone while the check in step 3 prints anything.
+Never set `repository` alone while the check fails.
 
 ### Removing the App
 

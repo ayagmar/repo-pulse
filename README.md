@@ -315,5 +315,6 @@ src/providers/github/           payload verification + event mapping
 src/providers/discord/          embed formatting + delivery transport
 scripts/subscribe.sh            adds the webhook to GitHub repositories
 scripts/unsubscribe.sh          removes it, recording each hook first
+scripts/check-coverage.sh       checks those webhooks before rolling back from the App
 scripts/check-secrets.sh        fails on credentials in tracked files
 ```
