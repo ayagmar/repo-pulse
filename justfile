@@ -93,6 +93,10 @@ subscribe url +repos:
 unsubscribe *args:
     scripts/unsubscribe.sh {{args}}
 
+# Check that each listed repository has an active, fully subscribed webhook answering a fresh ping (--repair to fix hooks first)
+check-coverage *args:
+    scripts/check-coverage.sh {{args}}
+
 # Copy local Cloudflare secrets template
 setup-config:
     cp .dev.vars.example .dev.vars
