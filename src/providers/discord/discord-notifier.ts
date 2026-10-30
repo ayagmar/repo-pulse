@@ -9,10 +9,13 @@ import {
   formatDiscordAlert,
   formatDiscordDigest,
   formatDiscordEmbed,
+  formatDiscordEmbedWithActions,
 } from './embed-formatter.js';
 
 interface DiscordNotifierConfig {
   webhookUrl: string;
+  /** Issue alerts get Close and Label buttons. Needs an application-owned webhook. */
+  actions: boolean;
   username?: string;
   avatarUrl?: string;
 }
@@ -68,8 +71,12 @@ class DiscordNotifier implements Notifier {
     return true;
   }
 
-  notify(event: RepoEvent): Promise<NotificationResult> {
-    return this.post(formatDiscordEmbed(event));
+  notify(event: RepoEvent, deliveryId?: string): Promise<NotificationResult> {
+    return this.post(
+      this.cfg.actions && deliveryId !== undefined
+        ? formatDiscordEmbedWithActions(event, deliveryId)
+        : formatDiscordEmbed(event)
+    );
   }
 
   notifyDigest(digest: Digest): Promise<NotificationResult> {
@@ -78,6 +85,16 @@ class DiscordNotifier implements Notifier {
 
   notifyAlert(alert: MomentumAlert): Promise<NotificationResult> {
     return this.post(formatDiscordAlert(alert));
+  }
+
+  /** Discord drops components unless asked to keep them. */
+  private webhookUrl(payload: DiscordWebhookPayload): string {
+    if (payload.components === undefined) {
+      return this.cfg.webhookUrl;
+    }
+    const url = new URL(this.cfg.webhookUrl);
+    url.searchParams.set('with_components', 'true');
+    return url.toString();
   }
 
   private async post(payload: DiscordWebhookPayload): Promise<NotificationResult> {
@@ -90,7 +107,7 @@ class DiscordNotifier implements Notifier {
 
     let response: Response;
     try {
-      response = await fetch(this.cfg.webhookUrl, {
+      response = await fetch(this.webhookUrl(payload), {
         method: 'POST',
         signal: AbortSignal.timeout(10_000),
         headers: {
@@ -143,7 +160,8 @@ class DiscordNotifier implements Notifier {
  */
 export function createDiscordNotifier(
   webhookUrl: string | undefined,
-  redactor: Redactor
+  redactor: Redactor,
+  options: { actions?: boolean } = {}
 ): DiscordNotifier | null {
   if (webhookUrl === undefined || webhookUrl === '') {
     return null;
@@ -156,6 +174,7 @@ export function createDiscordNotifier(
   return new DiscordNotifier(
     {
       webhookUrl,
+      actions: options.actions === true,
       username: 'Repo Pulse',
       avatarUrl: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
     },

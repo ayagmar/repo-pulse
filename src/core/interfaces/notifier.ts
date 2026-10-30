@@ -34,9 +34,10 @@ export interface Notifier {
   isConfigured(): boolean;
 
   /**
-   * Send a notification for the given repository event
+   * Send a notification for the given repository event, received in the delivery
+   * `deliveryId` when it is known
    */
-  notify(event: RepoEvent): Promise<NotificationResult>;
+  notify(event: RepoEvent, deliveryId?: string): Promise<NotificationResult>;
 
   /**
    * Send a daily or weekly summary of recorded events

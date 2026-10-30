@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Digest } from '../core/models/digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../core/models/failure-classification.js';
+import {
+  createRepoEvent,
+  REPO_EVENT_ACTIONS,
+  REPO_EVENT_TYPES,
+} from '../core/models/repo-event.js';
 import { Redactor } from '../core/security/redact.js';
 import { createDiscordNotifier } from '../providers/discord/discord-notifier.js';
+import { formatDiscordDigest, formatDiscordEmbed } from '../providers/discord/embed-formatter.js';
 import { createTestRepoEvent } from './test-helpers.js';
 
 describe('createDiscordNotifier', () => {
@@ -130,6 +137,105 @@ describe('createDiscordNotifier', () => {
       provider: 'discord',
       error: 'Discord request failed with 400: Invalid Form Body',
       failureClassification: FAILURE_CLASSIFICATIONS.PERMANENT,
+    });
+  });
+
+  describe('issue actions', () => {
+    const webhookUrl = 'https://discord.com/api/webhooks/0/test-only';
+    const deliveryId = '0b5a3a0e-1f6b-4c49-9d3c-6f2b0a1d2e3f';
+    const star = createTestRepoEvent();
+    const issue = createRepoEvent(REPO_EVENT_TYPES.ISSUE_OPENED, {
+      action: REPO_EVENT_ACTIONS.OPENED,
+      repository: star.repository,
+      sender: star.sender,
+      issue: {
+        number: 12,
+        title: 'Crash on start',
+        url: 'https://github.com/myorg/repo/issues/12',
+        state: 'open',
+        body: null,
+        labels: [],
+      },
+    });
+    const pullRequest = createRepoEvent(REPO_EVENT_TYPES.PULL_REQUEST_OPENED, {
+      action: REPO_EVENT_ACTIONS.OPENED,
+      repository: star.repository,
+      sender: star.sender,
+      pullRequest: {
+        number: 3,
+        title: 'Fix it',
+        url: 'https://github.com/myorg/repo/pull/3',
+        state: 'open',
+        merged: false,
+        draft: false,
+        body: null,
+        headBranch: 'fix',
+        baseBranch: 'main',
+      },
+    });
+    const digest: Digest = {
+      period: 'daily',
+      date: '2026-10-30',
+      windowStart: new Date('2026-10-29T09:00:00.000Z'),
+      windowEnd: new Date('2026-10-30T09:00:00.000Z'),
+      timeZone: 'UTC',
+      eventCount: 0,
+      repositories: [],
+      unreleased: [],
+      people: [],
+    };
+    const sender = { username: 'Repo Pulse', avatar_url: expect.any(String) as string };
+
+    function posts(): { url: string; body: unknown }[] {
+      return vi.mocked(fetch).mock.calls.map(([url, init]) => ({
+        url: url as string,
+        body: JSON.parse(init?.body as string) as unknown,
+      }));
+    }
+
+    it('posts exactly the plain payloads while actions are off', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+      const notifier = createDiscordNotifier(webhookUrl, new Redactor([]));
+
+      await notifier?.notify(issue, deliveryId);
+
+      expect(posts()).toEqual([
+        { url: webhookUrl, body: { ...formatDiscordEmbed(issue), ...sender } },
+      ]);
+    });
+
+    it('adds Close and Label to issue-opened alerts only, asking Discord to keep them', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+      const notifier = createDiscordNotifier(webhookUrl, new Redactor([]), { actions: true });
+
+      await notifier?.notify(issue, deliveryId);
+      await notifier?.notify(issue, 'not-a-guid');
+      await notifier?.notify(pullRequest, deliveryId);
+      await notifier?.notify(star, deliveryId);
+      await notifier?.notifyDigest(digest);
+
+      expect(posts()).toEqual([
+        {
+          url: `${webhookUrl}?with_components=true`,
+          body: {
+            ...formatDiscordEmbed(issue),
+            ...sender,
+            components: [
+              {
+                type: 1,
+                components: [
+                  { type: 2, style: 4, label: 'Close', custom_id: `v1:close:${deliveryId}` },
+                  { type: 2, style: 2, label: 'Label…', custom_id: `v1:label:${deliveryId}` },
+                ],
+              },
+            ],
+          },
+        },
+        { url: webhookUrl, body: { ...formatDiscordEmbed(issue), ...sender } },
+        { url: webhookUrl, body: { ...formatDiscordEmbed(pullRequest), ...sender } },
+        { url: webhookUrl, body: { ...formatDiscordEmbed(star), ...sender } },
+        { url: webhookUrl, body: { ...formatDiscordDigest(digest), ...sender } },
+      ]);
     });
   });
 });
