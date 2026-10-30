@@ -661,6 +661,71 @@ describe('Discord interactions', () => {
     });
   });
 
+  describe('durable outcomes', () => {
+    it('keeps a successful close when a later attempt fails', async () => {
+      const { env } = await setup();
+      const upstream = fakeUpstreams();
+
+      await send(env, signedRequest(click(`v1:close:${ISSUE_DELIVERY}`)));
+      upstream.github.current = (): Response =>
+        Response.json({ message: 'Resource not accessible by integration' }, { status: 403 });
+      await send(env, signedRequest(click(`v1:close:${ISSUE_DELIVERY}`)));
+
+      expect(receipts(upstream.calls)).toEqual([
+        '✅ Closed issue #12',
+        '❌ Could not close issue #12: GitHub request failed with 403: Resource not accessible by integration',
+      ]);
+      await expect(
+        env.DB.prepare('SELECT outcome FROM discord_actions').all()
+      ).resolves.toMatchObject({ results: [{ outcome: 'succeeded' }] });
+      expect(edits(upstream.calls).at(-1)?.body).toMatchObject({
+        embeds: [{ fields: [{ value: `✅ Closed by <@${OWNER_ID}>` }] }],
+        components: [{ components: [{ label: 'Close', disabled: true }, {}] }],
+      });
+    });
+
+    it.each([
+      ['the failure finishes last', ['success', 'failure']],
+      ['the success finishes last', ['failure', 'success']],
+    ] as const)('keeps the success of two overlapping closes when %s', async (_case, order) => {
+      const { env } = await setup();
+      const upstream = fakeUpstreams();
+      const pending: ((response: Response) => void)[] = [];
+      upstream.github.current = (): Promise<Response> =>
+        new Promise((resolve) => {
+          pending.push(resolve);
+        });
+      const outcomes = async (): Promise<unknown[]> =>
+        (await env.DB.prepare('SELECT outcome FROM discord_actions').all()).results;
+
+      const both = Promise.all([
+        send(env, signedRequest(click(`v1:close:${ISSUE_DELIVERY}`))),
+        send(env, signedRequest(click(`v1:close:${ISSUE_DELIVERY}`))),
+      ]);
+      await vi.waitFor(() => {
+        expect(pending).toHaveLength(2);
+      });
+      for (const [index, result] of order.entries()) {
+        pending[index]?.(
+          result === 'success'
+            ? Response.json({})
+            : Response.json({ message: 'Server Error' }, { status: 500 })
+        );
+        await vi.waitFor(async () => {
+          expect(await outcomes()).toHaveLength(1);
+          expect(receipts(upstream.calls)).toHaveLength(index + 1);
+        });
+      }
+      await both;
+
+      await expect(outcomes()).resolves.toEqual([{ outcome: 'succeeded' }]);
+      const lastEdit = edits(upstream.calls).at(-1);
+      expect(lastEdit?.body).toMatchObject({
+        components: [{ components: [{ label: 'Close', disabled: true }, {}] }],
+      });
+    });
+  });
+
   describe('alert message', () => {
     it('shows every action taken and disables Close once the issue is closed', async () => {
       const { env } = await setup();

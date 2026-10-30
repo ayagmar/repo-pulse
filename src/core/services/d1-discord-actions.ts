@@ -28,7 +28,10 @@ export class D1DiscordActions {
     return result.meta.changes === 1;
   }
 
-  /** Replaces the action's previous outcome on this alert. */
+  /**
+   * Replaces the action's previous outcome on this alert, except that a failure never
+   * replaces a success: the issue stays closed or labeled whatever a later attempt met.
+   */
   async recordOutcome(
     deliveryId: string,
     outcome: IssueActionOutcome,
@@ -43,7 +46,8 @@ export class D1DiscordActions {
            outcome = excluded.outcome,
            detail = excluded.detail,
            discord_user_id = excluded.discord_user_id,
-           finished_at = excluded.finished_at`
+           finished_at = excluded.finished_at
+         WHERE excluded.outcome = 'succeeded' OR discord_actions.outcome = 'failed'`
       )
       .bind(
         deliveryId,
