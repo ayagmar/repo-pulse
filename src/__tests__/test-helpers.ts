@@ -151,7 +151,7 @@ export function createTestEnv(databasePath: string, overrides: TestEnvOverrides 
     LOG_LEVEL: 'error',
     GITHUB_WEBHOOK_SECRET: 'test-secret',
     ADMIN_API_TOKEN: 'admin-token',
-    DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/123/abc',
+    DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only',
     ...overrides,
   } as TestEnv;
 }

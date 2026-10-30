@@ -5,6 +5,9 @@ const MESSAGE_LIMIT = 200;
 const MIN_SECRET_LENGTH = 8;
 const URL_PATTERN = /https?:\/\/[^\s"'<>`]+/g;
 const CREDENTIAL_QUERY = /[?&](?:access_token|token|key|secret|sig|signature|code|password)=/i;
+/** GitHub tokens and JWTs, recognizable whether or not this Worker issued them. */
+const TOKEN_PATTERN =
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*)/g;
 
 /** A URL that carries a credential: user info, a webhook path, or a credential parameter. */
 function carriesCredential(url: string): boolean {
@@ -12,8 +15,9 @@ function carriesCredential(url: string): boolean {
 }
 
 /**
- * Replaces every known secret value, and any URL carrying a credential, with
- * `[redacted]`. Tokens minted at run time are added as they are created.
+ * Replaces every known secret value, any GitHub token or JWT, and any URL carrying
+ * a credential with `[redacted]`. Tokens minted at run time are added as they are
+ * created.
  */
 export class Redactor {
   private readonly secrets = new Set<string>();
@@ -40,7 +44,9 @@ export class Redactor {
     for (const secret of [...this.secrets].sort((left, right) => right.length - left.length)) {
       redacted = redacted.split(secret).join(REDACTED);
     }
-    return redacted.replace(URL_PATTERN, (url) => (carriesCredential(url) ? REDACTED : url));
+    return redacted
+      .replace(TOKEN_PATTERN, REDACTED)
+      .replace(URL_PATTERN, (url) => (carriesCredential(url) ? REDACTED : url));
   }
 }
 

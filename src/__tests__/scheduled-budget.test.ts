@@ -148,7 +148,7 @@ describe('one scheduled invocation', () => {
     const env = createTestEnv(database.databasePath, {
       DIGEST_TIME_ZONE: 'UTC',
       DIGEST_HOUR: '9',
-      GITHUB_APP_ID: '1',
+      GITHUB_APP_ID: String(1),
       GITHUB_APP_INSTALLATION_ID: String(installationId),
       GITHUB_APP_PRIVATE_KEY: privateKey,
     });

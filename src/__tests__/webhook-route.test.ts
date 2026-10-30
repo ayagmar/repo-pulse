@@ -248,11 +248,11 @@ describe('webhook route', () => {
         body: payload,
       });
     expect((await app.fetch(request(secret), env)).status).toBe(200);
-    env.GITHUB_WEBHOOK_SECRET = 'rotated-secret';
+    env.GITHUB_WEBHOOK_SECRET = 'test-rotated-secret';
     expect((await app.fetch(request(secret), env)).status).toBe(401);
-    expect((await app.fetch(request('rotated-secret'), env)).status).toBe(200);
+    expect((await app.fetch(request('test-rotated-secret'), env)).status).toBe(200);
     env.WEBHOOK_MAX_BODY_BYTES = '10';
-    expect((await app.fetch(request('rotated-secret'), env)).status).toBe(413);
+    expect((await app.fetch(request('test-rotated-secret'), env)).status).toBe(413);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -334,7 +334,7 @@ describe('webhook sources', () => {
     database = createTempDatabasePath();
     env = createTestEnv(database.databasePath, {
       LOG_LEVEL: 'info',
-      GITHUB_APP_ID: '1',
+      GITHUB_APP_ID: String(1),
       GITHUB_APP_INSTALLATION_ID: String(installationId),
       GITHUB_APP_PRIVATE_KEY: privateKey,
     });

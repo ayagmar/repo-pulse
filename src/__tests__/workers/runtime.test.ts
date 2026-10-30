@@ -231,7 +231,7 @@ describe('Workers runtime integration', () => {
         scheduledTime: new Date('2026-10-15T09:00:00.000Z'),
         cron: '* * * * *',
       }),
-      { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/test' } as typeof env,
+      { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only' } as typeof env,
       context
     );
     await waitOnExecutionContext(context);

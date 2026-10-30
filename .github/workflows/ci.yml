@@ -35,6 +35,14 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+  secrets:
+    name: Secret Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check tracked files for credentials
+        run: scripts/check-secrets.sh
+
   typecheck:
     name: Type Check
     runs-on: ubuntu-latest

@@ -22,7 +22,7 @@ describe('createDiscordNotifier', () => {
 
   it('treats Discord rate limits as transient failures and respects retry headers', async () => {
     const notifier = createDiscordNotifier(
-      'https://discord.com/api/webhooks/1/test-hook',
+      'https://discord.com/api/webhooks/0/test-only',
       new Redactor([])
     );
     if (!notifier) {
@@ -54,7 +54,7 @@ describe('createDiscordNotifier', () => {
 
   it('treats Discord 5xx responses as transient failures', async () => {
     const notifier = createDiscordNotifier(
-      'https://discord.com/api/webhooks/1/test-hook',
+      'https://discord.com/api/webhooks/0/test-only',
       new Redactor([])
     );
     if (!notifier) {
@@ -78,7 +78,7 @@ describe('createDiscordNotifier', () => {
 
   it('classifies a timed-out Discord request as retryable', async () => {
     const notifier = createDiscordNotifier(
-      'https://discord.com/api/webhooks/1/test-hook',
+      'https://discord.com/api/webhooks/0/test-only',
       new Redactor([])
     );
     if (!notifier) throw new Error('Expected Discord notifier');
@@ -107,7 +107,7 @@ describe('createDiscordNotifier', () => {
 
   it('leaves Discord 4xx validation failures as permanent', async () => {
     const notifier = createDiscordNotifier(
-      'https://discord.com/api/webhooks/1/test-hook',
+      'https://discord.com/api/webhooks/0/test-only',
       new Redactor([])
     );
     if (!notifier) {

@@ -453,7 +453,7 @@ describe('digests', () => {
           : new Response(null, { status: 204 })
       )
     );
-    const env = createDigestEnv({ GITHUB_TOKEN: 'github-token' });
+    const env = createDigestEnv({ GITHUB_TOKEN: 'test-github-token' });
     await record(env, '2026-09-01T12:00:00.000Z', [push('dormant', 1)]);
     await record(env, '2026-09-25T12:00:00.000Z', [push('docs', 2), push('draft', 1)]);
     await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1), push('cli', 1)]);
@@ -472,7 +472,7 @@ describe('digests', () => {
     // Only repositories active in the last 30 days are looked up.
     expect(githubRequests().some((init) => (init.body as string).includes('dormant'))).toBe(false);
     expect(new Headers(githubRequests()[0]?.headers).get('authorization')).toBe(
-      'Bearer github-token'
+      'Bearer test-github-token'
     );
   });
 
@@ -493,7 +493,7 @@ describe('digests', () => {
         });
       });
     });
-    const env = createDigestEnv({ GITHUB_TOKEN: 'github-token' });
+    const env = createDigestEnv({ GITHUB_TOKEN: 'test-github-token' });
     await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
 
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
@@ -510,7 +510,7 @@ describe('digests', () => {
           : new Response(null, { status: 204 })
       )
     );
-    const env = createDigestEnv({ GITHUB_TOKEN: 'expired-token' });
+    const env = createDigestEnv({ GITHUB_TOKEN: 'test-expired-token' });
     await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
 
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));

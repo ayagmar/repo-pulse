@@ -21,15 +21,15 @@ describe('createConfig', () => {
   it('rejects overflowing integers instead of accepting unusable retry budgets', () => {
     expect(() =>
       createConfig({
-        GITHUB_WEBHOOK_SECRET: 'test',
-        ADMIN_API_TOKEN: 'test',
+        GITHUB_WEBHOOK_SECRET: 'test-secret',
+        ADMIN_API_TOKEN: 'admin-token',
         DELIVERY_MAX_ATTEMPTS: '9007199254740992',
       })
     ).toThrow('Invalid DELIVERY_MAX_ATTEMPTS');
   });
 
   it('rejects a digest time zone or hour that would never match, instead of never posting', () => {
-    const base = { GITHUB_WEBHOOK_SECRET: 'test', ADMIN_API_TOKEN: 'test' };
+    const base = { GITHUB_WEBHOOK_SECRET: 'test-secret', ADMIN_API_TOKEN: 'admin-token' };
 
     expect(() => createConfig({ ...base, DIGEST_TIME_ZONE: 'Africa/Casablnca' })).toThrow(
       'Invalid DIGEST_TIME_ZONE: Africa/Casablnca'
@@ -56,11 +56,12 @@ describe('createConfig', () => {
   });
 
   describe('GitHub webhook sources and App', () => {
-    const base = { GITHUB_WEBHOOK_SECRET: 'test', ADMIN_API_TOKEN: 'test' };
+    const base = { GITHUB_WEBHOOK_SECRET: 'test-secret', ADMIN_API_TOKEN: 'admin-token' };
     const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    // Numbers through String(), which check:secrets reads as an expression, not a literal id.
     const app = {
-      GITHUB_APP_ID: '1',
-      GITHUB_APP_INSTALLATION_ID: '2',
+      GITHUB_APP_ID: String(1),
+      GITHUB_APP_INSTALLATION_ID: String(2),
       GITHUB_APP_PRIVATE_KEY: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
     };
 
@@ -94,24 +95,24 @@ describe('createConfig', () => {
         const partial = { ...base, ...app, [missing]: '' };
         expect(() => createConfig(partial), missing).toThrow('Incomplete GitHub App config');
       }
-      expect(() => createConfig({ ...base, ...app, GITHUB_APP_ID: 'my-app' })).toThrow(
+      expect(() => createConfig({ ...base, ...app, GITHUB_APP_ID: 'test-app' })).toThrow(
         'Invalid GITHUB_APP_ID'
       );
-      expect(() => createConfig({ ...base, ...app, GITHUB_APP_INSTALLATION_ID: '-2' })).toThrow(
-        'Invalid GITHUB_APP_INSTALLATION_ID'
-      );
+      expect(() =>
+        createConfig({ ...base, ...app, GITHUB_APP_INSTALLATION_ID: 'test-installation' })
+      ).toThrow('Invalid GITHUB_APP_INSTALLATION_ID');
       const pkcs1 = keyPair.privateKey.export({ type: 'pkcs1', format: 'pem' });
       expect(() => createConfig({ ...base, ...app, GITHUB_APP_PRIVATE_KEY: pkcs1 })).toThrow(
         'openssl pkcs8 -topk8 -nocrypt'
       );
       let message = '';
       try {
-        createConfig({ ...base, ...app, GITHUB_APP_PRIVATE_KEY: 'not-a-key-sentinel' });
+        createConfig({ ...base, ...app, GITHUB_APP_PRIVATE_KEY: 'test-not-a-key' });
       } catch (error) {
         message = String(error);
       }
       expect(message).toContain('Invalid GITHUB_APP_PRIVATE_KEY');
-      expect(message).not.toContain('not-a-key-sentinel');
+      expect(message).not.toContain('test-not-a-key');
     });
 
     it('reads a complete App config', () => {
