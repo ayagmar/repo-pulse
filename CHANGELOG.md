@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Discord actions: with `DISCORD_ACTIONS=on`, issue-opened alerts get **Close** and
+  **Label…** buttons for the Discord users in `DISCORD_ALLOWED_USER_IDS`, answered at the
+  new `POST /discord/interactions`. Requests are checked against Discord's Ed25519
+  signature (`DISCORD_PUBLIC_KEY`), a five-minute timestamp window, a rate limit and the
+  application id before anything else. The GitHub write uses an App installation token
+  for Issues: write on that one repository, so the App needs Issues: write, and only after
+  the public lookup confirms the repository is public and not a fork. Clickers get
+  a private receipt; the alert is edited, best effort, to list what was done. Migration
+  `0008` adds `discord_interactions` and `discord_actions`. Off by default; alerts are
+  unchanged while it is off.
 - People memory: alerts say whether the sender is new (`👋 First time here`) or returning
   (`↩️ Seen before: N events in M repos since <date>`), counted across all repositories,
   and the Monday digest lists the week's five most active outside people under "Who's

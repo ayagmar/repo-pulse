@@ -275,6 +275,15 @@ export class D1EventHistory {
     return { events: events.results, starDays: starDays.results };
   }
 
+  /** The event recorded for a delivery id, or null when there is none. */
+  async findEvent(deliveryId: string): Promise<RepoEvent | null> {
+    const row = await this.db
+      .prepare('SELECT event_json AS eventJson FROM events WHERE delivery_id = ?')
+      .bind(deliveryId)
+      .first<Pick<EventHistoryRow, 'eventJson'>>();
+    return row === null ? null : deserializeRepoEvent(row.eventJson);
+  }
+
   async listRecentEvents(limit = 50): Promise<EventHistoryEntry[]> {
     const boundedLimit = Math.max(1, Math.min(limit, 200));
     const rows = await this.db

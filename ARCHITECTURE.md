@@ -17,6 +17,7 @@ Repo Pulse has one runtime path and one package-manager path:
 - [`src/http/routes/admin.ts`](src/http/routes/admin.ts) exposes authenticated operational endpoints against the same ledger.
 - [`src/http/routes/public-feed.ts`](src/http/routes/public-feed.ts) serves `GET /public/feed` without auth. [`src/core/services/public-feed.ts`](src/core/services/public-feed.ts) builds it from the event history, and [`src/providers/github/repository-visibility.ts`](src/providers/github/repository-visibility.ts) admits only repositories GitHub currently shows as public.
 - [`src/providers/discord/`](src/providers/discord/) owns Discord formatting and transport.
+- [`src/http/routes/discord-interactions.ts`](src/http/routes/discord-interactions.ts) answers the Close and Label buttons on issue alerts when `DISCORD_ACTIONS` is `on`: it verifies Discord's Ed25519 signature and the allow list before anything else, acknowledges at once, and leaves the GitHub write to [`src/providers/discord/interaction-actions.ts`](src/providers/discord/interaction-actions.ts) in `waitUntil`.
 
 ## Design Intent
 
@@ -32,6 +33,7 @@ Repo Pulse has one runtime path and one package-manager path:
 - The daily and weekly digests read the event history, not the ledger. Each provider claims a digest in `digest_sends` before posting it, so overlapping cron runs post it once. The optional GitHub lookup for unreleased work never blocks a digest: if it fails, the digest is posted without it.
 - The public feed fails closed. Webhooks can only hide a repository (through events recorded as private), never admit one. Every response asks GitHub's API, without a token or with one that reads public repositories only, about each repository it would show, unless an answer under 60 seconds old is cached in the isolate. Anything but a `200` with `"private": false` leaves the repository out. An empty feed means every repository was denied (`404` or `"private": true`); when nothing is admitted and some lookup failed, the feed answers `503` instead. The D1 read is cached for 300 seconds; the gated response is never cached.
 - Moving between repository webhooks and the GitHub App always passes through an overlap in which both are admitted. Events in the overlap can be posted twice, within the at-least-once guarantee; nothing is dropped unless two copies of one event arrive further apart than the overlap.
+- Discord actions are limited to two idempotent GitHub writes, closing an issue and adding labels, so they need no claim or lock. A replayed interaction is dropped by its id, the target comes from the stored event and never from the request, must be public and not a fork when clicked (the public feed's visibility lookup, never with a token that reads private repositories), and the write token covers issues on that one repository only. The receipt and `discord_actions` are authoritative; editing the alert is best effort.
 - The star radar reads the event history every ten minutes and claims each alert in `radar_alerts`, which also enforces a 24-hour cooldown per repository. It sends at most one alert per run to stay within the Free plan's 50 subrequests.
 
 ## Further Reading

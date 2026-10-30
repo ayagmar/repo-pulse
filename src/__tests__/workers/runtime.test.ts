@@ -14,6 +14,7 @@ import {
 } from '../../core/models/repo-event.js';
 import { Redactor } from '../../core/security/redact.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
+import { D1DiscordActions } from '../../core/services/d1-discord-actions.js';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
 import { dueDigestWindow } from '../../core/services/digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
@@ -304,19 +305,7 @@ describe('Workers runtime integration', () => {
 
   it('signs a GitHub App JWT with a PKCS#8 key inside workerd', async () => {
     // A key generated for this test only: no real App key is involved.
-    const keyPair = await crypto.subtle.generateKey(
-      {
-        name: 'RSASSA-PKCS1-v1_5',
-        modulusLength: 2048,
-        publicExponent: new Uint8Array([1, 0, 1]),
-        hash: 'SHA-256',
-      },
-      true,
-      ['sign', 'verify']
-    );
-    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keyPair.privateKey));
-    const base64 = btoa(String.fromCharCode(...pkcs8));
-    const pem = `-----BEGIN PRIVATE KEY-----\n${base64.replace(/.{64}/g, '$&\n')}\n-----END PRIVATE KEY-----\n`;
+    const { keyPair, pem } = await generateAppKey();
 
     const jwt = await signAppJwt(77, pem, 1_800_000_000);
 
@@ -339,4 +328,80 @@ describe('Workers runtime integration', () => {
       )
     ).resolves.toBe(true);
   });
+
+  it('verifies a Discord interaction signature with Ed25519 inside workerd', async () => {
+    // Keys and ids generated for this test only; nothing here is a real application.
+    const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const publicKey = toHex(await crypto.subtle.exportKey('raw', keys.publicKey));
+    const applicationId = String(100000000000000001n);
+    const actionsEnv = {
+      ...env,
+      DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only',
+      DISCORD_ACTIONS: 'on',
+      DISCORD_APPLICATION_ID: applicationId,
+      DISCORD_PUBLIC_KEY: publicKey,
+      DISCORD_ALLOWED_USER_IDS: String(100000000000000002n),
+      GITHUB_APP_ID: String(77),
+      GITHUB_APP_INSTALLATION_ID: String(1),
+      GITHUB_APP_PRIVATE_KEY: (await generateAppKey()).pem,
+    } as unknown as typeof env;
+    const body = JSON.stringify({ type: 1, id: '1', application_id: applicationId, token: 'ping' });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = toHex(
+      await crypto.subtle.sign(
+        { name: 'Ed25519' },
+        keys.privateKey,
+        new TextEncoder().encode(timestamp + body)
+      )
+    );
+    const post = async (text: string): Promise<Response> => {
+      const context = createExecutionContext();
+      const response = await worker.fetch(
+        new Request('https://example.com/discord/interactions', {
+          method: 'POST',
+          headers: { 'X-Signature-Ed25519': signature, 'X-Signature-Timestamp': timestamp },
+          body: text,
+        }),
+        actionsEnv,
+        context
+      );
+      await waitOnExecutionContext(context);
+      return response;
+    };
+
+    const pong = await post(body);
+    expect(pong.status).toBe(200);
+    await expect(pong.json()).resolves.toEqual({ type: 1 });
+    expect((await post(body.replace('"type":1', '"type":2'))).status).toBe(401);
+  });
+
+  it('takes up a Discord interaction once in real D1', async () => {
+    const actions = new D1DiscordActions(env.DB);
+    const interactionId = String(100000000000000005n);
+    await expect(actions.takeInteraction(interactionId, new Date())).resolves.toBe(true);
+    await expect(actions.takeInteraction(interactionId, new Date())).resolves.toBe(false);
+  });
 });
+
+/** An RSA key in PKCS#8 PEM, as the GitHub App's key is configured. */
+async function generateAppKey(): Promise<{ keyPair: CryptoKeyPair; pem: string }> {
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['sign', 'verify']
+  );
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keyPair.privateKey));
+  const base64 = btoa(String.fromCharCode(...pkcs8));
+  const pem = `-----BEGIN PRIVATE KEY-----\n${base64.replace(/.{64}/g, '$&\n')}\n-----END PRIVATE KEY-----\n`;
+
+  return { keyPair, pem };
+}
+
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}

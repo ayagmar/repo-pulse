@@ -121,8 +121,8 @@ describe('NotificationDispatcher', () => {
     const results = await dispatcher.dispatch(event, { deliveryId: 'delivery-1' });
 
     expect(results).toHaveLength(2);
-    expect(notifier1.notify).toHaveBeenCalledWith(event);
-    expect(notifier2.notify).toHaveBeenCalledWith(event);
+    expect(notifier1.notify).toHaveBeenCalledWith(event, 'delivery-1');
+    expect(notifier2.notify).toHaveBeenCalledWith(event, 'delivery-1');
   });
 
   it('tracks whether any notifiers are configured', () => {

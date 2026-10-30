@@ -4,6 +4,7 @@ import type {
   RepositoryActivity,
   UnreleasedWork,
 } from '../../core/models/digest.js';
+import type { IssueActionOutcome } from '../../core/models/issue-action.js';
 import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type {
   ForkEvent,
@@ -16,6 +17,7 @@ import type {
   StarEvent,
 } from '../../core/models/repo-event.js';
 import { REPO_EVENT_TYPES } from '../../core/models/repo-event.js';
+import { issueActionCustomId } from './interactions.js';
 
 /**
  * Discord embed structure
@@ -45,10 +47,26 @@ interface DiscordEmbed {
   };
 }
 
+interface DiscordButton {
+  type: 2;
+  /** 2 is grey, 4 red. */
+  style: 2 | 4;
+  label: string;
+  custom_id: string;
+  disabled?: boolean;
+}
+
+interface DiscordActionRow {
+  type: 1;
+  components: DiscordButton[];
+}
+
 export interface DiscordWebhookPayload {
   username?: string;
   avatar_url?: string;
   embeds: DiscordEmbed[];
+  /** Only sent to an application-owned webhook, with `with_components=true`. */
+  components?: DiscordActionRow[];
 }
 
 // Discord embed limits: https://discord.com/developers/docs/resources/message#embed-object-embed-limits
@@ -318,6 +336,63 @@ export function formatDiscordEmbed(event: RepoEvent): DiscordWebhookPayload {
     case REPO_EVENT_TYPES.RELEASE_PUBLISHED:
       return formatReleaseEvent(event);
   }
+}
+
+/** One action taken from an alert, as a line in its message. Mentions in embeds do not ping. */
+function issueActionLine(outcome: IssueActionOutcome): string {
+  const user = `<@${outcome.discordUserId}>`;
+  if (!outcome.succeeded) {
+    return `⚠️ ${outcome.action === 'close' ? 'Closing' : 'Labeling'} failed for ${user}`;
+  }
+  return outcome.action === 'close'
+    ? `✅ Closed by ${user}`
+    : `🏷️ Labeled ${outcome.detail} by ${user}`;
+}
+
+/**
+ * An issue-opened alert with Close and Label buttons, listing the actions taken so
+ * far; Close is disabled once it worked. Any other event, or a delivery id that cannot
+ * go in a custom id, is formatted as `formatDiscordEmbed` does.
+ */
+export function formatDiscordEmbedWithActions(
+  event: RepoEvent,
+  deliveryId: string,
+  outcomes: readonly IssueActionOutcome[] = []
+): DiscordWebhookPayload {
+  const payload = formatDiscordEmbed(event);
+  const closeId = issueActionCustomId('close', deliveryId);
+  const labelId = issueActionCustomId('label', deliveryId);
+  if (event.type !== REPO_EVENT_TYPES.ISSUE_OPENED || closeId === null || labelId === null) {
+    return payload;
+  }
+
+  const [embed] = payload.embeds;
+  if (embed !== undefined && outcomes.length > 0) {
+    embed.fields = [
+      ...(embed.fields ?? []),
+      {
+        name: 'Actions',
+        value: truncate(outcomes.map(issueActionLine).join('\n'), FIELD_VALUE_LIMIT),
+      },
+    ];
+  }
+  const closed = outcomes.some((outcome) => outcome.action === 'close' && outcome.succeeded);
+  payload.components = [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 4,
+          label: 'Close',
+          custom_id: closeId,
+          ...(closed ? { disabled: true } : {}),
+        },
+        { type: 2, style: 2, label: 'Label…', custom_id: labelId },
+      ],
+    },
+  ];
+  return payload;
 }
 
 function releasedSummary(releases: RepositoryActivity['releases']): string {

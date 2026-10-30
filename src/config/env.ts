@@ -22,6 +22,10 @@ type ConfigEnvVarName =
   | 'WEBHOOK_MAX_BODY_BYTES'
   | 'ADMIN_API_TOKEN'
   | 'DISCORD_WEBHOOK_URL'
+  | 'DISCORD_ACTIONS'
+  | 'DISCORD_APPLICATION_ID'
+  | 'DISCORD_PUBLIC_KEY'
+  | 'DISCORD_ALLOWED_USER_IDS'
   | 'DELIVERY_MAX_ATTEMPTS'
   | 'DELIVERY_RETRY_BASE_DELAY_MS'
   | 'DELIVERY_RETRY_MAX_DELAY_MS'
@@ -179,6 +183,63 @@ function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
   };
 }
 
+/** Buttons on issue alerts, answered at `POST /discord/interactions`. */
+export interface DiscordActionsConfig {
+  applicationId: string;
+  /** Ed25519 public key, as Discord shows it: 64 hex characters. */
+  publicKey: string;
+  /** Discord user ids allowed to act. */
+  allowedUserIds: ReadonlySet<string>;
+}
+
+const SNOWFLAKE = /^\d{1,20}$/;
+
+/**
+ * Discord actions, or undefined when `DISCORD_ACTIONS` is unset or `off`. When `on`,
+ * every value they need must be set and well formed. Error messages name the
+ * variable, never its value.
+ */
+function parseDiscordActions(
+  env: ConfigEnv,
+  needs: { app: GitHubAppConfig | undefined; webhookUrl: string | undefined }
+): DiscordActionsConfig | undefined {
+  const mode = (getEnvVar(env, 'DISCORD_ACTIONS') ?? '').trim();
+  if (mode === '' || mode === 'off') {
+    return undefined;
+  }
+  if (mode !== 'on') {
+    throw new Error('Invalid DISCORD_ACTIONS: expected on or off');
+  }
+
+  const applicationId = (getEnvVar(env, 'DISCORD_APPLICATION_ID') ?? '').trim();
+  const publicKey = (getEnvVar(env, 'DISCORD_PUBLIC_KEY') ?? '').trim().toLowerCase();
+  const allowedUserIds = (getEnvVar(env, 'DISCORD_ALLOWED_USER_IDS') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id !== '');
+  if (needs.app === undefined) {
+    throw new Error(
+      'Invalid DISCORD_ACTIONS: on needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY'
+    );
+  }
+  if (needs.webhookUrl === undefined || needs.webhookUrl === '') {
+    throw new Error('Invalid DISCORD_ACTIONS: on needs DISCORD_WEBHOOK_URL');
+  }
+  if (!SNOWFLAKE.test(applicationId)) {
+    throw new Error('Invalid DISCORD_APPLICATION_ID: expected a Discord application id');
+  }
+  if (!/^[0-9a-f]{64}$/.test(publicKey)) {
+    throw new Error('Invalid DISCORD_PUBLIC_KEY: expected 64 hex characters');
+  }
+  if (allowedUserIds.length === 0 || !allowedUserIds.every((id) => SNOWFLAKE.test(id))) {
+    throw new Error(
+      'Invalid DISCORD_ALLOWED_USER_IDS: expected a comma-separated list of Discord user ids'
+    );
+  }
+
+  return { applicationId, publicKey, allowedUserIds: new Set(allowedUserIds) };
+}
+
 export function createConfig(env: ConfigEnv): {
   server: {
     env: string;
@@ -200,6 +261,8 @@ export function createConfig(env: ConfigEnv): {
   };
   discord: {
     webhookUrl: string | undefined;
+    /** Set when `DISCORD_ACTIONS` is `on`. */
+    actions: DiscordActionsConfig | undefined;
   };
   deliveryLedger: {
     maxAttempts: number;
@@ -230,6 +293,7 @@ export function createConfig(env: ConfigEnv): {
       'Invalid GITHUB_WEBHOOK_SOURCES: app needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY'
     );
   }
+  const discordWebhookUrl = getEnvVar(env, 'DISCORD_WEBHOOK_URL');
   const deliveryRetryBaseDelayMs = parsePositiveInteger(
     'DELIVERY_RETRY_BASE_DELAY_MS',
     getEnvVar(env, 'DELIVERY_RETRY_BASE_DELAY_MS'),
@@ -270,7 +334,8 @@ export function createConfig(env: ConfigEnv): {
     },
 
     discord: {
-      webhookUrl: getEnvVar(env, 'DISCORD_WEBHOOK_URL'),
+      webhookUrl: discordWebhookUrl,
+      actions: parseDiscordActions(env, { app: githubApp, webhookUrl: discordWebhookUrl }),
     },
 
     deliveryLedger: {

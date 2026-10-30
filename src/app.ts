@@ -17,6 +17,7 @@ import { createAdminAuthMiddleware } from './http/middleware/admin-auth.js';
 import { createErrorHandler } from './http/middleware/error-handler.js';
 import { requestLogger } from './http/middleware/logger.js';
 import { createAdminRoutes } from './http/routes/admin.js';
+import { createDiscordInteractionRoutes } from './http/routes/discord-interactions.js';
 import { createPublicFeedRoutes } from './http/routes/public-feed.js';
 import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
@@ -38,7 +39,9 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
   const deliveryLedger = new D1DeliveryLedger(env.DB);
   const eventHistory = new D1EventHistory(env.DB);
   const notificationDispatcher = new NotificationDispatcher(redactor);
-  const discordNotifier = createDiscordNotifier(config.discord.webhookUrl, redactor);
+  const discordNotifier = createDiscordNotifier(config.discord.webhookUrl, redactor, {
+    actions: config.discord.actions !== undefined,
+  });
 
   if (discordNotifier) {
     notificationDispatcher.add(discordNotifier);
@@ -72,6 +75,7 @@ export function createApp(): Hono<HttpEnv> {
   };
   app.use('/webhook/*', runtime);
   app.use('/admin/*', runtime);
+  app.use('/discord/*', runtime);
   app.use('*', requestLogger);
   app.onError((error, c) =>
     createErrorHandler((c.env.NODE_ENV ?? 'development') === 'development')(error, c)
@@ -81,6 +85,7 @@ export function createApp(): Hono<HttpEnv> {
   app.use('/admin/*', createAdminAuthMiddleware());
   app.route('/admin', createAdminRoutes());
   app.route('/public', createPublicFeedRoutes());
+  app.route('/discord', createDiscordInteractionRoutes());
 
   return app;
 }

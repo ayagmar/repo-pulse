@@ -40,11 +40,15 @@ export class NotificationDispatcher {
    * @returns Results from the notification attempts made
    */
   dispatch(event: RepoEvent, metadata: DispatchMetadata = {}): Promise<NotificationResult[]> {
-    return this.sendToEach(metadata.skipProviders, (notifier) => notifier.notify(event), {
-      deliveryId: metadata.deliveryId,
-      eventType: event.type,
-      repository: event.repository.fullName,
-    });
+    return this.sendToEach(
+      metadata.skipProviders,
+      (notifier) => notifier.notify(event, metadata.deliveryId),
+      {
+        deliveryId: metadata.deliveryId,
+        eventType: event.type,
+        repository: event.repository.fullName,
+      }
+    );
   }
 
   /**

@@ -109,13 +109,57 @@ export class RepositoryVisibilityGate {
   }
 
   /**
-   * `publicToken` only raises the rate limit from 60 to 5,000 lookups an hour.
-   * Never pass a token that can read private repositories.
+   * Whether GitHub says, right now, that the repository with this id is public and not
+   * a fork. Looked up on every call and never cached; any other answer, a renamed or
+   * replaced repository, or no answer is false. Gates the writes Discord actions make.
    */
+  async isPublicSource(
+    repository: { fullName: string; id: number },
+    publicToken: string | undefined
+  ): Promise<boolean> {
+    if (!REPOSITORY_NAME_PATTERN.test(repository.fullName)) {
+      return false;
+    }
+    const found = await this.fetchRepository(repository.fullName, publicToken);
+    return (
+      typeof found === 'object' &&
+      found.private === false &&
+      found.fork === false &&
+      found.id === repository.id
+    );
+  }
+
   private async fetchVisibility(
     repository: string,
     publicToken: string | undefined
   ): Promise<Visibility> {
+    const found = await this.fetchRepository(repository, publicToken);
+    if (found === 'not_found') {
+      return 'denied';
+    }
+    if (found === 'unavailable') {
+      return 'unresolved';
+    }
+    if (found.private === false) {
+      return 'public';
+    }
+    if (found.private === true) {
+      return 'denied';
+    }
+    logger.warn('visibility.lookup_unreadable', { component: 'github', repository });
+    return 'unresolved';
+  }
+
+  /**
+   * GitHub's answer about a repository: its fields as found, `not_found` for a `404`,
+   * or `unavailable` for any other answer or none. `publicToken` only raises the rate
+   * limit from 60 to 5,000 lookups an hour. Never pass a token that can read private
+   * repositories.
+   */
+  private async fetchRepository(
+    repository: string,
+    publicToken: string | undefined
+  ): Promise<{ id: unknown; private: unknown; fork: unknown } | 'not_found' | 'unavailable'> {
     const [owner = '', name = ''] = repository.split('/');
     try {
       const response = await fetch(
@@ -139,22 +183,18 @@ export class RepositoryVisibilityGate {
           repository,
           status: response.status,
         });
-        return response.status === 404 ? 'denied' : 'unresolved';
+        return response.status === 404 ? 'not_found' : 'unavailable';
       }
       const body: unknown = await response.json();
-      const isPrivate =
-        typeof body === 'object' && body !== null && 'private' in body ? body.private : undefined;
-      if (isPrivate === false) {
-        return 'public';
-      }
-      if (isPrivate === true) {
-        return 'denied';
-      }
-      logger.warn('visibility.lookup_unreadable', { component: 'github', repository });
-      return 'unresolved';
-    } catch (error) {
-      logger.warn('visibility.lookup_failed', { component: 'github', repository, error });
-      return 'unresolved';
+      const fields = (typeof body === 'object' && body !== null ? body : {}) as Record<
+        string,
+        unknown
+      >;
+      return { id: fields.id, private: fields.private, fork: fields.fork };
+    } catch {
+      // A transport error can quote the request, Authorization header included.
+      logger.warn('visibility.lookup_failed', { component: 'github', repository });
+      return 'unavailable';
     }
   }
 }
