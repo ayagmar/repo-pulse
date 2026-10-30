@@ -107,12 +107,15 @@ checked.
 
 3. **Install App → All repositories.** The installation ID is the number at the end
    of the installation's settings URL.
-4. Set the secrets. The key comes from the file; type the two IDs at the prompts:
+4. Set the secrets. The key comes from the file; type the two IDs at the prompts.
+   One or two of the three is a configuration error that fails every request, so stage
+   all three as a new version and deploy it once:
 
    ```bash
-   npm exec -- wrangler secret put GITHUB_APP_PRIVATE_KEY < ~/.config/repo-pulse/app-key.pkcs8.pem
-   npm exec -- wrangler secret put GITHUB_APP_ID
-   npm exec -- wrangler secret put GITHUB_APP_INSTALLATION_ID
+   npm exec -- wrangler versions secret put GITHUB_APP_PRIVATE_KEY < ~/.config/repo-pulse/app-key.pkcs8.pem
+   npm exec -- wrangler versions secret put GITHUB_APP_ID
+   npm exec -- wrangler versions secret put GITHUB_APP_INSTALLATION_ID
+   npm exec -- wrangler versions deploy
    ```
 
    Then delete both key files. GitHub can issue a new key at any time.
