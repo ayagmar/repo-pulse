@@ -1,4 +1,3 @@
-import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { logger } from '../../core/services/logger.js';
@@ -11,6 +10,7 @@ import {
 } from '../../providers/github/webhook-request.js';
 import type { HttpEnv } from '../app-env.js';
 import { jsonError } from '../error-response.js';
+import { readBodyWithLimit } from '../read-body.js';
 
 interface WebhookSuccessResponse {
   success: boolean;
@@ -18,68 +18,6 @@ interface WebhookSuccessResponse {
   eventType?: string;
   repository?: string;
   duplicate?: boolean;
-}
-
-function parseContentLength(value: string | undefined): number | null {
-  if (value === undefined) {
-    return null;
-  }
-
-  const normalizedValue = value.trim();
-  if (!/^\d+$/.test(normalizedValue)) {
-    return null;
-  }
-
-  return Number.parseInt(normalizedValue, 10);
-}
-
-async function readRawBodyWithLimit(c: Context, maxBodyBytes: number): Promise<Uint8Array> {
-  const contentLength = parseContentLength(c.req.header('Content-Length'));
-  if (contentLength !== null && contentLength > maxBodyBytes) {
-    throw new GitHubWebhookRequestError(
-      413,
-      `Payload too large: max ${String(maxBodyBytes)} bytes`
-    );
-  }
-
-  const body = c.req.raw.body;
-  if (!body) {
-    return new Uint8Array();
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBodyBytes) {
-        await reader.cancel();
-        throw new GitHubWebhookRequestError(
-          413,
-          `Payload too large: max ${String(maxBodyBytes)} bytes`
-        );
-      }
-
-      chunks.push(value);
-    }
-
-    const rawBody = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      rawBody.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return rawBody;
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function repositoryNames(value: unknown): string[] {
@@ -117,15 +55,15 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
 
   router.post('/', async (c) => {
     const { config, eventProcessor } = c.get('runtime');
-    let rawBody: Uint8Array;
-    try {
-      rawBody = await readRawBodyWithLimit(c, config.github.maxBodyBytes);
-    } catch (error) {
-      if (error instanceof GitHubWebhookRequestError) {
-        return jsonError(c, error);
-      }
-
-      throw error;
+    const rawBody = await readBodyWithLimit(c.req.raw, config.github.maxBodyBytes);
+    if (rawBody === null) {
+      return jsonError(
+        c,
+        new GitHubWebhookRequestError(
+          413,
+          `Payload too large: max ${String(config.github.maxBodyBytes)} bytes`
+        )
+      );
     }
 
     let inbound: Awaited<ReturnType<typeof parseGitHubWebhookRequest>>;
