@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `GET /public/feed` reads its material once, at `limit=100`, and serves every `limit`
+  from that copy, so asking for different limits no longer costs one D1 read each.
+  Responses are unchanged.
 - Discord actions: with `DISCORD_ACTIONS=on`, issue-opened alerts get **Close** and
   **Label…** buttons for the Discord users in `DISCORD_ALLOWED_USER_IDS`, answered at the
   new `POST /discord/interactions`. Requests are checked against Discord's Ed25519

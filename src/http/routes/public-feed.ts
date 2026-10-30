@@ -6,12 +6,12 @@ import {
   buildPublicFeed,
   type MaterialCache,
   type MaterialMemory,
+  PUBLIC_FEED_MAX_LIMIT,
 } from '../../core/services/public-feed.js';
 import { RepositoryVisibilityGate } from '../../providers/github/repository-visibility.js';
 import type { HttpEnv } from '../app-env.js';
 
 const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 100;
 
 /** The `limit` query parameter, or null when it is not an integer from 1 to 100. */
 function parseLimit(value: string | undefined): number | null {
@@ -22,7 +22,7 @@ function parseLimit(value: string | undefined): number | null {
     return null;
   }
   const limit = Number.parseInt(value, 10);
-  return limit >= 1 && limit <= MAX_LIMIT ? limit : null;
+  return limit >= 1 && limit <= PUBLIC_FEED_MAX_LIMIT ? limit : null;
 }
 
 /**
@@ -53,7 +53,7 @@ export function createPublicFeedRoutes(
   gate: RepositoryVisibilityGate = new RepositoryVisibilityGate()
 ): Hono<HttpEnv> {
   const router = new Hono<HttpEnv>();
-  const memory: MaterialMemory = new Map();
+  const memory: MaterialMemory = {};
 
   router.onError((error, c) => {
     logger.error('public_feed.failed', { component: 'public-feed', error });
