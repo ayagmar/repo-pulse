@@ -5,6 +5,7 @@ import { Redactor } from '../core/security/redact.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
 import { GitHubAppAuth, READ_TOKEN } from '../providers/github/app-auth.js';
+import { GitHubInsights } from '../providers/github/github-insights.js';
 import {
   createExecutionContext,
   createTempDatabasePath,
@@ -345,6 +346,93 @@ describe('secrets in failures', () => {
       expect(github.discordPosts()).toBe(1);
       expect(logged()).toContain('GitHub /graphql failed: network error');
       expectNoSentinel(logged(), github.jwts[0]);
+    });
+  });
+
+  describe('when a successful GitHub response cannot be read', () => {
+    /** A `200` whose body fails partway with an exception quoting every sentinel. */
+    function failingBody(): Response {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller): void {
+            controller.enqueue(new TextEncoder().encode('{"data":'));
+            controller.error(leakyError());
+          },
+        }),
+        { status: 200 }
+      );
+    }
+
+    /** A `200` whose body is not JSON and quotes every sentinel near its start. */
+    function malformedBody(): Response {
+      return new Response(
+        `{"data": ${sentinel.installationToken} ${sentinel.adminToken} ${sentinel.keyLine} ${sentinel.webhookUrl}`,
+        { status: 200 }
+      );
+    }
+
+    const insights = new GitHubInsights(
+      () => Promise.resolve('test-github-token'),
+      new Redactor([sentinel.adminToken, sentinel.webhookUrl])
+    );
+    const calls = {
+      graphql: (): Promise<unknown> => insights.getUserProfiles(['octocat']),
+      referrers: (): Promise<unknown> => insights.listTopReferrers('myorg/repo'),
+    };
+
+    for (const [name, call] of Object.entries(calls)) {
+      for (const [kind, respond, expected] of [
+        ['a body that fails while read', failingBody, 'failed: network error'],
+        ['a body that is not JSON', malformedBody, 'returned a body that is not JSON'],
+      ] as const) {
+        it(`keeps them out of the ${name} error for ${kind}`, async () => {
+          vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(respond()))
+          );
+
+          const failure = await call().catch((error: unknown) => error);
+
+          expect(failure).toBeInstanceOf(Error);
+          const { message, stack } = failure as Error;
+          expect(message).toContain(expected);
+          expectNoSentinel(`${message}\n${stack ?? ''}`);
+        });
+      }
+    }
+
+    it('keeps them out of the digest log when the GraphQL body is not JSON', async () => {
+      vi.setSystemTime(new Date('2026-10-30T08:00:00Z'));
+      const env = createEnv({
+        GITHUB_APP_ID: '',
+        GITHUB_APP_INSTALLATION_ID: '',
+        GITHUB_APP_PRIVATE_KEY: '',
+        GITHUB_TOKEN: 'test-github-token',
+      });
+      const event = createTestRepoEvent();
+      await new D1DeliveryLedger(env.DB).persistAcceptedDelivery({
+        deliveryId: 'yesterday',
+        sourceEventType: 'star',
+        repository: event.repository.fullName,
+        event,
+        maxAttempts: 5,
+      });
+      vi.setSystemTime(new Date('2026-10-30T09:00:00Z'));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) =>
+          Promise.resolve(
+            url.startsWith('https://api.github.com/')
+              ? malformedBody()
+              : new Response(null, { status: 204 })
+          )
+        )
+      );
+
+      await sendDueDigests(env, new Date('2026-10-30T09:00:00Z'));
+
+      expect(logged()).toContain('GitHub /graphql returned a body that is not JSON');
+      expectNoSentinel(logged());
     });
   });
 });

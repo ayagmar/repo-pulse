@@ -144,10 +144,9 @@ export class GitHubInsights implements RepositoryInsights {
 
   async listTopReferrers(repository: string): Promise<Referrer[]> {
     const { owner, name } = splitFullName(repository);
-    const response = await this.request(
+    const referrers = (await this.request(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/traffic/popular/referrers`
-    );
-    const referrers: { referrer: string; count: number; uniques: number }[] = await response.json();
+    )) as { referrer: string; count: number; uniques: number }[];
     return referrers.map((referrer) => ({
       name: referrer.referrer,
       views: referrer.count,
@@ -173,12 +172,10 @@ export class GitHubInsights implements RepositoryInsights {
       selections.push(`r${suffix}: ${item.field((key) => `$${key}${suffix}`)}`);
     }
 
-    const response = await this.request('/graphql', {
+    const body = (await this.request('/graphql', {
       query: `query(${declarations.join(', ')}) { ${selections.join(' ')} }`,
       variables,
-    });
-    const body: { data?: Record<string, T | null> | null; errors?: { message: string }[] } =
-      await response.json();
+    })) as { data?: Record<string, T | null> | null; errors?: { message: string }[] };
     const joined = body.errors?.map((error) => error.message).join('; ');
     const messages = joined === undefined ? undefined : boundedMessage(joined, this.redactor);
     if (!body.data) {
@@ -193,11 +190,16 @@ export class GitHubInsights implements RepositoryInsights {
     return items.map((_, index) => data[`r${String(index)}`] ?? null);
   }
 
-  /** GET `path`, or POST `body` as JSON to it. Throws on a non-2xx response. */
-  private async request(path: string, body?: unknown): Promise<Response> {
+  /**
+   * GET `path`, or POST `body` as JSON to it, and return the parsed response. Throws
+   * on a non-2xx response. A failure while sending or reading, or a body that is not
+   * JSON, becomes a fixed message: the exception's text can quote the request or body.
+   */
+  private async request(path: string, body?: unknown): Promise<unknown> {
     const token = await this.token();
     const label = `GitHub ${path}`;
     let response: Response;
+    let text: string;
     try {
       response = await fetch(`${API_URL}${path}`, {
         method: body === undefined ? 'GET' : 'POST',
@@ -211,15 +213,19 @@ export class GitHubInsights implements RepositoryInsights {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      text = await response.text();
     } catch (error) {
       // The exception can quote the request, so it is not kept as the cause.
       // eslint-disable-next-line preserve-caught-error
       throw new Error(transportFailure(label, error));
     }
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
       throw new Error(upstreamFailure(label, response.status, text, this.redactor));
     }
-    return response;
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new Error(`${label} returned a body that is not JSON`);
+    }
   }
 }
