@@ -1,5 +1,5 @@
 import type { PublicFeedMaterial } from '../models/public-feed.js';
-import type { RepoEvent } from '../models/repo-event.js';
+import type { RepoEvent, SenderHistory } from '../models/repo-event.js';
 import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
 
@@ -53,6 +53,11 @@ export interface EventActivity {
   pullRequestNumber: number | null;
   pullRequestTitle: string | null;
   pullRequestUrl: string | null;
+  /** Null when the event has no numeric sender id. */
+  senderId: number | null;
+  senderLogin: string | null;
+  senderUrl: string | null;
+  repositoryOwner: string | null;
 }
 
 /** One `star.created` event, with the running total it brought the repository to. */
@@ -78,7 +83,12 @@ export class D1EventHistory {
            json_extract(event_json, '$.release.url') AS releaseUrl,
            json_extract(event_json, '$.pullRequest.number') AS pullRequestNumber,
            json_extract(event_json, '$.pullRequest.title') AS pullRequestTitle,
-           json_extract(event_json, '$.pullRequest.url') AS pullRequestUrl
+           json_extract(event_json, '$.pullRequest.url') AS pullRequestUrl,
+           CASE WHEN json_type(event_json, '$.sender.id') = 'integer'
+             THEN json_extract(event_json, '$.sender.id') END AS senderId,
+           json_extract(event_json, '$.sender.login') AS senderLogin,
+           json_extract(event_json, '$.sender.url') AS senderUrl,
+           json_extract(event_json, '$.repository.owner') AS repositoryOwner
          FROM events
          WHERE received_at >= ? AND received_at < ?
          ORDER BY received_at ASC, delivery_id ASC`
@@ -87,6 +97,61 @@ export class D1EventHistory {
       .all<EventActivity>();
 
     return rows.results;
+  }
+
+  /**
+   * The event already recorded for `deliveryId`, if any, so a redelivery keeps the text
+   * it was first accepted with; otherwise what was recorded from `senderId` so far. Both
+   * come from one query, and the counts read only the sender's rows through
+   * `idx_events_sender_received_at`.
+   */
+  async readSenderHistory(
+    deliveryId: string,
+    senderId: number,
+    repository: string
+  ): Promise<{ storedEvent: RepoEvent } | { senderHistory: SenderHistory }> {
+    const row = await this.db
+      .prepare(
+        `SELECT
+           (SELECT event_json FROM events WHERE delivery_id = ?) AS storedEventJson,
+           MIN(received_at) AS firstSeenAt,
+           COUNT(*) AS priorEvents,
+           COUNT(DISTINCT repository) AS priorRepositories,
+           COALESCE(SUM(repository = ?), 0) AS priorInRepository
+         FROM events
+         WHERE json_extract(event_json, '$.sender.id') = ?`
+      )
+      .bind(deliveryId, repository, senderId)
+      .first<SenderHistory & { storedEventJson: string | null }>();
+    if (row === null) {
+      throw new Error('Sender history query returned no row');
+    }
+
+    const { storedEventJson, ...senderHistory } = row;
+    return storedEventJson === null
+      ? { senderHistory }
+      : { storedEvent: deserializeRepoEvent(storedEventJson) };
+  }
+
+  /** When each sender's earliest recorded event was received, by sender id. */
+  async readFirstSeen(senderIds: readonly number[]): Promise<Map<number, Date>> {
+    if (senderIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.db
+      .prepare(
+        `SELECT
+           json_extract(event_json, '$.sender.id') AS senderId,
+           MIN(received_at) AS firstSeenAt
+         FROM events
+         WHERE json_extract(event_json, '$.sender.id') IN (SELECT value FROM json_each(?))
+         GROUP BY json_extract(event_json, '$.sender.id')`
+      )
+      .bind(JSON.stringify(senderIds))
+      .all<{ senderId: number; firstSeenAt: string }>();
+
+    return new Map(rows.results.map((row) => [row.senderId, new Date(row.firstSeenAt)]));
   }
 
   /** Repositories with events received since `since`, most recently active first. */

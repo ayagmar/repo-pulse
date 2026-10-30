@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sendDueDigests } from '../app.js';
 import type { DigestPeriod } from '../core/models/digest.js';
@@ -9,6 +10,7 @@ import {
 } from '../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from '../core/services/d1-digest-log.js';
+import { D1EventHistory } from '../core/services/d1-event-history.js';
 import { dueDigestWindow } from '../core/services/digest.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
@@ -61,6 +63,18 @@ function star(name: string, removed = false): RepoEvent {
         sender,
         star: { count: 1 },
       });
+}
+
+function starBy(name: string, id: number, login: string): RepoEvent {
+  return {
+    ...star(name),
+    sender: {
+      id,
+      login,
+      avatarUrl: `https://avatars.githubusercontent.com/u/${String(id)}`,
+      url: `https://github.com/${login}`,
+    },
+  };
 }
 
 function push(name: string, commitCount: number): RepoEvent {
@@ -224,11 +238,14 @@ describe('digests', () => {
     }
   });
 
+  let databasePath = '';
+
   function createDigestEnv(
     overrides: Parameters<typeof createTestEnv>[1] = {}
   ): ReturnType<typeof createTestEnv> {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);
+    databasePath = tempDatabase.databasePath;
     const env = createTestEnv(tempDatabase.databasePath, {
       DIGEST_TIME_ZONE: 'Africa/Casablanca',
       DIGEST_HOUR: '9',
@@ -547,5 +564,120 @@ describe('digests', () => {
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /** Outside people, the owner, a bot and an ignored login, around the week to 19 October. */
+  async function recordPeople(env: ReturnType<typeof createTestEnv>): Promise<void> {
+    await record(env, '2026-10-01T12:00:00.000Z', [starBy('cli', 3, 'carol')]);
+    await record(env, '2026-10-13T12:00:00.000Z', [
+      starBy('cli', 1, 'alice-old'),
+      starBy('cli', 4, 'dave'),
+      starBy('cli', 4, 'dave'),
+      starBy('cli', 4, 'dave'),
+      starBy('cli', 9, 'myorg'),
+      starBy('web', 9, 'myorg'),
+      starBy('docs', 9, 'myorg'),
+      starBy('cli', 10, 'dependabot[bot]'),
+      starBy('web', 10, 'dependabot[bot]'),
+      starBy('cli', 11, 'Test-Alt'),
+      starBy('web', 11, 'Test-Alt'),
+    ]);
+    await record(env, '2026-10-14T12:00:00.000Z', [
+      starBy('web', 1, 'alice'),
+      starBy('cli', 3, 'carol'),
+      starBy('web', 3, 'carol'),
+      starBy('docs', 6, 'gina'),
+      starBy('docs', 5, 'frank'),
+      starBy('docs', 2, 'erin'),
+    ]);
+    // So the daily digest is posted too.
+    await record(env, '2026-10-18T12:00:00.000Z', [starBy('cli', 9, 'myorg')]);
+  }
+
+  it('on Mondays, lists the week’s most active outside people and marks new ones', async () => {
+    const env = createDigestEnv({ PEOPLE_IGNORED_LOGINS: 'test-alt , ' });
+    await recordPeople(env);
+
+    await sendDueDigests(env, new Date('2026-10-19T09:00:00.000Z'));
+
+    const [daily, weekly] = postedEmbeds();
+    expect(daily?.fields).toBeUndefined();
+    expect(weekly?.fields).toEqual([
+      {
+        name: "👥 Who's showing up",
+        value: [
+          '🆕 [alice](https://github.com/alice) 2 events in 2 repos',
+          '[carol](https://github.com/carol) 2 events in 2 repos',
+          '🆕 [dave](https://github.com/dave) 3 events in 1 repo',
+          '🆕 [erin](https://github.com/erin) 1 event in 1 repo',
+          '🆕 [frank](https://github.com/frank) 1 event in 1 repo',
+        ].join('\n'),
+      },
+    ]);
+  });
+
+  it('posts the weekly digest without people when they cannot be read', async () => {
+    const env = createDigestEnv();
+    await recordPeople(env);
+    vi.spyOn(D1EventHistory.prototype, 'readFirstSeen').mockRejectedValue(
+      new Error('D1 unavailable')
+    );
+
+    await sendDueDigests(env, new Date('2026-10-19T09:00:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-19T09:01:00.000Z'));
+
+    // Posted once each: the claims were marked sent.
+    expect(postedEmbeds()).toHaveLength(2);
+    expect(postedEmbeds()[1]?.title).toMatch(/^📦 Weekly pulse/);
+    expect(postedEmbeds()[1]?.fields).toBeUndefined();
+  });
+
+  it('reads the week through the time index and first-seen times through the sender index', async () => {
+    const env = createDigestEnv();
+    const raw = new Database(databasePath);
+    cleanups.push(() => {
+      raw.close();
+    });
+    const insert = raw.prepare(
+      `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+       VALUES (?, 'star.created', 'myorg/cli', ?, ?)`
+    );
+    raw.transaction(() => {
+      for (let index = 0; index < 20_000; index += 1) {
+        const at = new Date(Date.parse('2026-01-01T00:00:00Z') + index * 60_000).toISOString();
+        insert.run(`old-${String(index)}`, at, JSON.stringify({ sender: { id: index + 100 } }));
+      }
+    })();
+    await recordPeople(env);
+    const queries: string[] = [];
+
+    await sendDueDigests(
+      {
+        ...env,
+        DB: {
+          ...env.DB,
+          prepare: (query) => {
+            queries.push(query);
+            return env.DB.prepare(query);
+          },
+        },
+      },
+      new Date('2026-10-19T09:00:00.000Z')
+    );
+
+    const planOf = (fragment: string, ...values: unknown[]): string[] => {
+      const query = queries.find((candidate) => candidate.includes(fragment)) ?? '';
+      return (
+        raw.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...values) as { detail: string }[]
+      ).map((step) => step.detail);
+    };
+    const week = planOf('WHERE received_at >= ? AND received_at < ?', '', '');
+    expect(week).toContainEqual(expect.stringContaining('USING INDEX idx_events_received_at'));
+    expect(week).not.toContainEqual(expect.stringMatching(/^SCAN events/));
+    const firstSeen = planOf('MIN(received_at) AS firstSeenAt', '[1]');
+    expect(firstSeen).toContainEqual(
+      expect.stringContaining('USING INDEX idx_events_sender_received_at')
+    );
+    expect(firstSeen).not.toContainEqual(expect.stringMatching(/^SCAN events/));
   });
 });

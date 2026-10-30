@@ -29,7 +29,8 @@ type ConfigEnvVarName =
   | 'DELIVERY_PROCESSING_LEASE_MS'
   | 'DELIVERY_DRAIN_BATCH_SIZE'
   | 'DIGEST_TIME_ZONE'
-  | 'DIGEST_HOUR';
+  | 'DIGEST_HOUR'
+  | 'PEOPLE_IGNORED_LOGINS';
 
 export type ConfigEnv = Partial<Record<ConfigEnvVarName, string>>;
 
@@ -122,6 +123,16 @@ function parseWebhookSources(value: string | undefined): ReadonlySet<WebhookSour
   return new Set(sources as WebhookSource[]);
 }
 
+/** Comma-separated GitHub logins, lowercased; blank entries are ignored. */
+function parseLoginList(value: string | undefined): ReadonlySet<string> {
+  return new Set(
+    (value ?? '')
+      .split(',')
+      .map((login) => login.trim().toLowerCase())
+      .filter((login) => login !== '')
+  );
+}
+
 export interface GitHubAppConfig {
   appId: number;
   installationId: number;
@@ -201,6 +212,10 @@ export function createConfig(env: ConfigEnv): {
   digest: {
     timeZone: string;
     hour: number;
+  };
+  people: {
+    /** Lowercased logins never remembered or listed, such as the owner's other accounts. */
+    ignoredLogins: ReadonlySet<string>;
   };
 } {
   const nodeEnv = getEnvVar(env, 'NODE_ENV') ?? 'development';
@@ -286,6 +301,10 @@ export function createConfig(env: ConfigEnv): {
     digest: {
       timeZone: parseTimeZone(getEnvVar(env, 'DIGEST_TIME_ZONE')),
       hour: parseHour(getEnvVar(env, 'DIGEST_HOUR'), 9),
+    },
+
+    people: {
+      ignoredLogins: parseLoginList(getEnvVar(env, 'PEOPLE_IGNORED_LOGINS')),
     },
   };
 }

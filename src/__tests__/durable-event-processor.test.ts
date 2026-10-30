@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NotificationResult, Notifier } from '../core/interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../core/models/failure-classification.js';
+import type { RepoEvent } from '../core/models/repo-event.js';
 import { Redactor } from '../core/security/redact.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
+import { D1EventHistory } from '../core/services/d1-event-history.js';
+import type { D1DatabaseLike } from '../core/services/d1-types.js';
 import { DurableEventProcessor } from '../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
 import {
@@ -313,5 +316,119 @@ describe('DurableEventProcessor', () => {
     await processor.drainDueDeliveries();
 
     await expect(ledger.getDelivery('delivery-old-succeeded')).resolves.not.toBeNull();
+  });
+});
+
+describe('DurableEventProcessor sender history', () => {
+  const cleanups: (() => void)[] = [];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
+  });
+
+  function createProcessor(database: D1DatabaseLike): {
+    processor: DurableEventProcessor;
+    history: D1EventHistory;
+  } {
+    const history = new D1EventHistory(database);
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
+    dispatcher.add(createNotifier(() => Promise.resolve({ success: true, provider: 'discord' })));
+    return {
+      processor: new DurableEventProcessor(
+        new D1DeliveryLedger(database),
+        dispatcher,
+        {},
+        {
+          history,
+          ignoredLogins: new Set(['owner-alt']),
+        }
+      ),
+      history,
+    };
+  }
+
+  function createDatabase(): ReturnType<typeof createTestD1Database> {
+    const tempDatabase = createTempDatabasePath();
+    cleanups.push(tempDatabase.cleanup);
+    const database = createTestD1Database(tempDatabase.databasePath);
+    cleanups.push(() => {
+      database.close();
+    });
+    return database;
+  }
+
+  function starBy(login: string, id = 1): RepoEvent {
+    const event = createTestRepoEvent();
+    return { ...event, sender: { ...event.sender, id, login } };
+  }
+
+  function enqueue(
+    processor: DurableEventProcessor,
+    deliveryId: string,
+    event: RepoEvent
+  ): ReturnType<DurableEventProcessor['enqueue']> {
+    return processor.enqueue(event, {
+      deliveryId,
+      repository: event.repository.fullName,
+      sourceEventType: 'star',
+    });
+  }
+
+  async function storedHistory(history: D1EventHistory): Promise<Record<string, unknown>> {
+    const events = await history.listRecentEvents();
+    return Object.fromEntries(events.map((entry) => [entry.deliveryId, entry.event.senderHistory]));
+  }
+
+  it('records an outside person’s earlier events, and nothing for the owner or bots', async () => {
+    const { processor, history } = createProcessor(createDatabase());
+
+    await enqueue(processor, 'first', starBy('alice'));
+    await enqueue(processor, 'second', starBy('alice'));
+    // The repository owner, an ignored login in another case, a bot, and no user id.
+    await enqueue(processor, 'owner', starBy('MyOrg', 2));
+    await enqueue(processor, 'ignored', starBy('Owner-Alt', 3));
+    await enqueue(processor, 'bot', starBy('dependabot[bot]', 4));
+    await enqueue(processor, 'no-id', {
+      ...starBy('ghost'),
+      sender: { ...starBy('ghost').sender, id: null as unknown as number },
+    });
+
+    const stored = await storedHistory(history);
+    expect(stored).toEqual({
+      first: { firstSeenAt: null, priorEvents: 0, priorRepositories: 0, priorInRepository: 0 },
+      second: {
+        firstSeenAt: expect.any(String) as unknown,
+        priorEvents: 1,
+        priorRepositories: 1,
+        priorInRepository: 1,
+      },
+      owner: undefined,
+      ignored: undefined,
+      bot: undefined,
+      'no-id': undefined,
+    });
+  });
+
+  it('accepts the event without history when the history cannot be read', async () => {
+    const { processor, history } = createProcessor(createDatabase());
+    vi.spyOn(history, 'readSenderHistory').mockRejectedValue(new Error('D1 unavailable'));
+
+    await expect(enqueue(processor, 'first', starBy('alice'))).resolves.toEqual({
+      outcome: 'accepted',
+    });
+    await expect(storedHistory(history)).resolves.toEqual({ first: undefined });
+  });
+
+  it('still fails the request when the event cannot be persisted', async () => {
+    const database = createDatabase();
+    const { processor } = createProcessor({
+      ...database,
+      batch: () => Promise.reject(new Error('D1 unavailable')),
+    });
+
+    await expect(enqueue(processor, 'first', starBy('alice'))).rejects.toThrow('D1 unavailable');
   });
 });

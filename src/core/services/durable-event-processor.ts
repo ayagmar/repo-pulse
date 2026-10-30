@@ -3,8 +3,10 @@ import type { NotificationFailureResult } from '../interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import type { ClaimedDelivery, D1DeliveryLedger } from './d1-delivery-ledger.js';
+import type { D1EventHistory } from './d1-event-history.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
+import { isOutsidePerson } from './people.js';
 
 interface EventProcessingContext {
   deliveryId: string;
@@ -21,6 +23,12 @@ interface DurableEventProcessorOptions {
   succeededRetentionDays?: number;
   processingLeaseMs?: number;
   drainBatchSize?: number;
+}
+
+/** Where an outside sender's earlier events are read from when an event is accepted. */
+interface PeopleOptions {
+  history: D1EventHistory;
+  ignoredLogins: ReadonlySet<string>;
 }
 
 interface DrainDueDeliveriesOptions {
@@ -68,7 +76,8 @@ export class DurableEventProcessor {
   constructor(
     private readonly ledger: D1DeliveryLedger,
     private readonly dispatcher: NotificationDispatcher,
-    options: DurableEventProcessorOptions = {}
+    options: DurableEventProcessorOptions = {},
+    private readonly people: PeopleOptions | null = null
   ) {
     this.maxAttempts = options.maxAttempts ?? DELIVERY_DEFAULTS.maxAttempts;
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? DELIVERY_DEFAULTS.retryBaseDelayMs;
@@ -91,9 +100,45 @@ export class DurableEventProcessor {
       deliveryId: context.deliveryId,
       sourceEventType: context.sourceEventType,
       repository: context.repository,
-      event,
+      event: await this.withSenderHistory(event, context),
       maxAttempts: this.maxAttempts,
     });
+  }
+
+  /**
+   * The event to persist: as first recorded when this delivery id was accepted before,
+   * else with the sender's history attached for an outside person. The history is
+   * optional, so a failed read persists the event without it.
+   */
+  private async withSenderHistory(
+    event: RepoEvent,
+    context: EventProcessingContext
+  ): Promise<RepoEvent> {
+    if (
+      this.people === null ||
+      !isOutsidePerson(event.sender, event.repository.owner, this.people.ignoredLogins)
+    ) {
+      return event;
+    }
+
+    try {
+      const read = await this.people.history.readSenderHistory(
+        context.deliveryId,
+        event.sender.id,
+        context.repository
+      );
+      return 'storedEvent' in read
+        ? read.storedEvent
+        : { ...event, senderHistory: read.senderHistory };
+    } catch (error) {
+      logger.warn('people.history_read_failed', {
+        component: 'event_processor',
+        deliveryId: context.deliveryId,
+        repository: context.repository,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return event;
+    }
   }
 
   retryDelivery(deliveryId: string): ReturnType<D1DeliveryLedger['retryFailedDelivery']> {

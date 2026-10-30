@@ -1,4 +1,9 @@
-import type { Digest, RepositoryActivity, UnreleasedWork } from '../../core/models/digest.js';
+import type {
+  Digest,
+  PersonActivity,
+  RepositoryActivity,
+  UnreleasedWork,
+} from '../../core/models/digest.js';
 import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type {
   ForkEvent,
@@ -7,6 +12,7 @@ import type {
   PushEvent,
   ReleaseEvent,
   RepoEvent,
+  SenderHistory,
   StarEvent,
 } from '../../core/models/repo-event.js';
 import { REPO_EVENT_TYPES } from '../../core/models/repo-event.js';
@@ -110,14 +116,36 @@ function senderLink(event: RepoEvent): string {
   return `[${event.sender.login}](${event.sender.url})`;
 }
 
+const firstSeenDate = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'UTC',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+});
+
+/** Whether the sender is new here or has been seen before, across all repositories. */
+function senderHistoryLine(history: SenderHistory): string {
+  if (history.priorEvents === 0 || history.firstSeenAt === null) {
+    return '👋 First time here';
+  }
+  return `↩️ Seen before: ${plural(history.priorEvents, 'event')} in ${plural(history.priorRepositories, 'repo')} since ${firstSeenDate.format(new Date(history.firstSeenAt))}`;
+}
+
 function createEmbed(
   event: RepoEvent,
   embed: Omit<DiscordEmbed, 'timestamp' | 'footer' | 'author'>
 ): DiscordWebhookPayload {
+  const description =
+    event.senderHistory === undefined
+      ? embed.description
+      : [embed.description, senderHistoryLine(event.senderHistory)]
+          .filter((part) => part !== undefined)
+          .join('\n\n');
   return {
     embeds: [
       {
         ...embed,
+        ...(description !== undefined ? { description } : {}),
         title: truncate(embed.title, TITLE_LIMIT),
         timestamp: event.timestamp.toISOString(),
         footer: { text: event.repository.fullName, icon_url: GITHUB_ICON_URL },
@@ -359,6 +387,17 @@ function unreleasedField(
   return lines.length > 0 ? [{ name: '🚢 Not released yet', value: lines.join('\n') }] : [];
 }
 
+/** The week's most active outside people, as one embed field. */
+function peopleField(people: readonly PersonActivity[]): NonNullable<DiscordEmbed['fields']> {
+  const lines = people.map(
+    (person) =>
+      `${person.isNew ? '🆕 ' : ''}[${person.login}](${person.url}) ${plural(person.events, 'event')} in ${plural(person.repositories, 'repo')}`
+  );
+  return lines.length > 0
+    ? [{ name: "👥 Who's showing up", value: truncate(lines.join('\n'), FIELD_VALUE_LIMIT) }]
+    : [];
+}
+
 function repositories(count: number): string {
   return `${String(count)} ${count === 1 ? 'repository' : 'repositories'}`;
 }
@@ -395,7 +434,10 @@ export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
     length += block.length + 1;
   }
 
-  const fields = unreleasedField(digest.unreleased, digest.timeZone);
+  const fields = [
+    ...unreleasedField(digest.unreleased, digest.timeZone),
+    ...peopleField(digest.people),
+  ];
   const heading = digest.period === 'weekly' ? '📦 Weekly pulse' : '📊 Daily pulse';
   return {
     embeds: [

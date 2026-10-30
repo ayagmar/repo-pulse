@@ -133,7 +133,8 @@ describe('one scheduled invocation', () => {
 
   /**
    * The worst case: a Monday at the digest hour and a radar minute, with deliveries
-   * to drain, a daily and a weekly digest, a star alert, and no cached App token.
+   * to drain, a daily and a weekly digest (which reads when each of the week's
+   * stargazers was first seen), a star alert, and no cached App token.
    */
   async function runWorstCase(failMint: boolean): Promise<{
     subrequests: number;
