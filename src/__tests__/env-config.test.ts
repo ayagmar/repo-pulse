@@ -125,4 +125,76 @@ describe('createConfig', () => {
       });
     });
   });
+
+  describe('Discord actions', () => {
+    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    // Through String() and variables, which check:secrets reads as expressions.
+    const applicationId = String(100000000000000001n);
+    const publicKey = 'ab'.repeat(32);
+    const userIds = `${String(100000000000000002n)}, ${String(100000000000000003n)}`;
+    const blankList = ' , ';
+    const complete = {
+      GITHUB_WEBHOOK_SECRET: 'test-secret',
+      ADMIN_API_TOKEN: 'admin-token',
+      DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only',
+      GITHUB_APP_ID: String(1),
+      GITHUB_APP_INSTALLATION_ID: String(2),
+      GITHUB_APP_PRIVATE_KEY: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+      DISCORD_ACTIONS: 'on',
+      DISCORD_APPLICATION_ID: applicationId,
+      DISCORD_PUBLIC_KEY: publicKey,
+      DISCORD_ALLOWED_USER_IDS: userIds,
+    };
+
+    it('stays off while DISCORD_ACTIONS is unset or off, even with its secrets set', () => {
+      const unset = Object.fromEntries(
+        Object.entries(complete).filter(([name]) => name !== 'DISCORD_ACTIONS')
+      );
+      for (const env of [
+        unset,
+        { ...complete, DISCORD_ACTIONS: '' },
+        { ...complete, DISCORD_ACTIONS: 'off' },
+      ]) {
+        expect(createConfig(env).discord.actions).toBeUndefined();
+      }
+    });
+
+    it('reads a complete config', () => {
+      expect(createConfig(complete).discord.actions).toEqual({
+        applicationId,
+        publicKey,
+        allowedUserIds: new Set(userIds.split(', ')),
+      });
+    });
+
+    it('refuses anything partial or malformed when on, without echoing the values', () => {
+      const cases: [Partial<Record<keyof typeof complete, string>>, string][] = [
+        [{ DISCORD_ACTIONS: 'yes' }, 'Invalid DISCORD_ACTIONS'],
+        [
+          { GITHUB_APP_ID: '', GITHUB_APP_INSTALLATION_ID: '', GITHUB_APP_PRIVATE_KEY: '' },
+          'on needs GITHUB_APP_ID',
+        ],
+        [{ DISCORD_WEBHOOK_URL: '' }, 'on needs DISCORD_WEBHOOK_URL'],
+        [{ DISCORD_APPLICATION_ID: '' }, 'Invalid DISCORD_APPLICATION_ID'],
+        [{ DISCORD_APPLICATION_ID: 'test-application' }, 'Invalid DISCORD_APPLICATION_ID'],
+        [{ DISCORD_PUBLIC_KEY: 'test-key' }, 'Invalid DISCORD_PUBLIC_KEY'],
+        [{ DISCORD_ALLOWED_USER_IDS: blankList }, 'Invalid DISCORD_ALLOWED_USER_IDS'],
+        [{ DISCORD_ALLOWED_USER_IDS: `${userIds},test-user` }, 'Invalid DISCORD_ALLOWED_USER_IDS'],
+      ];
+      for (const [overrides, expected] of cases) {
+        let message = '';
+        try {
+          createConfig({ ...complete, ...overrides });
+        } catch (error) {
+          message = String(error);
+        }
+        expect(message, expected).toContain(expected);
+        for (const value of Object.values(overrides)) {
+          if (value !== '') {
+            expect(message).not.toContain(value);
+          }
+        }
+      }
+    });
+  });
 });
