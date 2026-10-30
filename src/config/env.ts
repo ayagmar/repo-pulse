@@ -137,9 +137,10 @@ const PKCS1_HEADER = '-----BEGIN RSA PRIVATE KEY-----';
  * name the variable, never its value.
  */
 function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
-  const appId = getEnvVar(env, 'GITHUB_APP_ID') ?? '';
-  const installationId = getEnvVar(env, 'GITHUB_APP_INSTALLATION_ID') ?? '';
-  const privateKey = getEnvVar(env, 'GITHUB_APP_PRIVATE_KEY') ?? '';
+  // Blank counts as unset, so a stray space cannot pass for a value.
+  const appId = (getEnvVar(env, 'GITHUB_APP_ID') ?? '').trim();
+  const installationId = (getEnvVar(env, 'GITHUB_APP_INSTALLATION_ID') ?? '').trim();
+  const privateKey = (getEnvVar(env, 'GITHUB_APP_PRIVATE_KEY') ?? '').trim();
   const setCount = [appId, installationId, privateKey].filter((value) => value !== '').length;
   if (setCount === 0) {
     return undefined;
@@ -150,13 +151,12 @@ function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
     );
   }
 
-  const trimmedKey = privateKey.trim();
-  if (trimmedKey.startsWith(PKCS1_HEADER)) {
+  if (privateKey.startsWith(PKCS1_HEADER)) {
     throw new Error(
       'Invalid GITHUB_APP_PRIVATE_KEY: expected PKCS#8, got PKCS#1. Convert it with `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pkcs8.pem`'
     );
   }
-  if (!trimmedKey.startsWith(PKCS8_HEADER)) {
+  if (!privateKey.startsWith(PKCS8_HEADER)) {
     throw new Error('Invalid GITHUB_APP_PRIVATE_KEY: expected a PKCS#8 PEM private key');
   }
 
@@ -164,7 +164,7 @@ function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
   return {
     appId: parsePositiveInteger('GITHUB_APP_ID', appId, 0),
     installationId: parsePositiveInteger('GITHUB_APP_INSTALLATION_ID', installationId, 0),
-    privateKey: trimmedKey,
+    privateKey,
   };
 }
 

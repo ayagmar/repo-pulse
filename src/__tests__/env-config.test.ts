@@ -92,8 +92,10 @@ describe('createConfig', () => {
 
     it('rejects a partial or malformed App config without echoing the values', () => {
       for (const missing of Object.keys(app)) {
-        const partial = { ...base, ...app, [missing]: '' };
-        expect(() => createConfig(partial), missing).toThrow('Incomplete GitHub App config');
+        for (const blank of ['', ' ']) {
+          const partial = { ...base, ...app, [missing]: blank };
+          expect(() => createConfig(partial), missing).toThrow('Incomplete GitHub App config');
+        }
       }
       expect(() => createConfig({ ...base, ...app, GITHUB_APP_ID: 'test-app' })).toThrow(
         'Invalid GITHUB_APP_ID'
