@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- GitHub App: one App installed on all repositories can replace per-repository webhooks.
+  `GITHUB_WEBHOOK_SOURCES` (`repository`, `app`, or both during a cutover) decides which
+  deliveries are admitted; App deliveries from private repositories and forks are ignored.
+  With `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` set,
+  digests and star alerts use the App's installation token instead of `GITHUB_TOKEN`.
+- `ping`, `installation` and `installation_repositories` deliveries are acknowledged
+  with `200` even without a repository.
+- `just unsubscribe` (`scripts/unsubscribe.sh`) removes the Repo Pulse webhook from
+  repositories, recording each hook first, with `--dry-run` to preview.
+- `npm run check:secrets`, in `verify` and CI, fails on credentials in tracked files.
+- Discord and GitHub failures are stored and logged without exception text, and with
+  secrets and credential URLs redacted from upstream messages. Their wording changed,
+  for example `Discord request failed with 429: …`.
+- The README and setup guide no longer print the webhook secret or put the admin token
+  in curl's arguments.
+
 - `GET /public/feed`: an unauthenticated feed of recent releases, stars, default-branch
   pushes and merged pull requests, plus 90 days of daily star counts, for ayagmar.dev
   (ADR 0012 there). A repository is shown only while GitHub's API says it is public,

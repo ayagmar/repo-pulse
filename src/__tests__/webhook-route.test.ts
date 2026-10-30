@@ -1,5 +1,5 @@
-import { createHmac } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac, generateKeyPairSync } from 'node:crypto';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { createExecutionContext, createTempDatabasePath, createTestEnv } from './test-helpers.js';
@@ -248,11 +248,11 @@ describe('webhook route', () => {
         body: payload,
       });
     expect((await app.fetch(request(secret), env)).status).toBe(200);
-    env.GITHUB_WEBHOOK_SECRET = 'rotated-secret';
+    env.GITHUB_WEBHOOK_SECRET = 'test-rotated-secret';
     expect((await app.fetch(request(secret), env)).status).toBe(401);
-    expect((await app.fetch(request('rotated-secret'), env)).status).toBe(200);
+    expect((await app.fetch(request('test-rotated-secret'), env)).status).toBe(200);
     env.WEBHOOK_MAX_BODY_BYTES = '10';
-    expect((await app.fetch(request('rotated-secret'), env)).status).toBe(413);
+    expect((await app.fetch(request('test-rotated-secret'), env)).status).toBe(413);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -311,5 +311,230 @@ describe('webhook route', () => {
       message: 'Duplicate delivery acknowledged',
     });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('webhook sources', () => {
+  const secret = 'test-secret';
+  const installationId = 4242;
+  let privateKey: string;
+  let database: ReturnType<typeof createTempDatabasePath>;
+  let env: ReturnType<typeof createTestEnv>;
+  let deliveryCount = 0;
+
+  beforeAll(() => {
+    privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    });
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    database = createTempDatabasePath();
+    env = createTestEnv(database.databasePath, {
+      LOG_LEVEL: 'info',
+      GITHUB_APP_ID: String(1),
+      GITHUB_APP_INSTALLATION_ID: String(installationId),
+      GITHUB_APP_PRIVATE_KEY: privateKey,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    env.DB.close();
+    database.cleanup();
+  });
+
+  /** A star from a repository webhook: no `installation`, and no `fork` either. */
+  function repositoryStar(): Record<string, unknown> {
+    return JSON.parse(createWebhookPayload()) as Record<string, unknown>;
+  }
+
+  function appStar(
+    repositoryOverrides: Record<string, unknown> = {},
+    installation: unknown = { id: installationId }
+  ): Record<string, unknown> {
+    const payload = repositoryStar();
+    return {
+      ...payload,
+      installation,
+      repository: {
+        ...(payload.repository as Record<string, unknown>),
+        fork: false,
+        ...repositoryOverrides,
+      },
+    };
+  }
+
+  async function deliver(
+    eventType: string,
+    payload: unknown,
+    options: { signingSecret?: string; deliveryId?: string } = {}
+  ): Promise<{ status: number; body: { message?: string } }> {
+    deliveryCount += 1;
+    const text = JSON.stringify(payload);
+    const execution = createExecutionContext();
+    const response = await createApp().fetch(
+      new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: {
+          'X-GitHub-Event': eventType,
+          'X-GitHub-Delivery': options.deliveryId ?? `delivery-${String(deliveryCount)}`,
+          'X-Hub-Signature-256': createSignature(text, options.signingSecret ?? secret),
+        },
+        body: text,
+      }),
+      env,
+      execution.executionCtx
+    );
+    await execution.waitForBackground();
+    return { status: response.status, body: await response.json<{ message?: string }>() };
+  }
+
+  async function recordedDeliveries(): Promise<number> {
+    return (await new D1DeliveryLedger(env.DB).getStats()).total;
+  }
+
+  it('acknowledges ping and installation events once signed, with or without a repository', async () => {
+    await expect(deliver('ping', { zen: 'Keep it logically awesome.' })).resolves.toMatchObject({
+      status: 200,
+    });
+    await expect(deliver('ping', repositoryStar())).resolves.toMatchObject({ status: 200 });
+    await expect(
+      deliver('ping', { zen: 'unsigned' }, { signingSecret: 'wrong-secret' })
+    ).resolves.toMatchObject({ status: 401 });
+
+    const info = vi.mocked(console.info);
+    info.mockClear();
+    await expect(
+      deliver('installation_repositories', {
+        action: 'added',
+        installation: { id: installationId },
+        repositories_added: [{ full_name: 'myorg/new-repo' }],
+        repositories_removed: [{ full_name: 'myorg/old-repo' }],
+      })
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      deliver('installation', { action: 'created', installation: { id: installationId } })
+    ).resolves.toMatchObject({ status: 200 });
+
+    expect(await recordedDeliveries()).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+    const logged = info.mock.calls.map(([entry]) => JSON.parse(String(entry)) as unknown);
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        message: 'webhook.installation_changed',
+        eventType: 'installation_repositories',
+        added: ['myorg/new-repo'],
+        removed: ['myorg/old-repo'],
+      })
+    );
+  });
+
+  it('admits only repository webhooks by default', async () => {
+    await expect(deliver('star', appStar())).resolves.toMatchObject({
+      status: 200,
+      body: { message: "Event 'star' ignored: app deliveries are not admitted" },
+    });
+    await expect(deliver('star', repositoryStar())).resolves.toMatchObject({ status: 202 });
+    expect(await recordedDeliveries()).toBe(1);
+  });
+
+  it('admits App deliveries only from the configured installation and public, non-fork repositories', async () => {
+    env.GITHUB_WEBHOOK_SOURCES = 'app';
+    const info = vi.mocked(console.info);
+    info.mockClear();
+
+    await expect(deliver('star', repositoryStar())).resolves.toMatchObject({ status: 200 });
+    // Not admitted, so not refused for lacking a repository either.
+    await expect(deliver('star', { sender: {} })).resolves.toMatchObject({ status: 200 });
+    for (const rejected of [
+      appStar({}, { id: installationId + 1 }),
+      appStar({}, { id: String(installationId) }),
+      appStar({}, null),
+      appStar({ fork: true }),
+      appStar({ fork: undefined }),
+      appStar({ fork: null }),
+      appStar({ private: true }),
+      appStar({ private: undefined }),
+      appStar({ private: 'false' }),
+    ]) {
+      await expect(deliver('star', rejected), JSON.stringify(rejected)).resolves.toMatchObject({
+        status: 200,
+      });
+    }
+    expect(await recordedDeliveries()).toBe(0);
+    expect(
+      info.mock.calls.filter(([entry]) => String(entry).includes('webhook.app_delivery_rejected'))
+    ).toHaveLength(9);
+
+    await expect(deliver('star', appStar())).resolves.toMatchObject({ status: 202 });
+    expect(await recordedDeliveries()).toBe(1);
+  });
+
+  it('admits both sources during an overlap, as two deliveries', async () => {
+    env.GITHUB_WEBHOOK_SOURCES = 'repository,app';
+
+    await expect(deliver('star', repositoryStar())).resolves.toMatchObject({ status: 202 });
+    await expect(deliver('star', appStar())).resolves.toMatchObject({ status: 202 });
+    expect(await recordedDeliveries()).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('loses no occurrence across source changes that add before they remove', async () => {
+    const overlapMs = 10 * 60_000;
+    type Sources = 'repository' | 'app' | 'repository,app';
+    const other = { repository: 'app', app: 'repository' } as const;
+
+    for (let seed = 1; seed <= 8; seed += 1) {
+      // Park-Miller: every product stays an exact integer.
+      let state = seed;
+      const random = (bound: number): number => {
+        state = (state * 48_271) % 2_147_483_647;
+        return state % bound;
+      };
+
+      // A cutover or rollback: add the other source at S, remove the first at R >= S + overlap.
+      const initial = random(2) === 0 ? 'repository' : 'app';
+      let single: 'repository' | 'app' = initial;
+      const changes: { at: number; sources: Sources }[] = [{ at: 0, sources: initial }];
+      let now = 0;
+      for (let switches = 0; switches < 3; switches += 1) {
+        now += random(30) * 60_000;
+        changes.push({ at: now, sources: 'repository,app' });
+        now += overlapMs + random(20) * 60_000;
+        single = other[single];
+        changes.push({ at: now, sources: single });
+      }
+      const sourcesAt = (time: number): Sources =>
+        changes.filter((change) => change.at <= time).at(-1)?.sources ?? initial;
+
+      // Each occurrence is sent by both sources, the two copies less than the overlap apart.
+      for (let occurrence = 0; occurrence < 12; occurrence += 1) {
+        const repositoryArrival = random(now + overlapMs);
+        const appArrival = repositoryArrival + random(2 * overlapMs - 1) - (overlapMs - 1);
+        const label = `seed ${String(seed)}, occurrence ${String(occurrence)}`;
+        const statuses: number[] = [];
+        for (const [payload, arrival] of [
+          [repositoryStar(), repositoryArrival],
+          [appStar(), appArrival],
+        ] as const) {
+          env.GITHUB_WEBHOOK_SOURCES = sourcesAt(arrival);
+          statuses.push((await deliver('star', payload)).status);
+        }
+        expect(statuses, label).toContain(202);
+      }
+    }
+  });
+
+  it('drops an occurrence whose copies arrive further apart than the overlap (documented residual)', async () => {
+    // Cutover: repository until S, both until R, then app. The App copy arrives before S
+    // and the repository copy after R.
+    env.GITHUB_WEBHOOK_SOURCES = 'repository';
+    await expect(deliver('star', appStar())).resolves.toMatchObject({ status: 200 });
+    env.GITHUB_WEBHOOK_SOURCES = 'app';
+    await expect(deliver('star', repositoryStar())).resolves.toMatchObject({ status: 200 });
+    expect(await recordedDeliveries()).toBe(0);
   });
 });

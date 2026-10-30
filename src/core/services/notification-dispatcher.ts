@@ -3,6 +3,7 @@ import type { Digest } from '../models/digest.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import type { MomentumAlert } from '../models/momentum-alert.js';
 import type { RepoEvent } from '../models/repo-event.js';
+import { boundedMessage, type Redactor } from '../security/redact.js';
 import { logger } from './logger.js';
 
 interface DispatchMetadata {
@@ -15,6 +16,8 @@ interface DispatchMetadata {
  */
 export class NotificationDispatcher {
   private readonly notifiers: Notifier[] = [];
+
+  constructor(private readonly redactor: Redactor) {}
 
   /**
    * Add a notifier to the dispatcher
@@ -111,10 +114,13 @@ export class NotificationDispatcher {
         return entry.result;
       }
 
-      const error =
+      // Stored and logged, so it keeps no stack and no credentials.
+      const error = boundedMessage(
         entry.reason instanceof Error
-          ? (entry.reason.stack ?? entry.reason.message)
-          : String(entry.reason);
+          ? `${entry.reason.name}: ${entry.reason.message}`
+          : String(entry.reason),
+        this.redactor
+      );
       this.logFailure(entry.notifier.name, logFields, error);
 
       return {

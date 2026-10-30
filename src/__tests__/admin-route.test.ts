@@ -112,7 +112,7 @@ describe('admin routes', () => {
     cleanups.push(firstDatabase.cleanup, secondDatabase.cleanup);
     const env = createTestEnv(firstDatabase.databasePath);
     const nextEnv = createTestEnv(secondDatabase.databasePath, {
-      ADMIN_API_TOKEN: 'rotated-token',
+      ADMIN_API_TOKEN: 'test-rotated-token',
     });
     const firstDb = env.DB;
     cleanups.push(
@@ -141,7 +141,7 @@ describe('admin routes', () => {
     // Binding-only updates must work even if the platform reuses the env object.
     Object.assign(env, nextEnv);
     expect((await app.fetch(request('admin-token'), env)).status).toBe(401);
-    const response = await app.fetch(request('rotated-token'), env);
+    const response = await app.fetch(request('test-rotated-token'), env);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ deliveryLedger: { total: 1 } });
   });

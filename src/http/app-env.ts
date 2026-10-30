@@ -1,4 +1,5 @@
 import type { ConfigEnv, createConfig } from '../config/env.js';
+import type { Redactor } from '../core/security/redact.js';
 import type { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import type { D1EventHistory } from '../core/services/d1-event-history.js';
 import type { D1DatabaseLike } from '../core/services/d1-types.js';
@@ -10,6 +11,7 @@ export interface HttpEnv {
   Variables: {
     runtime: {
       config: ReturnType<typeof createConfig>;
+      redactor: Redactor;
       deliveryLedger: D1DeliveryLedger;
       eventHistory: D1EventHistory;
       notificationDispatcher: NotificationDispatcher;

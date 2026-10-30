@@ -153,7 +153,7 @@ describe('momentum radar', () => {
   }
 
   it('alerts once a day when a quiet repository suddenly gains stars', async () => {
-    const env = createRadarEnv({ GITHUB_TOKEN: 'github-token' });
+    const env = createRadarEnv({ GITHUB_TOKEN: 'test-github-token' });
     // One star a day for the two weeks before.
     for (let day = 14; day >= 1; day -= 1) {
       await record(
@@ -294,7 +294,7 @@ describe('momentum radar', () => {
           : new Response(null, { status: 204 })
       )
     );
-    const env = createRadarEnv({ GITHUB_TOKEN: 'expired-token' });
+    const env = createRadarEnv({ GITHUB_TOKEN: 'test-expired-token' });
     const now = new Date('2026-10-15T12:05:00.000Z');
     await recordStars(env, 'cli', now, ['a', 'b', 'c', 'd', 'e'], 5);
 

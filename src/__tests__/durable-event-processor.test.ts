@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NotificationResult, Notifier } from '../core/interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../core/models/failure-classification.js';
+import { Redactor } from '../core/security/redact.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { DurableEventProcessor } from '../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../core/services/notification-dispatcher.js';
@@ -38,7 +39,7 @@ describe('DurableEventProcessor', () => {
       database.close();
     });
 
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     const notify = vi
       .fn()
       .mockResolvedValueOnce({
@@ -100,7 +101,7 @@ describe('DurableEventProcessor', () => {
         failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
       } satisfies NotificationResult)
       .mockResolvedValueOnce({ success: true, provider: 'slack' } satisfies NotificationResult);
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add({
       name: 'discord',
       isConfigured: () => true,
@@ -164,7 +165,7 @@ describe('DurableEventProcessor', () => {
     ]);
 
     const notify = vi.fn();
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add(createNotifier(notify));
     await new DurableEventProcessor(ledger, dispatcher).drainDueDeliveries();
 
@@ -183,7 +184,7 @@ describe('DurableEventProcessor', () => {
       database.close();
     });
 
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     const notify = vi.fn().mockResolvedValue({
       success: false,
       provider: 'discord',
@@ -251,7 +252,7 @@ describe('DurableEventProcessor', () => {
     await ledger.claimNextPendingDelivery(new Date(), 300_000);
     await ledger.markDeliverySucceeded('delivery-recent-succeeded', new Date(), 1);
 
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add(
       createNotifier(
         vi
@@ -296,7 +297,7 @@ describe('DurableEventProcessor', () => {
       1
     );
 
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add(
       createNotifier(
         vi

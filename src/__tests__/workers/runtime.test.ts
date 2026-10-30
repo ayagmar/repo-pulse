@@ -12,12 +12,14 @@ import {
   REPO_EVENT_TYPES,
   serializeRepoEvent,
 } from '../../core/models/repo-event.js';
+import { Redactor } from '../../core/security/redact.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
 import { D1EventHistory } from '../../core/services/d1-event-history.js';
 import { dueDigestWindow } from '../../core/services/digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
 import worker from '../../index.js';
+import { signAppJwt } from '../../providers/github/app-auth.js';
 
 // Local workerd/D1 integration only: no remote bindings, secrets or outbound requests.
 describe('Workers runtime integration', () => {
@@ -168,7 +170,7 @@ describe('Workers runtime integration', () => {
   });
 
   it('persists notification outcomes using real D1 batch and RETURNING semantics', async () => {
-    const dispatcher = new NotificationDispatcher();
+    const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add({
       name: 'test',
       isConfigured: () => true,
@@ -229,7 +231,7 @@ describe('Workers runtime integration', () => {
         scheduledTime: new Date('2026-10-15T09:00:00.000Z'),
         cron: '* * * * *',
       }),
-      { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/test' } as typeof env,
+      { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only' } as typeof env,
       context
     );
     await waitOnExecutionContext(context);
@@ -298,5 +300,43 @@ describe('Workers runtime integration', () => {
       events: [],
       starHistory: [],
     });
+  });
+
+  it('signs a GitHub App JWT with a PKCS#8 key inside workerd', async () => {
+    // A key generated for this test only: no real App key is involved.
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'RSASSA-PKCS1-v1_5',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256',
+      },
+      true,
+      ['sign', 'verify']
+    );
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keyPair.privateKey));
+    const base64 = btoa(String.fromCharCode(...pkcs8));
+    const pem = `-----BEGIN PRIVATE KEY-----\n${base64.replace(/.{64}/g, '$&\n')}\n-----END PRIVATE KEY-----\n`;
+
+    const jwt = await signAppJwt(77, pem, 1_800_000_000);
+
+    const [header = '', payload = '', signature = ''] = jwt.split('.');
+    const fromBase64Url = (part: string): Uint8Array<ArrayBuffer> =>
+      Uint8Array.from(atob(part.replace(/-/g, '+').replace(/_/g, '/')), (character) =>
+        character.charCodeAt(0)
+      );
+    expect(JSON.parse(new TextDecoder().decode(fromBase64Url(payload)))).toEqual({
+      iat: 1_800_000_000 - 60,
+      exp: 1_800_000_000 + 540,
+      iss: 77,
+    });
+    await expect(
+      crypto.subtle.verify(
+        'RSASSA-PKCS1-v1_5',
+        keyPair.publicKey,
+        fromBase64Url(signature),
+        new TextEncoder().encode(`${header}.${payload}`)
+      )
+    ).resolves.toBe(true);
   });
 });

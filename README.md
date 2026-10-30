@@ -44,19 +44,19 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ayagmar/repo-pulse)
 
-Generate the webhook secret first and keep it in a file. GitHub and Cloudflare never show it again, and you need it for every repository you subscribe:
+Generate the webhook secret first and keep it in a file. GitHub and Cloudflare never show it again, and you need it for the GitHub App or every repository webhook. Copy it to the clipboard to paste it into the form, rather than printing it:
 
 ```bash
 mkdir -p ~/.config/repo-pulse
 (umask 077; openssl rand -hex 32 | tr -d '\n' > ~/.config/repo-pulse/webhook-secret)
-cat ~/.config/repo-pulse/webhook-secret
+wl-copy < ~/.config/repo-pulse/webhook-secret   # macOS: pbcopy < ~/.config/repo-pulse/webhook-secret
 ```
 
 The button creates the D1 database in your Cloudflare account and asks for three secrets:
 
 | Secret | Value |
 | --- | --- |
-| `GITHUB_WEBHOOK_SECRET` | the contents of `~/.config/repo-pulse/webhook-secret` |
+| `GITHUB_WEBHOOK_SECRET` | the contents of `~/.config/repo-pulse/webhook-secret`, from the clipboard |
 | `ADMIN_API_TOKEN` | another random string, for example from `openssl rand -hex 32` |
 | `DISCORD_WEBHOOK_URL` | the Discord channel's webhook URL (Server Settings → Integrations → Webhooks) |
 
@@ -64,13 +64,13 @@ It then runs `npm run deploy`, which applies the D1 migrations and deploys the W
 
 ### Optional: a GitHub token
 
-With a GitHub token, the daily digest also lists repositories with commits on the default branch since their latest release, and star alerts name notable stargazers and top referrers. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories and two permissions: **Contents: read** for releases and commits, and **Administration: read** for traffic referrers. Then add it:
+With access to GitHub's API, the daily digest also lists repositories with commits on the default branch since their latest release, and star alerts name notable stargazers and top referrers. The [GitHub App](#connect-github) gives that access with a short-lived token. Without the App, create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories and two permissions: **Contents: read** for releases and commits, and **Administration: read** for traffic referrers. Then add it at the prompt:
 
 ```bash
 npx wrangler secret put GITHUB_TOKEN
 ```
 
-Without the token, or when GitHub does not answer, digests and alerts are posted without those details.
+When the App is configured, its token is used and `GITHUB_TOKEN` is ignored. Without either, or when GitHub does not answer, digests and alerts are posted without those details.
 
 ### Optional: a public-only GitHub token for the feed
 
@@ -87,9 +87,22 @@ npx wrangler secret put GITHUB_PUBLIC_TOKEN < ~/.config/repo-pulse/github-public
 Do not reuse `GITHUB_TOKEN` here: it can read private repositories. With a public-only
 token a private repository still answers `404`, and the feed also requires `"private": false`.
 
-## Subscribe repositories
+## Connect GitHub
 
-GitHub has no account-wide webhooks, so each repository needs its own. With the [GitHub CLI](https://cli.github.com/) logged in as a repository admin:
+GitHub has no account-wide webhooks. Two ways to get events:
+
+- **A GitHub App (recommended).** One App installed on all your repositories sends their events, so a new repository is covered without setup. Its token also replaces `GITHUB_TOKEN`.
+- **Repository webhooks.** One webhook per repository, added with `just subscribe`.
+
+### A GitHub App
+
+[SETUP.md](SETUP.md#github-app) has the steps: create the App with read permissions only (Metadata, Contents, Issues, Pull requests, Administration) and the Star, Fork, Issues, Pull request, Push and Release events, using the same webhook secret; install it on all repositories; and set `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` as secrets. `GITHUB_WEBHOOK_SOURCES` in `wrangler.jsonc` then decides which deliveries are admitted. App deliveries from private repositories and forks are ignored.
+
+Moving from repository webhooks to the App, or back, goes through an overlap in which both are admitted, so no event is dropped. Events posted during the overlap, about ten minutes, appear twice. [docs/operations.md](docs/operations.md#moving-between-repository-webhooks-and-the-github-app) has the sequence.
+
+### Repository webhooks
+
+With the [GitHub CLI](https://cli.github.com/) logged in as a repository admin:
 
 ```bash
 just subscribe https://repo-pulse.<your-subdomain>.workers.dev owner/repo owner/other-repo
@@ -99,14 +112,17 @@ Without `just`, run `scripts/subscribe.sh` with the same arguments. It adds a we
 
 GitHub pings each new webhook. The repository's **Settings → Webhooks → Recent Deliveries** shows the result: `200` means the secret matches, `401` means it does not.
 
+`just unsubscribe --dry-run <worker-url> owner/repo …` lists the Repo Pulse webhooks it would delete; without `--dry-run` it records each in `~/.config/repo-pulse/removed-hooks.jsonl` (or `REPO_PULSE_HOOK_INVENTORY`), then deletes only hooks whose URL is the Worker's.
+
 ## How it works
 
 ```text
 GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 202 -> notify Discord -> retry if needed
 ```
 
-- `POST /webhook` receives GitHub webhook deliveries
+- `POST /webhook` receives deliveries from repository webhooks and the GitHub App
 - verifies `X-Hub-Signature-256` against the exact raw body
+- admits only the sources in `GITHUB_WEBHOOK_SOURCES`, and App deliveries only from public repositories that are not forks
 - enforces request body size before JSON parsing
 - normalizes supported payloads into one `RepoEvent` union
 - writes accepted work to D1 before returning `202 Accepted`
@@ -131,7 +147,9 @@ another branch first is announced too. Bot pushes, branch deletions, and GitHub'
 merge or squash commits are skipped, since the merged pull request is announced
 already. Rebase merges are not detected and are announced as a push.
 
-Unsupported and skipped events are acknowledged with `200` and ignored.
+Unsupported and skipped events are acknowledged with `200` and ignored, as are `ping`,
+`installation` and `installation_repositories`, and deliveries from a source that is not
+admitted.
 
 ## API surface
 
@@ -259,6 +277,7 @@ Fill in `.dev.vars` with test values first. Wrangler serves the app on `http://1
 ## Verification commands
 
 ```bash
+npm run check:secrets
 npm run typegen
 npm run typecheck
 npm run lint
@@ -268,6 +287,11 @@ npm run test:workers
 npm run knip
 npm run build
 ```
+
+`check:secrets` fails on a private key, a GitHub token, a Discord webhook URL, or a
+value for a credential or owner identifier (such as `ADMIN_API_TOKEN` or `GITHUB_APP_ID`)
+that is not a placeholder, in any tracked file. It catches labelled and recognizable
+leaks only; an unlabelled random string still needs a reviewer.
 
 ## Guarantees
 
@@ -290,4 +314,7 @@ src/core/services/durable-event-processor.ts
 src/providers/github/           payload verification + event mapping
 src/providers/discord/          embed formatting + delivery transport
 scripts/subscribe.sh            adds the webhook to GitHub repositories
+scripts/unsubscribe.sh          removes it, recording each hook first
+scripts/check-coverage.sh       checks those webhooks before rolling back from the App
+scripts/check-secrets.sh        fails on credentials in tracked files
 ```

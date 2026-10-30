@@ -78,9 +78,13 @@ describe('parseGitHubWebhookRequest', () => {
       secret,
     });
 
-    expect(result.eventType).toBe('star');
-    expect(result.deliveryId).toBe('delivery-2');
-    expect(result.repository).toBe('MyOrg/Repo');
+    expect(result).toMatchObject({
+      kind: 'repository',
+      source: 'repository',
+      eventType: 'star',
+      deliveryId: 'delivery-2',
+    });
+    expect(extractGitHubRepositoryFullName(result.payload)).toBe('MyOrg/Repo');
   });
 });
 

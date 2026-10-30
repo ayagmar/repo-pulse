@@ -1,10 +1,15 @@
 import type { RepositoryInsights, UserProfile } from '../../core/interfaces/repository-insights.js';
 import type { UnreleasedWork } from '../../core/models/digest.js';
 import type { Referrer } from '../../core/models/momentum-alert.js';
+import {
+  boundedMessage,
+  type Redactor,
+  transportFailure,
+  upstreamFailure,
+} from '../../core/security/redact.js';
 import { logger } from '../../core/services/logger.js';
 
 const API_URL = 'https://api.github.com';
-const ERROR_DETAIL_LIMIT = 300;
 /** A digest or alert waits this long for GitHub, then goes out without its details. */
 const REQUEST_TIMEOUT_MS = 5_000;
 
@@ -46,10 +51,15 @@ function repositoryField(fields: AliasedField['field']): AliasedField['field'] {
 /**
  * Reads GitHub's API with a read-only token. GraphQL questions about several
  * repositories or users are asked in one request, with an alias per item and
- * variables for every name, so names never need escaping.
+ * variables for every name, so names never need escaping. Errors keep GitHub's
+ * status and message, with credentials redacted.
  */
 export class GitHubInsights implements RepositoryInsights {
-  constructor(private readonly token: string) {}
+  constructor(
+    /** The token for each request: a fixed one, or the App's installation token. */
+    private readonly token: () => Promise<string>,
+    private readonly redactor: Redactor
+  ) {}
 
   async listUnreleasedWork(repositories: readonly string[]): Promise<UnreleasedWork[]> {
     if (repositories.length === 0) {
@@ -134,10 +144,9 @@ export class GitHubInsights implements RepositoryInsights {
 
   async listTopReferrers(repository: string): Promise<Referrer[]> {
     const { owner, name } = splitFullName(repository);
-    const response = await this.request(
+    const referrers = (await this.request(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/traffic/popular/referrers`
-    );
-    const referrers: { referrer: string; count: number; uniques: number }[] = await response.json();
+    )) as { referrer: string; count: number; uniques: number }[];
     return referrers.map((referrer) => ({
       name: referrer.referrer,
       views: referrer.count,
@@ -163,13 +172,12 @@ export class GitHubInsights implements RepositoryInsights {
       selections.push(`r${suffix}: ${item.field((key) => `$${key}${suffix}`)}`);
     }
 
-    const response = await this.request('/graphql', {
+    const body = (await this.request('/graphql', {
       query: `query(${declarations.join(', ')}) { ${selections.join(' ')} }`,
       variables,
-    });
-    const body: { data?: Record<string, T | null> | null; errors?: { message: string }[] } =
-      await response.json();
-    const messages = body.errors?.map((error) => error.message).join('; ');
+    })) as { data?: Record<string, T | null> | null; errors?: { message: string }[] };
+    const joined = body.errors?.map((error) => error.message).join('; ');
+    const messages = joined === undefined ? undefined : boundedMessage(joined, this.redactor);
     if (!body.data) {
       throw new Error(`GitHub GraphQL query failed: ${messages ?? 'no data'}`);
     }
@@ -182,24 +190,42 @@ export class GitHubInsights implements RepositoryInsights {
     return items.map((_, index) => data[`r${String(index)}`] ?? null);
   }
 
-  /** GET `path`, or POST `body` as JSON to it. Throws on a non-2xx response. */
-  private async request(path: string, body?: unknown): Promise<Response> {
-    const response = await fetch(`${API_URL}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${this.token}`,
-        'User-Agent': 'repo-pulse',
-        'X-GitHub-Api-Version': '2022-11-28',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, ERROR_DETAIL_LIMIT);
-      throw new Error(`GitHub ${path} failed with ${String(response.status)}: ${detail}`);
+  /**
+   * GET `path`, or POST `body` as JSON to it, and return the parsed response. Throws
+   * on a non-2xx response. A failure while sending or reading, or a body that is not
+   * JSON, becomes a fixed message: the exception's text can quote the request or body.
+   */
+  private async request(path: string, body?: unknown): Promise<unknown> {
+    const token = await this.token();
+    const label = `GitHub ${path}`;
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'repo-pulse',
+          'X-GitHub-Api-Version': '2022-11-28',
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      text = await response.text();
+    } catch (error) {
+      // The exception can quote the request, so it is not kept as the cause.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(transportFailure(label, error));
     }
-    return response;
+    if (!response.ok) {
+      throw new Error(upstreamFailure(label, response.status, text, this.redactor));
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new Error(`${label} returned a body that is not JSON`);
+    }
   }
 }

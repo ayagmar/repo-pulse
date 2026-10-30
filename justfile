@@ -83,11 +83,19 @@ knip-fix:
 
 # Check admin health status
 config-status:
-    @curl -s -H "Authorization: Bearer $$ADMIN_API_TOKEN" http://localhost:8787/admin/health | jq
+    @printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_API_TOKEN" | curl -s --config - http://localhost:8787/admin/health | jq
 
 # Add the Repo Pulse webhook to GitHub repositories (skips ones already subscribed)
 subscribe url +repos:
     scripts/subscribe.sh {{url}} {{repos}}
+
+# Remove the Repo Pulse webhook from GitHub repositories, recording each one first (--dry-run to preview)
+unsubscribe *args:
+    scripts/unsubscribe.sh {{args}}
+
+# Check that each listed repository has an active, fully subscribed webhook answering a fresh ping (--repair to fix hooks first)
+check-coverage *args:
+    scripts/check-coverage.sh {{args}}
 
 # Copy local Cloudflare secrets template
 setup-config:

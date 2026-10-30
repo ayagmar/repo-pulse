@@ -28,13 +28,14 @@
     "test:workers": "vitest run --config vitest.workers.config.ts",
     "benchmark:ledger": "vitest run --config benchmarks/vitest.config.ts",
     "knip": "knip",
+    "check:secrets": "scripts/check-secrets.sh",
     "knip:fix": "knip --fix",
     "audit:prod": "npm audit --omit=dev",
     "audit:full": "npm audit",
     "clean": "rm -rf dist coverage .wrangler",
     "prepare": "husky || true",
-    "verify": "run-s typegen typecheck lint check:ci test test:workers knip build",
-    "verify:ci": "run-s typegen typecheck lint check:ci test:coverage test:workers knip build"
+    "verify": "run-s check:secrets typegen typecheck lint check:ci test test:workers knip build",
+    "verify:ci": "run-s check:secrets typegen typecheck lint check:ci test:coverage test:workers knip build"
   },
   "dependencies": {
     "hono": "^4.13.13"

@@ -8,7 +8,9 @@ Repo Pulse has one runtime path and one package-manager path:
 
 ## System Shape
 
-- [`src/http/routes/webhook.ts`](src/http/routes/webhook.ts) bounds the raw request bytes, verifies GitHub signatures before decoding JSON, normalizes events, persists deliveries, and acknowledges acceptance.
+- [`src/http/routes/webhook.ts`](src/http/routes/webhook.ts) bounds the raw request bytes, verifies GitHub signatures before decoding JSON, admits repository-webhook or GitHub App deliveries as `GITHUB_WEBHOOK_SOURCES` says, normalizes events, persists deliveries, and acknowledges acceptance.
+- [`src/providers/github/app-auth.ts`](src/providers/github/app-auth.ts) signs the App's JWT with WebCrypto and mints installation tokens, shared within a cron run and cached per permission set and repository restriction.
+- [`src/core/security/redact.ts`](src/core/security/redact.ts) turns provider failures into fixed messages or a bounded upstream message with credentials redacted, before they are logged or stored.
 - [`src/core/services/d1-delivery-ledger.ts`](src/core/services/d1-delivery-ledger.ts) is the durable source of truth for dedupe, status transitions, retry timing, and provider attempt history.
 - [`src/core/services/d1-event-history.ts`](src/core/services/d1-event-history.ts) keeps every accepted event permanently. Delivery rows are pruned after the retention window; history rows are not.
 - [`src/core/services/durable-event-processor.ts`](src/core/services/durable-event-processor.ts) claims due work, dispatches notifiers, persists outcomes, and reschedules transient failures.
@@ -29,6 +31,7 @@ Repo Pulse has one runtime path and one package-manager path:
 - Provider sends are **at-least-once**, not exactly-once. A crash between sending to Discord and recording success can cause a repeat. Pruning a succeeded row also ends its dedupe window.
 - The daily and weekly digests read the event history, not the ledger. Each provider claims a digest in `digest_sends` before posting it, so overlapping cron runs post it once. The optional GitHub lookup for unreleased work never blocks a digest: if it fails, the digest is posted without it.
 - The public feed fails closed. Webhooks can only hide a repository (through events recorded as private), never admit one. Every response asks GitHub's API, without a token or with one that reads public repositories only, about each repository it would show, unless an answer under 60 seconds old is cached in the isolate. Anything but a `200` with `"private": false` leaves the repository out. An empty feed means every repository was denied (`404` or `"private": true`); when nothing is admitted and some lookup failed, the feed answers `503` instead. The D1 read is cached for 300 seconds; the gated response is never cached.
+- Moving between repository webhooks and the GitHub App always passes through an overlap in which both are admitted. Events in the overlap can be posted twice, within the at-least-once guarantee; nothing is dropped unless two copies of one event arrive further apart than the overlap.
 - The star radar reads the event history every ten minutes and claims each alert in `radar_alerts`, which also enforces a 24-hour cooldown per repository. It sends at most one alert per run to stay within the Free plan's 50 subrequests.
 
 ## Further Reading

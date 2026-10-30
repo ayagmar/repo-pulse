@@ -1,6 +1,8 @@
 import type { MiddlewareHandler } from 'hono';
 import { Hono } from 'hono';
 import { createConfig } from './config/env.js';
+import type { RepositoryInsights } from './core/interfaces/repository-insights.js';
+import { Redactor } from './core/security/redact.js';
 import { D1DeliveryLedger } from './core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from './core/services/d1-digest-log.js';
 import { D1EventHistory } from './core/services/d1-event-history.js';
@@ -18,16 +20,25 @@ import { createAdminRoutes } from './http/routes/admin.js';
 import { createPublicFeedRoutes } from './http/routes/public-feed.js';
 import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
+import { GitHubAppAuth, READ_TOKEN } from './providers/github/app-auth.js';
 import { GitHubInsights } from './providers/github/github-insights.js';
 
 function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime'] {
   const config = createConfig(env);
   logger.setLevel(config.server.logLevel);
+  const redactor = new Redactor([
+    config.github.webhookSecret,
+    config.github.apiToken,
+    config.github.app?.privateKey,
+    config.admin.apiToken,
+    config.discord.webhookUrl,
+    env.GITHUB_PUBLIC_TOKEN,
+  ]);
 
   const deliveryLedger = new D1DeliveryLedger(env.DB);
   const eventHistory = new D1EventHistory(env.DB);
-  const notificationDispatcher = new NotificationDispatcher();
-  const discordNotifier = createDiscordNotifier(config.discord.webhookUrl);
+  const notificationDispatcher = new NotificationDispatcher(redactor);
+  const discordNotifier = createDiscordNotifier(config.discord.webhookUrl, redactor);
 
   if (discordNotifier) {
     notificationDispatcher.add(discordNotifier);
@@ -41,6 +52,7 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
 
   return {
     config,
+    redactor,
     deliveryLedger,
     eventHistory,
     notificationDispatcher,
@@ -82,29 +94,62 @@ export async function drainDueDeliveries(
   await runtime.eventProcessor.drainDueDeliveries(options);
 }
 
-function createInsights(apiToken: string | undefined): GitHubInsights | null {
-  return apiToken === undefined ? null : new GitHubInsights(apiToken);
+/**
+ * GitHub insights for one scheduled invocation. Digest and radar given the same
+ * instance share one token acquisition, so a cold App token is minted once, and a
+ * failed mint is not retried until the next invocation.
+ */
+export class InvocationInsights {
+  private insights: RepositoryInsights | null | undefined;
+
+  get(runtime: HttpEnv['Variables']['runtime']): RepositoryInsights | null {
+    this.insights ??= createInsights(runtime);
+    return this.insights;
+  }
 }
 
-export async function sendDueDigests(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+/** The App's installation token when the App is configured, else `GITHUB_TOKEN`. */
+function createInsights({
+  config,
+  redactor,
+}: HttpEnv['Variables']['runtime']): GitHubInsights | null {
+  const { app, apiToken } = config.github;
+  if (app) {
+    const auth = new GitHubAppAuth(app, redactor);
+    return new GitHubInsights(() => auth.installationToken(READ_TOKEN), redactor);
+  }
+  return apiToken === undefined
+    ? null
+    : new GitHubInsights(() => Promise.resolve(apiToken), redactor);
+}
+
+export async function sendDueDigests(
+  env: HttpEnv['Bindings'],
+  now: Date,
+  insights = new InvocationInsights()
+): Promise<void> {
   const runtime = buildRuntime(env);
   const sender = new DigestSender(
     runtime.eventHistory,
     new D1DigestLog(env.DB),
     runtime.notificationDispatcher,
     runtime.config.digest,
-    createInsights(runtime.config.github.apiToken)
+    insights.get(runtime)
   );
   await sender.sendDueDigests(now);
 }
 
-export async function checkMomentum(env: HttpEnv['Bindings'], now: Date): Promise<void> {
+export async function checkMomentum(
+  env: HttpEnv['Bindings'],
+  now: Date,
+  insights = new InvocationInsights()
+): Promise<void> {
   const runtime = buildRuntime(env);
   const radar = new MomentumRadar(
     runtime.eventHistory,
     new D1RadarLog(env.DB),
     runtime.notificationDispatcher,
-    createInsights(runtime.config.github.apiToken)
+    insights.get(runtime)
   );
   await radar.check(now);
 }

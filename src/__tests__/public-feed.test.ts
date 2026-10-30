@@ -848,14 +848,14 @@ describe('public feed', () => {
   });
 
   it('looks up with the public-only token, never with GITHUB_TOKEN', async () => {
-    env = { ...env, GITHUB_TOKEN: 'private-token', GITHUB_PUBLIC_TOKEN: 'public-token' };
+    env = { ...env, GITHUB_TOKEN: 'test-private-token', GITHUB_PUBLIC_TOKEN: 'test-public-token' };
     visibility.set('ayagmar/runnerd', 'public');
     visibility.set('ayagmar/trellis', 'private');
     await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
     await record(push('ayagmar/trellis'), '2026-10-25T21:15:00.000Z');
 
     await expect(feedRepositories()).resolves.toEqual(['ayagmar/runnerd']);
-    expect(githubAuthorizations).toEqual(['Bearer public-token', 'Bearer public-token']);
+    expect(githubAuthorizations).toEqual(['Bearer test-public-token', 'Bearer test-public-token']);
   });
 
   it('reads D1 at most once per 300 seconds per isolate, even without the Cache API', async () => {
