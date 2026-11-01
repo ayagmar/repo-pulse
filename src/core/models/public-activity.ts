@@ -52,6 +52,12 @@ export interface PublicActivityDay extends PublicActivityCounts {
 export interface PublicActivity {
   generatedAt: string;
   since: string | null;
+  /**
+   * False when the visibility check left some repository of the window out without
+   * a definitive denial (a failed lookup or one past the lookup budget): the counts
+   * may be short, and a request within 60 seconds may count more.
+   */
+  complete: boolean;
   /** Oldest first, ending with the current UTC day. */
   days: PublicActivityDay[];
 }

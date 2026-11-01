@@ -1025,6 +1025,7 @@ describe('public feed', () => {
     }
     interface Activity {
       since: string | null;
+      complete: boolean;
       days: Day[];
     }
 
@@ -1095,6 +1096,8 @@ describe('public feed', () => {
       expect(body).toEqual({
         generatedAt: '2026-10-26T08:45:00.000Z',
         since: '2026-09-30',
+        // Denied repositories are known not to be public: nothing is missing.
+        complete: true,
         days: [
           zero('2026-10-22'),
           {
@@ -1139,8 +1142,10 @@ describe('public feed', () => {
       // A response looks up at most 40 repositories, so the first one counts only
       // the 40 most recently active; the next, within 60 seconds, looks up the rest.
       const first = await getActivity('?days=2');
+      expect(first.body.complete).toBe(false);
       expect(first.body.days[0]).toMatchObject({ pushes: 2, stars: 40, reposTruncated: false });
       const { body } = await getActivity('?days=2');
+      expect(body.complete).toBe(true);
 
       const [day] = body.days;
       expect(day).toMatchObject({ date: '2026-10-25', pushes: 2, commits: 4, stars: 52 });
@@ -1200,11 +1205,12 @@ describe('public feed', () => {
       expect(body).toEqual({
         generatedAt: '2026-10-26T08:45:00.000Z',
         since: null,
+        complete: true,
         days: [zero('2026-10-25'), zero('2026-10-26')],
       });
     });
 
-    it('answers 503, never zeros, when no repository is admitted and a lookup failed', async () => {
+    it('answers 503 when nothing is admitted and a lookup failed, else marks the answer incomplete', async () => {
       visibility.set('ayagmar/runnerd', 'rate_limited');
       visibility.set('ayagmar/secret', 'not_found');
       await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
@@ -1214,6 +1220,16 @@ describe('public feed', () => {
 
       expect(status).toBe(503);
       expect(body).toEqual({ error: 'visibility_unavailable' });
+
+      // With another repository admitted, the counts are served but marked incomplete.
+      visibility.set('ayagmar/ccdesk', 'public');
+      await record(push('ayagmar/ccdesk'), '2026-10-25T21:16:00.000Z');
+      app = createApp();
+      cacheEntries.clear();
+      const partial = await getActivity();
+      expect(partial.status).toBe(200);
+      expect(partial.body.complete).toBe(false);
+      expect(partial.body.days.at(-2)?.repos.map((repo) => repo.repo)).toEqual(['ayagmar/ccdesk']);
     });
   });
 });

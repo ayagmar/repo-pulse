@@ -120,15 +120,14 @@ export async function buildPublicActivity(
   const builtAt = new Date();
   const window = rowsInWindow(material.rows, days, builtAt);
   const counted = window.filter((row) => admitted.has(row.repository));
-  if (
-    counted.length === 0 &&
-    [...candidates, ...window].some((row) => unresolved.has(row.repository))
-  ) {
+  const complete = ![...candidates, ...window].some((row) => unresolved.has(row.repository));
+  if (counted.length === 0 && !complete) {
     return 'visibility_unavailable';
   }
   return {
     generatedAt: builtAt.toISOString(),
     since: material.since,
+    complete,
     days: toDays(counted, days, builtAt),
   };
 }

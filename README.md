@@ -184,6 +184,7 @@ and ending today, with zeros for quiet days.
 {
   "generatedAt": "2026-11-01T14:00:00.000Z",
   "since": "2026-10-20",
+  "complete": true,
   "days": [
     { "date": "2026-10-31", "pushes": 3, "commits": 9, "merges": 4, "releases": 1,
       "stars": 2,
@@ -204,7 +205,10 @@ down by repository, sorted by name, so its counts add up to the day's. Past 50 r
 it keeps the 50 busiest and sets `reposTruncated`; the day's counts still include them all.
 A response looks up at most 40 repositories on GitHub, like the feed, so on a cold isolate
 a window with more active repositories than that leaves the least recently active ones out
-until a request within the next 60 seconds looks them up. `since` is the first UTC
+until a request within the next 60 seconds looks them up. `complete` is `false` whenever a
+repository in the window was left out that way, or because GitHub did not answer, so the
+counts may be short; ask again before keeping them. Repositories GitHub says are not
+public do not make an answer incomplete. `since` is the first UTC
 day the history has a public event for, or `null`: days before it are zeros because
 nothing was recorded yet. It has the feed's visibility check, errors, `no-store` header
 and rate limit; the two routes share one budget of 10 requests a minute per client.
