@@ -218,19 +218,26 @@ describe('public feed', () => {
     }).run();
   }
 
-  async function getFeed(
-    query = '',
+  async function getPublic(
+    path: string,
     init: RequestInit = {}
   ): Promise<{ response: Response; text: string }> {
     const { executionCtx, waitForBackground } = createExecutionContext();
     const response = await app.fetch(
-      new Request(`https://example.com/public/feed${query}`, init),
+      new Request(`https://example.com/public/${path}`, init),
       env,
       executionCtx
     );
     const text = await response.text();
     await waitForBackground();
     return { response, text };
+  }
+
+  function getFeed(
+    query = '',
+    init: RequestInit = {}
+  ): Promise<{ response: Response; text: string }> {
+    return getPublic(`feed${query}`, init);
   }
 
   async function feedRepositories(query = ''): Promise<string[]> {
@@ -996,5 +1003,199 @@ describe('public feed', () => {
     expect(limited.response.status).toBe(429);
     expect(limited.response.headers.get('Cache-Control')).toBe('no-store');
     expect(JSON.parse(limited.text)).toEqual({ error: 'rate_limited' });
+    // One budget for both routes.
+    const activity = await getPublic('activity', {
+      headers: { 'CF-Connecting-IP': '198.51.100.1' },
+    });
+    expect(activity.response.status).toBe(429);
+  });
+
+  describe('daily activity', () => {
+    interface Day {
+      date: string;
+      pushes: number;
+      commits: number;
+      merges: number;
+      releases: number;
+      stars: number;
+      repos: string[];
+    }
+    interface Activity {
+      since: string | null;
+      days: Day[];
+    }
+
+    async function getActivity(
+      query = ''
+    ): Promise<{ status: number; headers: Headers; body: Activity }> {
+      const { response, text } = await getPublic(`activity${query}`);
+      return {
+        status: response.status,
+        headers: response.headers,
+        body: JSON.parse(text) as Activity,
+      };
+    }
+
+    const zero = (date: string): Day => ({
+      date,
+      pushes: 0,
+      commits: 0,
+      merges: 0,
+      releases: 0,
+      stars: 0,
+      repos: [],
+    });
+
+    it('sums public activity per UTC day, zero-filled, from public repositories only', async () => {
+      visibility.set('ayagmar/ccdesk', 'public');
+      visibility.set('ayagmar/pi-mobile', 'public');
+      visibility.set('ayagmar/secret', 'not_found');
+      visibility.set('ayagmar/flagged', 'private');
+      // Older than the window: only `since` sees it.
+      await record(push('ayagmar/ccdesk'), '2026-09-30T12:00:00.000Z');
+      // One minute either side of UTC midnight.
+      await record(push('ayagmar/ccdesk'), '2026-10-23T23:59:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2026-10-24T00:01:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2026-10-24T09:00:00.000Z');
+      await record(
+        pullRequest('ayagmar/ccdesk', 'pull_request.merged'),
+        '2026-10-24T10:00:00.000Z'
+      );
+      await record(release('ayagmar/pi-mobile', 'v0.14.1'), '2026-10-24T11:00:00.000Z');
+      await record(star('ayagmar/pi-mobile', 112), '2026-10-24T12:00:00.000Z');
+      await record(star('ayagmar/pi-mobile', 113), '2026-10-26T08:00:00.000Z');
+      // Not counted: unpublished types, a star removed, repositories GitHub does not
+      // show as public, an event recorded while private, and one stored without a flag.
+      await record(star('ayagmar/pi-mobile', 112, false, true), '2026-10-24T13:00:00.000Z');
+      await record(
+        pullRequest('ayagmar/ccdesk', 'pull_request.opened'),
+        '2026-10-24T13:01:00.000Z'
+      );
+      await record(issue('ayagmar/ccdesk'), '2026-10-24T13:02:00.000Z');
+      await record(fork('ayagmar/ccdesk'), '2026-10-24T13:03:00.000Z');
+      await record(push('ayagmar/secret'), '2026-10-24T13:04:00.000Z');
+      await record(star('ayagmar/flagged', 9), '2026-10-24T13:05:00.000Z');
+      await record(push('ayagmar/ccdesk', true), '2026-10-24T13:06:00.000Z');
+      await env.DB.prepare(
+        `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+         VALUES ('legacy', 'push.default_branch', 'ayagmar/ccdesk', '2026-10-24T13:07:00.000Z',
+                 json_remove(?, '$.repository.private'))`
+      )
+        .bind(JSON.stringify(push('ayagmar/ccdesk')))
+        .run();
+
+      const { status, headers, body } = await getActivity('?days=5');
+
+      expect(status).toBe(200);
+      expect(headers.get('Cache-Control')).toBe('no-store');
+      expect(headers.get('Access-Control-Allow-Origin')).toBeNull();
+      expect(body).toEqual({
+        generatedAt: '2026-10-26T08:45:00.000Z',
+        since: '2026-09-30',
+        days: [
+          zero('2026-10-22'),
+          { ...zero('2026-10-23'), pushes: 1, commits: 2, repos: ['ayagmar/ccdesk'] },
+          {
+            date: '2026-10-24',
+            pushes: 2,
+            commits: 4,
+            merges: 1,
+            releases: 1,
+            stars: 1,
+            repos: ['ayagmar/ccdesk', 'ayagmar/pi-mobile'],
+          },
+          zero('2026-10-25'),
+          { ...zero('2026-10-26'), stars: 1, repos: ['ayagmar/pi-mobile'] },
+        ],
+      });
+    });
+
+    it('lists the 10 busiest repositories of a day by name', async () => {
+      for (let index = 0; index < 12; index += 1) {
+        const fullName = `o/r${String(index).padStart(2, '0')}`;
+        visibility.set(fullName, 'public');
+        await record(star(fullName, 1), `2026-10-25T10:${String(index).padStart(2, '0')}:00.000Z`);
+      }
+      // The two last by name are the busiest.
+      await record(push('o/r10'), '2026-10-25T12:00:00.000Z');
+      await record(push('o/r11'), '2026-10-25T12:01:00.000Z');
+
+      const { body } = await getActivity('?days=2');
+
+      expect(body.days[0]).toMatchObject({
+        date: '2026-10-25',
+        pushes: 2,
+        stars: 12,
+        repos: [
+          'o/r00',
+          'o/r01',
+          'o/r02',
+          'o/r03',
+          'o/r04',
+          'o/r05',
+          'o/r06',
+          'o/r07',
+          'o/r10',
+          'o/r11',
+        ],
+      });
+    });
+
+    it('answers 1 to 400 days from one D1 read, and rejects anything else', async () => {
+      visibility.set('ayagmar/ccdesk', 'public');
+      // The day before the 400th, then the 400th.
+      await record(push('ayagmar/ccdesk'), '2025-09-21T23:59:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2025-09-22T00:00:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2026-10-26T00:00:00.000Z');
+
+      const defaults = await getActivity();
+      expect(defaults.body.days).toHaveLength(28);
+      expect(defaults.body.days[0]?.date).toBe('2026-09-29');
+
+      // Any further D1 read would see the history gone.
+      await env.DB.exec('DELETE FROM events');
+      const one = await getActivity('?days=1');
+      expect(one.body).toMatchObject({
+        since: '2025-09-21',
+        days: [{ date: '2026-10-26', pushes: 1, repos: ['ayagmar/ccdesk'] }],
+      });
+      const most = await getActivity('?days=400');
+      expect(most.body.days).toHaveLength(400);
+      expect(most.body.days[0]).toMatchObject({ date: '2025-09-22', pushes: 1 });
+      expect(most.body.days.at(-1)?.date).toBe('2026-10-26');
+
+      for (const days of ['', '0', '401', '1.5', '-1', '+5', 'abc', '1e2']) {
+        const { status, headers, body } = await getActivity(`?days=${days}`);
+        expect(status, days).toBe(400);
+        expect(headers.get('Cache-Control')).toBe('no-store');
+        expect(body).toEqual({ error: 'invalid_query' });
+      }
+      const post = await getPublic('activity', { method: 'POST' });
+      expect(post.response.status).toBe(405);
+      expect(post.response.headers.get('Allow')).toBe('GET, HEAD');
+    });
+
+    it('answers zeros and a null since for an empty history', async () => {
+      const { status, body } = await getActivity('?days=2');
+
+      expect(status).toBe(200);
+      expect(body).toEqual({
+        generatedAt: '2026-10-26T08:45:00.000Z',
+        since: null,
+        days: [zero('2026-10-25'), zero('2026-10-26')],
+      });
+    });
+
+    it('answers 503, never zeros, when no repository is admitted and a lookup failed', async () => {
+      visibility.set('ayagmar/runnerd', 'rate_limited');
+      visibility.set('ayagmar/secret', 'not_found');
+      await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
+      await record(push('ayagmar/secret'), '2026-10-25T21:15:00.000Z');
+
+      const { status, body } = await getActivity();
+
+      expect(status).toBe(503);
+      expect(body).toEqual({ error: 'visibility_unavailable' });
+    });
   });
 });

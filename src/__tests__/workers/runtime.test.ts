@@ -309,6 +309,44 @@ describe('Workers runtime integration', () => {
     });
   });
 
+  it('sums public activity per UTC day through the partial index on real D1', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(Response.json({ private: false }))
+    );
+    const today = new Date().toISOString().slice(0, 10);
+    const repository = { ...event.repository, fullName: 'myorg/activity' };
+    for (const [deliveryId, receivedAt, isPrivate] of [
+      ['activity-1', `${today}T00:00:00.000Z`, false],
+      ['activity-2', `${today}T00:00:00.001Z`, false],
+      ['activity-3', `${today}T00:00:00.002Z`, true],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+         VALUES (?, 'star.created', 'myorg/activity', ?, ?)`
+      )
+        .bind(
+          deliveryId,
+          receivedAt,
+          serializeRepoEvent({ ...event, repository: { ...repository, private: isPrivate } })
+        )
+        .run();
+    }
+
+    const context = createExecutionContext();
+    const response = await worker.fetch(
+      new Request('https://example.com/public/activity?days=1'),
+      env,
+      context
+    );
+    await waitOnExecutionContext(context);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      since: today,
+      days: [{ date: today, stars: 2, repos: ['myorg/activity'] }],
+    });
+  });
+
   it('signs a GitHub App JWT with a PKCS#8 key inside workerd', async () => {
     // A key generated for this test only: no real App key is involved.
     const { keyPair, pem } = await generateAppKey();

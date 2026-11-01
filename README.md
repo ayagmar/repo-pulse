@@ -162,6 +162,7 @@ admitted.
 | --- | --- | --- |
 | `POST` | `/webhook` | GitHub webhook ingestion and acceptance |
 | `GET` | `/public/feed?limit=50` | recent public activity and star history, read by ayagmar.dev |
+| `GET` | `/public/activity?days=28` | public activity summed per UTC day, read by ayagmar.dev |
 | `POST` | `/discord/interactions` | Discord's requests for the buttons on issue alerts; `404` unless `DISCORD_ACTIONS` is `on` |
 
 `/public/feed` needs no token. It lists releases, stars, default-branch pushes and merged
@@ -174,6 +175,28 @@ message or delivery state is published. When no repository is admitted and GitHu
 did not answer for at least one of them, the feed answers
 `503 {"error":"visibility_unavailable"}` instead of an empty list. The contract is
 [ADR 0012 in ayagmar.dev](https://github.com/ayagmar/ayagmar.dev/blob/9ee31866d8751eb2de40c71536978d047d9a7c4b/docs/adr/0012-repo-pulse-public-feed.md).
+
+`/public/activity` counts the same events over the whole history instead of the newest
+100: one entry per UTC day for the last `days` days (1 to 400, default 28), oldest first
+and ending today, with zeros for quiet days.
+
+```json
+{
+  "generatedAt": "2026-11-01T14:00:00.000Z",
+  "since": "2026-10-20",
+  "days": [
+    { "date": "2026-10-05", "pushes": 0, "commits": 0, "merges": 0, "releases": 0,
+      "stars": 0, "repos": [] }
+  ]
+}
+```
+
+`pushes` are default-branch pushes and `commits` the commits they carried, `merges` merged
+pull requests, `releases` published releases and `stars` new stars. `repos` names up to 10
+repositories active that day, the busiest ones, sorted by name. `since` is the first UTC
+day the history has a public event for, or `null`: days before it are zeros because
+nothing was recorded yet. It has the feed's visibility check, errors, `no-store` header
+and rate limit; the two routes share one budget of 10 requests a minute per client.
 
 ### Admin routes
 
@@ -304,7 +327,7 @@ leaks only; an unlabelled random string still needs a reviewer.
 - notification dispatch is asynchronous and recoverable; provider sends are at-least-once when an invocation is interrupted
 - retries and stale-processing recovery are driven from D1 state plus cron
 - admin routes stay protected by bearer auth
-- the public feed shows a repository only while GitHub confirms it is public, never from an answer older than 60 seconds
+- the public feed and daily activity show a repository only while GitHub confirms it is public, never from an answer older than 60 seconds
 - Discord buttons act only for allow-listed users, after Discord's signature is checked, on the issue recorded for the alert, only while GitHub confirms its repository is public and not a fork; a replayed request acts at most once
 
 ## Repo navigation
@@ -312,7 +335,7 @@ leaks only; an unlabelled random string still needs a reviewer.
 ```text
 src/http/routes/webhook.ts      webhook ingestion
 src/http/routes/admin.ts        admin API surface
-src/http/routes/public-feed.ts  public feed for ayagmar.dev
+src/http/routes/public-feed.ts  public feed and daily activity for ayagmar.dev
 src/http/routes/discord-interactions.ts  Close and Label buttons on issue alerts
 src/http/openapi.ts             OpenAPI document + Swagger UI page
 src/core/services/d1-delivery-ledger.ts

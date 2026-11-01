@@ -36,7 +36,7 @@
     // see docs/operations.md. `off` keeps alerts without buttons and the route at 404.
     "DISCORD_ACTIONS": "on"
   },
-  // Best-effort limit on GET /public/feed per client IP and Cloudflare location.
+  // Best-effort limit on GET /public/feed and /public/activity together, per client IP and Cloudflare location.
   "ratelimits": [
     { "name": "FEED_RATE_LIMIT", "namespace_id": "2001", "simple": { "limit": 10, "period": 60 } },
     // Best-effort limit on POST /discord/interactions, checked before signature work.

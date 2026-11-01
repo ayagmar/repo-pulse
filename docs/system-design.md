@@ -121,6 +121,14 @@ stateDiagram-v2
 - Values that would break the schema, such as a URL outside `https://github.com/` or a malformed count, drop their event or star-history day.
 - The response is sent with `Cache-Control: no-store`, so no copy outlives the visibility check. Errors are `400 {"error":"invalid_query"}`, `405`, `429 {"error":"rate_limited"}`, `500 {"error":"internal_error"}` and `503 {"error":"visibility_unavailable"}`, without details.
 
+### Public activity
+
+- `GET /public/activity?days=28` sums what the feed would publish per UTC day, over the whole history rather than the newest 100 events, for ayagmar.dev's daily strip. It counts the feed's four types with the feed's rule for what is public (a JSON `false` in `repository.private`, `PUBLIC_EVENTS_WHERE` in `d1-event-history.ts`), and drops pushes whose commits are not an array, as the feed does.
+- One D1 read builds the material for every `days`: rows of (UTC day, repository, counts) for the last 400 days from a `GROUP BY` in SQLite, and `MIN(received_at)` for `since`. Both use `idx_events_public_received_at`, a partial index holding only those events (migration `0009`), so private and unpublished events cost no rows and `since` reads one. The material is cached like the feed's, under its own Cache API key.
+- Each response runs the feed's visibility check (same gate, budget and 60-second answers) on the repositories active in its window, most recently active first, and sums only the admitted ones. Nothing counted with some repository unresolved answers `503 {"error":"visibility_unavailable"}`, so all-zero days mean nothing public happened.
+- `since` is not gated: it is when recording of public events began, the first day the history can vouch for, not activity of any repository.
+- Days are UTC and zero-filled. Errors, headers and the rate limit are the feed's; the two routes share `FEED_RATE_LIMIT`.
+
 ### Digests
 
 - The every-minute cron checks the local time in `DIGEST_TIME_ZONE`. During the first ten minutes after `DIGEST_HOUR`, it summarizes the events received since that hour on the previous local day and sends one message per provider.
