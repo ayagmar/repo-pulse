@@ -5,7 +5,17 @@ import type {
   PublicFeedStarHistory,
   RepositoryAdmission,
 } from '../models/public-feed.js';
-import { logger } from './logger.js';
+import {
+  COMMIT_COUNT,
+  GITHUB_URL,
+  isTimestamp,
+  PULL_REQUEST_NUMBER,
+  PULL_REQUEST_TITLE,
+  RELEASE_TAG,
+  STAR_COUNT,
+  toIsoString,
+} from './public-event-rules.js';
+import { loadMaterial, type MaterialSources } from './public-material.js';
 
 const DAY_MS = 24 * 60 * 60_000;
 /** Star history covers the current UTC day and the 89 before it. */
@@ -15,61 +25,14 @@ const STAR_HISTORY_MAX_REPOSITORIES = 50;
  * GitHub lookups one response may make. A Free plan invocation may make 50
  * subrequests, the cache and D1 reads included.
  */
-const VISIBILITY_LOOKUP_BUDGET = 40;
-const MATERIAL_TTL_SECONDS = 300;
+export const VISIBILITY_LOOKUP_BUDGET = 40;
 /** The largest `limit` a response may ask for: material is read once at this size. */
 export const PUBLIC_FEED_MAX_LIMIT = 100;
-/** A host the Worker never serves, so a cached entry can never be returned as a response. */
 const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-feed/material';
 
-/** The part of the Workers Cache API the feed uses. */
-export interface MaterialCache {
-  match(key: string): Promise<Response | undefined>;
-  put(key: string, response: Response): Promise<void>;
-}
-
-/** Material read from D1 by this isolate. */
-export interface MaterialMemory {
-  snapshot?: { material: PublicFeedMaterial; expiresAt: number };
-}
-
-interface PublicFeedSources {
+interface PublicFeedSources extends MaterialSources<PublicFeedMaterial> {
   readMaterial(limit: number, since: Date): Promise<PublicFeedMaterial>;
   admit(repositories: readonly string[], lookupBudget: number): Promise<RepositoryAdmission>;
-  /**
-   * Checked before the Cache API, which is per location and may store nothing on
-   * `*.workers.dev`: a warm isolate never reads D1 more than once per 300 seconds.
-   */
-  memory: MaterialMemory;
-  /** The Cache API, or null where the runtime has none. */
-  cache: MaterialCache | null;
-  waitUntil(promise: Promise<unknown>): void;
-}
-
-function isGitHubUrl(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length <= 2048 &&
-    value.startsWith('https://github.com/') &&
-    !/\s/.test(value)
-  );
-}
-
-function isCount(value: unknown, maximum = Number.MAX_SAFE_INTEGER): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= maximum;
-}
-
-function isText(value: unknown, maximumLength: number): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= maximumLength;
-}
-
-/** An ISO timestamp as `toISOString` writes it for years 0000 to 9999, which is how events are stored. */
-function isTimestamp(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
-    toIsoString(value) === value
-  );
 }
 
 /** A real calendar day as `YYYY-MM-DD`. */
@@ -79,11 +42,6 @@ function isDate(value: unknown): value is string {
     /^\d{4}-\d{2}-\d{2}$/.test(value) &&
     toIsoString(`${value}T00:00:00.000Z`)?.slice(0, 10) === value
   );
-}
-
-function toIsoString(value: string): string | null {
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
 /**
@@ -97,7 +55,7 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
   const base = { repo: candidate.repository, at: candidate.at };
   switch (candidate.type) {
     case 'release.published':
-      return isGitHubUrl(candidate.releaseUrl) && isText(candidate.releaseTag, 200)
+      return GITHUB_URL.test(candidate.releaseUrl) && RELEASE_TAG.test(candidate.releaseTag)
         ? {
             type: 'release.published',
             ...base,
@@ -106,11 +64,11 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
           }
         : null;
     case 'star.created':
-      return isCount(candidate.starCount)
+      return STAR_COUNT.test(candidate.starCount)
         ? { type: 'star.created', ...base, star: { count: candidate.starCount } }
         : null;
     case 'push.default_branch':
-      return isGitHubUrl(candidate.compareUrl) && isCount(candidate.commitCount, 10_000)
+      return GITHUB_URL.test(candidate.compareUrl) && COMMIT_COUNT.test(candidate.commitCount)
         ? {
             type: 'push.default_branch',
             ...base,
@@ -119,10 +77,9 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
           }
         : null;
     case 'pull_request.merged':
-      return isGitHubUrl(candidate.pullRequestUrl) &&
-        isCount(candidate.pullRequestNumber) &&
-        candidate.pullRequestNumber > 0 &&
-        isText(candidate.pullRequestTitle, 300)
+      return GITHUB_URL.test(candidate.pullRequestUrl) &&
+        PULL_REQUEST_NUMBER.test(candidate.pullRequestNumber) &&
+        PULL_REQUEST_TITLE.test(candidate.pullRequestTitle)
         ? {
             type: 'pull_request.merged',
             ...base,
@@ -150,7 +107,12 @@ function toStarHistory(
   const today = now.toISOString().slice(0, 10);
   const byRepository = new Map<string, PublicFeedStarHistory['points']>();
   for (const day of starDays) {
-    if (!isDate(day.date) || day.date < firstDay || day.date > today || !isCount(day.stars)) {
+    if (
+      !isDate(day.date) ||
+      day.date < firstDay ||
+      day.date > today ||
+      !STAR_COUNT.test(day.stars)
+    ) {
       continue;
     }
     const points = byRepository.get(day.repository) ?? [];
@@ -177,39 +139,16 @@ function starHistoryStart(now: Date): Date {
  * first in a total order, so the first `limit` of them are what a read at `limit`
  * returns.
  */
-async function loadMaterial(sources: PublicFeedSources, now: Date): Promise<PublicFeedMaterial> {
-  const remembered = sources.memory.snapshot;
-  if (remembered && now.getTime() < remembered.expiresAt) {
-    return remembered.material;
-  }
-  const cached = await sources.cache?.match(MATERIAL_CACHE_URL);
-  if (cached) {
-    return cached.json();
-  }
-
-  const material = await sources.readMaterial(PUBLIC_FEED_MAX_LIMIT, starHistoryStart(now));
-  sources.memory.snapshot = {
-    material,
-    expiresAt: now.getTime() + MATERIAL_TTL_SECONDS * 1000,
-  };
-  if (sources.cache) {
-    sources.waitUntil(
-      sources.cache
-        .put(
-          MATERIAL_CACHE_URL,
-          new Response(JSON.stringify(material), {
-            headers: {
-              'Content-Type': 'application/json',
-              'Cache-Control': `max-age=${String(MATERIAL_TTL_SECONDS)}`,
-            },
-          })
-        )
-        .catch((error: unknown) => {
-          logger.warn('public_feed.material_cache_failed', { component: 'public-feed', error });
-        })
-    );
-  }
-  return material;
+function loadFeedMaterial(sources: PublicFeedSources, now: Date): Promise<PublicFeedMaterial> {
+  return loadMaterial(
+    sources,
+    {
+      cacheUrl: MATERIAL_CACHE_URL,
+      component: 'public-feed',
+      read: () => sources.readMaterial(PUBLIC_FEED_MAX_LIMIT, starHistoryStart(now)),
+    },
+    now
+  );
 }
 
 /**
@@ -225,7 +164,7 @@ export async function buildPublicFeed(
   sources: PublicFeedSources,
   limit: number
 ): Promise<PublicFeed | 'visibility_unavailable'> {
-  const material = await loadMaterial(sources, new Date());
+  const material = await loadFeedMaterial(sources, new Date());
   const events = material.events
     .slice(0, limit)
     .map(toFeedEvent)

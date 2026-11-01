@@ -218,19 +218,26 @@ describe('public feed', () => {
     }).run();
   }
 
-  async function getFeed(
-    query = '',
+  async function getPublic(
+    path: string,
     init: RequestInit = {}
   ): Promise<{ response: Response; text: string }> {
     const { executionCtx, waitForBackground } = createExecutionContext();
     const response = await app.fetch(
-      new Request(`https://example.com/public/feed${query}`, init),
+      new Request(`https://example.com/public/${path}`, init),
       env,
       executionCtx
     );
     const text = await response.text();
     await waitForBackground();
     return { response, text };
+  }
+
+  function getFeed(
+    query = '',
+    init: RequestInit = {}
+  ): Promise<{ response: Response; text: string }> {
+    return getPublic(`feed${query}`, init);
   }
 
   async function feedRepositories(query = ''): Promise<string[]> {
@@ -996,5 +1003,424 @@ describe('public feed', () => {
     expect(limited.response.status).toBe(429);
     expect(limited.response.headers.get('Cache-Control')).toBe('no-store');
     expect(JSON.parse(limited.text)).toEqual({ error: 'rate_limited' });
+    // One budget for both routes.
+    const activity = await getPublic('activity', {
+      headers: { 'CF-Connecting-IP': '198.51.100.1' },
+    });
+    expect(activity.response.status).toBe(429);
+  });
+
+  describe('daily activity', () => {
+    interface Counts {
+      pushes: number;
+      commits: number;
+      merges: number;
+      releases: number;
+      stars: number;
+    }
+    interface Day extends Counts {
+      date: string;
+      repos: (Counts & { repo: string })[];
+      reposTruncated: boolean;
+    }
+    interface Activity {
+      since: string | null;
+      complete: boolean;
+      days: Day[];
+    }
+
+    async function getActivity(
+      query = ''
+    ): Promise<{ status: number; headers: Headers; body: Activity }> {
+      const { response, text } = await getPublic(`activity${query}`);
+      const body = JSON.parse(text) as Activity;
+      // A consumer may keep only the per-repository rows: unless the list is
+      // truncated, they must add up to the day.
+      for (const day of response.status === 200 ? body.days : []) {
+        if (!day.reposTruncated) {
+          for (const field of ['pushes', 'commits', 'merges', 'releases', 'stars'] as const) {
+            const total = day.repos.reduce((sum, repo) => sum + repo[field], 0);
+            expect(total, `${day.date} ${field}`).toBe(day[field]);
+          }
+        }
+      }
+      return { status: response.status, headers: response.headers, body };
+    }
+
+    const none: Counts = { pushes: 0, commits: 0, merges: 0, releases: 0, stars: 0 };
+    const zero = (date: string): Day => ({ date, ...none, repos: [], reposTruncated: false });
+
+    it('sums public activity per UTC day, zero-filled, from public repositories only', async () => {
+      visibility.set('ayagmar/ccdesk', 'public');
+      visibility.set('ayagmar/pi-mobile', 'public');
+      visibility.set('ayagmar/secret', 'not_found');
+      visibility.set('ayagmar/flagged', 'private');
+      // Older than the window: only `since` sees it.
+      await record(push('ayagmar/ccdesk'), '2026-09-30T12:00:00.000Z');
+      // One minute either side of UTC midnight.
+      await record(push('ayagmar/ccdesk'), '2026-10-23T23:59:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2026-10-24T00:01:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2026-10-24T09:00:00.000Z');
+      await record(
+        pullRequest('ayagmar/ccdesk', 'pull_request.merged'),
+        '2026-10-24T10:00:00.000Z'
+      );
+      await record(release('ayagmar/pi-mobile', 'v0.14.1'), '2026-10-24T11:00:00.000Z');
+      await record(star('ayagmar/pi-mobile', 112), '2026-10-24T12:00:00.000Z');
+      await record(star('ayagmar/pi-mobile', 113), '2026-10-26T08:00:00.000Z');
+      // Not counted: unpublished types, a star removed, repositories GitHub does not
+      // show as public, an event recorded while private, and one stored without a flag.
+      await record(star('ayagmar/pi-mobile', 112, false, true), '2026-10-24T13:00:00.000Z');
+      await record(
+        pullRequest('ayagmar/ccdesk', 'pull_request.opened'),
+        '2026-10-24T13:01:00.000Z'
+      );
+      await record(issue('ayagmar/ccdesk'), '2026-10-24T13:02:00.000Z');
+      await record(fork('ayagmar/ccdesk'), '2026-10-24T13:03:00.000Z');
+      await record(push('ayagmar/secret'), '2026-10-24T13:04:00.000Z');
+      await record(star('ayagmar/flagged', 9), '2026-10-24T13:05:00.000Z');
+      await record(push('ayagmar/ccdesk', true), '2026-10-24T13:06:00.000Z');
+      await env.DB.prepare(
+        `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+         VALUES ('legacy', 'push.default_branch', 'ayagmar/ccdesk', '2026-10-24T13:07:00.000Z',
+                 json_remove(?, '$.repository.private'))`
+      )
+        .bind(JSON.stringify(push('ayagmar/ccdesk')))
+        .run();
+
+      const { status, headers, body } = await getActivity('?days=5');
+
+      expect(status).toBe(200);
+      expect(headers.get('Cache-Control')).toBe('no-store');
+      expect(headers.get('Access-Control-Allow-Origin')).toBeNull();
+      expect(body).toEqual({
+        generatedAt: '2026-10-26T08:45:00.000Z',
+        since: '2026-09-30',
+        // Denied repositories are known not to be public: nothing is missing.
+        complete: true,
+        days: [
+          zero('2026-10-22'),
+          {
+            ...zero('2026-10-23'),
+            pushes: 1,
+            commits: 2,
+            repos: [{ repo: 'ayagmar/ccdesk', ...none, pushes: 1, commits: 2 }],
+          },
+          {
+            date: '2026-10-24',
+            pushes: 2,
+            commits: 4,
+            merges: 1,
+            releases: 1,
+            stars: 1,
+            repos: [
+              { repo: 'ayagmar/ccdesk', ...none, pushes: 2, commits: 4, merges: 1 },
+              { repo: 'ayagmar/pi-mobile', ...none, releases: 1, stars: 1 },
+            ],
+            reposTruncated: false,
+          },
+          zero('2026-10-25'),
+          {
+            ...zero('2026-10-26'),
+            stars: 1,
+            repos: [{ repo: 'ayagmar/pi-mobile', ...none, stars: 1 }],
+          },
+        ],
+      });
+    });
+
+    it('keeps the 50 busiest repositories of a day, by name, and counts them all', async () => {
+      for (let index = 0; index < 52; index += 1) {
+        const fullName = `o/r${String(index).padStart(2, '0')}`;
+        visibility.set(fullName, 'public');
+        await record(star(fullName, 1), new Date(Date.UTC(2026, 9, 25, 10, index)).toISOString());
+      }
+      // The two last by name are the busiest; of the 50 tied, the first 48 by name stay.
+      await record(push('o/r50'), '2026-10-25T12:00:00.000Z');
+      await record(push('o/r51'), '2026-10-25T12:01:00.000Z');
+
+      // A response looks up at most 40 repositories, so the first one counts only
+      // the 40 most recently active; the next, within 60 seconds, looks up the rest.
+      const first = await getActivity('?days=2');
+      expect(first.body.complete).toBe(false);
+      expect(first.body.days[0]).toMatchObject({ pushes: 2, stars: 40, reposTruncated: false });
+      const { body } = await getActivity('?days=2');
+      expect(body.complete).toBe(true);
+
+      const [day] = body.days;
+      expect(day).toMatchObject({ date: '2026-10-25', pushes: 2, commits: 4, stars: 52 });
+      expect(day?.reposTruncated).toBe(true);
+      expect(day?.repos.map((repo) => repo.repo)).toEqual([
+        ...Array.from({ length: 48 }, (_, index) => `o/r${String(index).padStart(2, '0')}`),
+        'o/r50',
+        'o/r51',
+      ]);
+      expect(day?.repos.at(-1)).toEqual({
+        repo: 'o/r51',
+        ...none,
+        pushes: 1,
+        commits: 2,
+        stars: 1,
+      });
+    });
+
+    it('counts exactly the events the feed publishes', async () => {
+      const tag = (length: number): string => 'v'.repeat(length);
+      // Each case in its own repository; `publishes` is what the feed does with it.
+      const cases: {
+        event: RepoEvent;
+        publishes: boolean;
+        at?: string;
+        set?: [string, unknown];
+      }[] = [
+        { event: push('o/push'), publishes: true },
+        { event: star('o/star', 3), publishes: true },
+        { event: release('o/release', 'v1.0.0'), publishes: true },
+        { event: pullRequest('o/merged', 'pull_request.merged'), publishes: true },
+        { event: release('o/tag-200', tag(200)), publishes: true },
+        // 300 UTF-16 units, 150 code points: lengths count code points, as the schema does.
+        { event: release('o/tag-emoji', '\u{1F600}'.repeat(150)), publishes: true },
+        {
+          event: pullRequest('o/title-300', 'pull_request.merged'),
+          publishes: true,
+          set: ['$.pullRequest.title', 't'.repeat(300)],
+        },
+        // The webhook mapper accepts any nonempty tag.
+        { event: release('o/tag-201', tag(201)), publishes: false },
+        { event: release('o/tag-empty', 'v1'), publishes: false, set: ['$.release.tagName', ''] },
+        {
+          event: release('o/url-host', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://example.com/o/url-host'],
+        },
+        {
+          event: release('o/url-nbsp', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://github.com/o/url nbsp'],
+        },
+        {
+          event: release('o/url-line', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://github.com/o/url line'],
+        },
+        {
+          event: push('o/url-2049'),
+          publishes: false,
+          set: ['$.push.compareUrl', `https://github.com/${'a'.repeat(2030)}`],
+        },
+        {
+          event: push('o/url-space'),
+          publishes: false,
+          set: ['$.push.compareUrl', 'https://github.com/o/a...b c'],
+        },
+        {
+          event: pullRequest('o/title-301', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', 't'.repeat(301)],
+        },
+        // SQLite's length() and GLOB stop at U+0000, so neither route publishes it.
+        {
+          event: pullRequest('o/title-nul', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', '\u0000'],
+        },
+        {
+          event: pullRequest('o/title-nul-301', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', `a\u0000${'x'.repeat(300)}`],
+        },
+        {
+          event: release('o/url-nul-newline', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://github.com/o/url\u0000\n'],
+        },
+        {
+          event: pullRequest('o/title-object', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', { body: 'x' }],
+        },
+        {
+          event: pullRequest('o/number-0', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.number', 0],
+        },
+        {
+          event: pullRequest('o/number-real', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.number', 1.5],
+        },
+        {
+          event: pullRequest('o/number-text', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.number', '41'],
+        },
+        { event: push('o/commits-null'), publishes: false, set: ['$.push.commits', null] },
+        {
+          event: push('o/commits-10001'),
+          publishes: false,
+          set: ['$.push.commits', Array.from({ length: 10_001 }, () => 'c')],
+        },
+        { event: star('o/count-true', 1), publishes: false, set: ['$.star.count', true] },
+        { event: star('o/count-negative', 1), publishes: false, set: ['$.star.count', -1] },
+        {
+          event: star('o/count-unsafe', 1),
+          publishes: false,
+          set: ['$.star.count', Number.MAX_SAFE_INTEGER + 1],
+        },
+        { event: push('o/at-hour-24'), publishes: false, at: '2026-10-25T24:00:00.000Z' },
+        { event: push('o/at-no-ms'), publishes: false, at: '2026-10-25T21:00:00Z' },
+        { event: star('o/unstarred', 2, false, true), publishes: false },
+        { event: pullRequest('o/opened', 'pull_request.opened'), publishes: false },
+        { event: issue('o/issue'), publishes: false },
+      ];
+      for (const [index, { event, at, set }] of cases.entries()) {
+        visibility.set(event.repository.fullName, 'public');
+        await env.DB.prepare(
+          `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+           VALUES (?, ?, ?, ?, ${set ? 'json_set(?, ?, json(?))' : '?'})`
+        )
+          .bind(
+            `parity-${String(index)}`,
+            event.type,
+            event.repository.fullName,
+            at ?? new Date(Date.UTC(2026, 9, 25, 20, index)).toISOString(),
+            JSON.stringify(event),
+            ...(set ? [set[0], JSON.stringify(set[1])] : [])
+          )
+          .run();
+      }
+
+      const feed = JSON.parse((await getFeed('?limit=100')).text) as {
+        events: { type: string; repo: string; push?: { commits: number } }[];
+      };
+      const { body } = await getActivity('?days=2');
+
+      const fromFeed = new Map<string, Counts>();
+      for (const event of feed.events) {
+        const counts = fromFeed.get(event.repo) ?? { ...none };
+        counts.pushes += event.type === 'push.default_branch' ? 1 : 0;
+        counts.commits += event.push?.commits ?? 0;
+        counts.merges += event.type === 'pull_request.merged' ? 1 : 0;
+        counts.releases += event.type === 'release.published' ? 1 : 0;
+        counts.stars += event.type === 'star.created' ? 1 : 0;
+        fromFeed.set(event.repo, counts);
+      }
+      const fromActivity = new Map(
+        body.days.flatMap((day) => day.repos.map(({ repo, ...counts }) => [repo, counts] as const))
+      );
+      expect([...fromFeed.keys()].sort()).toEqual(
+        cases
+          .filter((entry) => entry.publishes)
+          .map((entry) => entry.event.repository.fullName)
+          .sort()
+      );
+      expect(Object.fromEntries(fromActivity)).toEqual(Object.fromEntries(fromFeed));
+    });
+
+    it('marks an answer incomplete when UTC midnight brings a repository it never checked', async () => {
+      visibility.set('o/old', 'public');
+      visibility.set('o/new', 'public');
+      vi.setSystemTime(new Date('2026-10-26T23:59:59.999Z'));
+      await record(star('o/old', 1), '2026-10-26T10:00:00.000Z');
+      await record(star('o/new', 1), '2026-10-27T00:00:00.000Z');
+      // Midnight passes while D1 runs the aggregate, which already holds o/new's star.
+      const prepare = env.DB.prepare.bind(env.DB);
+      vi.spyOn(env.DB, 'prepare').mockImplementation((query) => {
+        const statement = prepare(query);
+        if (query.includes('GROUP BY date')) {
+          const bind = statement.bind.bind(statement);
+          vi.spyOn(statement, 'bind').mockImplementation((...values) => {
+            const bound = bind(...values);
+            const all = bound.all.bind(bound);
+            vi.spyOn(bound, 'all').mockImplementation(() => {
+              vi.setSystemTime(new Date('2026-10-27T00:00:00.001Z'));
+              return all();
+            });
+            return bound;
+          });
+        }
+        return statement;
+      });
+
+      const { status, body } = await getActivity('?days=2');
+
+      expect(status).toBe(200);
+      expect(githubLookups).toEqual(['o/old']);
+      expect(body).toMatchObject({
+        complete: false,
+        days: [
+          { date: '2026-10-26', stars: 1, repos: [{ repo: 'o/old' }] },
+          { date: '2026-10-27', stars: 0, repos: [] },
+        ],
+      });
+    });
+
+    it('answers 1 to 400 days from one D1 read, and rejects anything else', async () => {
+      visibility.set('ayagmar/ccdesk', 'public');
+      // The day before the 400th, then the 400th.
+      await record(push('ayagmar/ccdesk'), '2025-09-21T23:59:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2025-09-22T00:00:00.000Z');
+      await record(push('ayagmar/ccdesk'), '2026-10-26T00:00:00.000Z');
+
+      const defaults = await getActivity();
+      expect(defaults.body.days).toHaveLength(28);
+      expect(defaults.body.days[0]?.date).toBe('2026-09-29');
+
+      // Any further D1 read would see the history gone.
+      await env.DB.exec('DELETE FROM events');
+      const one = await getActivity('?days=1');
+      expect(one.body).toMatchObject({
+        since: '2025-09-21',
+        days: [{ date: '2026-10-26', pushes: 1, repos: [{ repo: 'ayagmar/ccdesk', pushes: 1 }] }],
+      });
+      const most = await getActivity('?days=400');
+      expect(most.body.days).toHaveLength(400);
+      expect(most.body.days[0]).toMatchObject({ date: '2025-09-22', pushes: 1 });
+      expect(most.body.days.at(-1)?.date).toBe('2026-10-26');
+
+      for (const days of ['', '0', '401', '1.5', '-1', '+5', 'abc', '1e2']) {
+        const { status, headers, body } = await getActivity(`?days=${days}`);
+        expect(status, days).toBe(400);
+        expect(headers.get('Cache-Control')).toBe('no-store');
+        expect(body).toEqual({ error: 'invalid_query' });
+      }
+      const post = await getPublic('activity', { method: 'POST' });
+      expect(post.response.status).toBe(405);
+      expect(post.response.headers.get('Allow')).toBe('GET, HEAD');
+    });
+
+    it('answers zeros and a null since for an empty history', async () => {
+      const { status, body } = await getActivity('?days=2');
+
+      expect(status).toBe(200);
+      expect(body).toEqual({
+        generatedAt: '2026-10-26T08:45:00.000Z',
+        since: null,
+        complete: true,
+        days: [zero('2026-10-25'), zero('2026-10-26')],
+      });
+    });
+
+    it('answers 503 when nothing is admitted and a lookup failed, else marks the answer incomplete', async () => {
+      visibility.set('ayagmar/runnerd', 'rate_limited');
+      visibility.set('ayagmar/secret', 'not_found');
+      await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
+      await record(push('ayagmar/secret'), '2026-10-25T21:15:00.000Z');
+
+      const { status, body } = await getActivity();
+
+      expect(status).toBe(503);
+      expect(body).toEqual({ error: 'visibility_unavailable' });
+
+      // With another repository admitted, the counts are served but marked incomplete.
+      visibility.set('ayagmar/ccdesk', 'public');
+      await record(push('ayagmar/ccdesk'), '2026-10-25T21:16:00.000Z');
+      app = createApp();
+      cacheEntries.clear();
+      const partial = await getActivity();
+      expect(partial.status).toBe(200);
+      expect(partial.body.complete).toBe(false);
+      expect(partial.body.days.at(-2)?.repos.map((repo) => repo.repo)).toEqual(['ayagmar/ccdesk']);
+    });
   });
 });

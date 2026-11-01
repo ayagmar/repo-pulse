@@ -1,7 +1,9 @@
+import type { PublicActivityMaterial } from '../models/public-activity.js';
 import type { PublicFeedMaterial } from '../models/public-feed.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
+import { SQL_IS_PUBLISHABLE } from './public-event-rules.js';
 
 export interface EventHistoryEntry {
   deliveryId: string;
@@ -82,6 +84,23 @@ export function prepareEventHistoryInsert(
       serializeRepoEvent(input.event)
     );
 }
+
+/**
+ * The events the public routes may publish: the four published types, recorded as
+ * public. Only a JSON `false` in `$.repository.private` counts as recorded public:
+ * true, a missing flag (events from before visibility was stored) or any other value
+ * does not. `idx_events_public_received_at` (migration 0009) has this WHERE clause,
+ * and SQLite uses the index only for a query that repeats each of its terms; a query
+ * naming it with INDEXED BY fails if they drift apart.
+ */
+const PUBLIC_EVENTS_WHERE = `event_type IN (
+    'release.published', 'star.created', 'push.default_branch', 'pull_request.merged'
+  )
+  AND json_type(event_json, '$.repository.private') = 'false'`;
+
+/** Of those, the ones the feed would publish, by the feed's own rules. */
+const PUBLIC_ACTIVITY_WHERE = `${PUBLIC_EVENTS_WHERE}
+  AND ${SQL_IS_PUBLISHABLE}`;
 
 /** The fields a digest needs from one recorded event. */
 export interface EventActivity {
@@ -205,9 +224,7 @@ export class D1EventHistory {
    * feed publishes.
    */
   async readPublicFeedMaterial(limit: number, since: Date): Promise<PublicFeedMaterial> {
-    // Only a JSON `false` in `$.repository.private` counts as recorded public: true,
-    // a missing flag (events from before visibility was stored) or any other value
-    // does not. Each field is read only when stored with its JSON type, because SQLite
+    // Each field is read only when stored with its JSON type, because SQLite
     // would turn `true` into 1, a non-array into a length of 0, and an object into
     // its JSON text, nested fields included.
     // The events query walks the time index newest first and stops after `limit`
@@ -237,11 +254,8 @@ export class D1EventHistory {
              CASE WHEN json_type(event_json, '$.pullRequest.url') = 'text'
                THEN json_extract(event_json, '$.pullRequest.url') END AS pullRequestUrl
            FROM events INDEXED BY idx_events_received_at
-           WHERE event_type IN (
-               'release.published', 'star.created', 'push.default_branch', 'pull_request.merged'
-             )
+           WHERE ${PUBLIC_EVENTS_WHERE}
              AND received_at >= ?
-             AND json_type(event_json, '$.repository.private') = 'false'
            ORDER BY received_at DESC, delivery_id DESC
            LIMIT ?`
         )
@@ -273,6 +287,47 @@ export class D1EventHistory {
     ]);
 
     return { events: events.results, starDays: starDays.results };
+  }
+
+  /**
+   * What public activity is built from, before any visibility check: the published
+   * events recorded as public since `since`, summed per UTC day and repository, and
+   * the first UTC day with such an event. Both read only
+   * `idx_events_public_received_at`'s rows, so private and unpublished events cost
+   * nothing; the first day is one index row.
+   */
+  async readPublicActivityMaterial(since: Date): Promise<PublicActivityMaterial> {
+    const [first, rows] = await Promise.all([
+      this.db
+        .prepare(
+          `SELECT substr(MIN(received_at), 1, 10) AS since
+           FROM events INDEXED BY idx_events_public_received_at
+           WHERE ${PUBLIC_ACTIVITY_WHERE}`
+        )
+        .first<{ since: string | null }>(),
+      this.db
+        .prepare(
+          `SELECT
+             substr(received_at, 1, 10) AS date,
+             repository,
+             SUM(event_type = 'push.default_branch') AS pushes,
+             COALESCE(SUM(CASE WHEN event_type = 'push.default_branch'
+               THEN json_array_length(event_json, '$.push.commits') END), 0) AS commits,
+             SUM(event_type = 'pull_request.merged') AS merges,
+             SUM(event_type = 'release.published') AS releases,
+             SUM(event_type = 'star.created') AS stars,
+             MAX(received_at) AS lastAt
+           FROM events INDEXED BY idx_events_public_received_at
+           WHERE ${PUBLIC_ACTIVITY_WHERE}
+             AND received_at >= ?
+           GROUP BY date, repository
+           ORDER BY lastAt DESC, repository ASC`
+        )
+        .bind(since.toISOString())
+        .all<PublicActivityMaterial['rows'][number]>(),
+    ]);
+
+    return { since: first?.since ?? null, rows: rows.results };
   }
 
   /** The event recorded for a delivery id, or null when there is none. */

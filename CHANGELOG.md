@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `GET /public/activity?days=28`: public activity summed per UTC day (pushes, commits,
+  merges, releases and stars, in total and per repository) over the whole event history,
+  zero-filled, with `since`, the first day the history has a public event for, and
+  `complete`, false when the visibility check could not settle every repository. It counts
+  what `/public/feed` would publish, behind the same visibility check, cache, headers and
+  rate limit, which the two routes now share. Migration `0009` adds a partial index of
+  the public events.
+- `GET /public/feed` measures release tags and pull request titles in code points, as the
+  contract's `maxLength` does, rather than UTF-16 units: a tag or title with emoji is no
+  longer dropped below its limit.
 - `POST /webhook` refuses a request without `X-GitHub-Event` or `X-GitHub-Delivery`
   (`400`), or without a `sha256=` signature of 64 hex digits (`401`), before reading
   its body. Such a request used to be answered `413` first when its body was too large.
