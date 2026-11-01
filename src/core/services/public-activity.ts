@@ -120,7 +120,12 @@ export async function buildPublicActivity(
   const builtAt = new Date();
   const window = rowsInWindow(material.rows, days, builtAt);
   const counted = window.filter((row) => admitted.has(row.repository));
-  const complete = ![...candidates, ...window].some((row) => unresolved.has(row.repository));
+  // Past UTC midnight, the window can hold a repository that was never looked up:
+  // it is left out, and that is no denial.
+  const checked = new Set(candidates.map((row) => row.repository));
+  const complete = ![...candidates, ...window].some(
+    (row) => unresolved.has(row.repository) || !checked.has(row.repository)
+  );
   if (counted.length === 0 && !complete) {
     return 'visibility_unavailable';
   }

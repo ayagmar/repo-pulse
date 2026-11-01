@@ -1164,6 +1164,44 @@ describe('public feed', () => {
       });
     });
 
+    it('marks an answer incomplete when UTC midnight brings a repository it never checked', async () => {
+      visibility.set('o/old', 'public');
+      visibility.set('o/new', 'public');
+      vi.setSystemTime(new Date('2026-10-26T23:59:59.999Z'));
+      await record(star('o/old', 1), '2026-10-26T10:00:00.000Z');
+      await record(star('o/new', 1), '2026-10-27T00:00:00.000Z');
+      // Midnight passes while D1 runs the aggregate, which already holds o/new's star.
+      const prepare = env.DB.prepare.bind(env.DB);
+      vi.spyOn(env.DB, 'prepare').mockImplementation((query) => {
+        const statement = prepare(query);
+        if (query.includes('GROUP BY date')) {
+          const bind = statement.bind.bind(statement);
+          vi.spyOn(statement, 'bind').mockImplementation((...values) => {
+            const bound = bind(...values);
+            const all = bound.all.bind(bound);
+            vi.spyOn(bound, 'all').mockImplementation(() => {
+              vi.setSystemTime(new Date('2026-10-27T00:00:00.001Z'));
+              return all();
+            });
+            return bound;
+          });
+        }
+        return statement;
+      });
+
+      const { status, body } = await getActivity('?days=2');
+
+      expect(status).toBe(200);
+      expect(githubLookups).toEqual(['o/old']);
+      expect(body).toMatchObject({
+        complete: false,
+        days: [
+          { date: '2026-10-26', stars: 1, repos: [{ repo: 'o/old' }] },
+          { date: '2026-10-27', stars: 0, repos: [] },
+        ],
+      });
+    });
+
     it('answers 1 to 400 days from one D1 read, and rejects anything else', async () => {
       visibility.set('ayagmar/ccdesk', 'public');
       // The day before the 400th, then the 400th.
