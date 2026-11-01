@@ -24,6 +24,18 @@ function at(path: string): string {
   return `json_extract(event_json, '${path}')`;
 }
 
+/**
+ * Text without U+0000. SQLite's `length()` and GLOB stop at the first NUL, so the
+ * SQL rules could not measure or scan what follows it; both sides reject it.
+ */
+function isTextWithoutNul(value: unknown): value is string {
+  return typeof value === 'string' && !value.includes('\0');
+}
+
+function sqlTextWithoutNul(path: string): string {
+  return `json_type(event_json, '${path}') = 'text' AND instr(${at(path)}, char(0)) = 0`;
+}
+
 function codePoints(value: string): number {
   // Code points on purpose: the contract's `maxLength`, not what a reader sees.
   return Array.from(value).length;
@@ -32,9 +44,9 @@ function codePoints(value: string): number {
 function text(maximumLength: number): Rule<string> {
   return {
     test: (value): value is string =>
-      typeof value === 'string' && value.length >= 1 && codePoints(value) <= maximumLength,
+      isTextWithoutNul(value) && value.length >= 1 && codePoints(value) <= maximumLength,
     sql: (path) =>
-      `(json_type(event_json, '${path}') = 'text' AND length(${at(path)}) BETWEEN 1 AND ${String(maximumLength)})`,
+      `(${sqlTextWithoutNul(path)} AND length(${at(path)}) BETWEEN 1 AND ${String(maximumLength)})`,
   };
 }
 
@@ -49,12 +61,12 @@ function count(minimum: number, maximum = MAX_SAFE_INTEGER): Rule<number> {
 
 export const GITHUB_URL: Rule<string> = {
   test: (value): value is string =>
-    typeof value === 'string' &&
+    isTextWithoutNul(value) &&
     codePoints(value) <= MAX_URL_LENGTH &&
     value.startsWith(GITHUB_PREFIX) &&
     !/\s/.test(value),
   sql: (path) =>
-    `(json_type(event_json, '${path}') = 'text'
+    `(${sqlTextWithoutNul(path)}
       AND length(${at(path)}) <= ${String(MAX_URL_LENGTH)}
       AND substr(${at(path)}, 1, ${String(GITHUB_PREFIX.length)}) = '${GITHUB_PREFIX}'
       AND ${at(path)} NOT GLOB '*[${WHITESPACE}]*')`,

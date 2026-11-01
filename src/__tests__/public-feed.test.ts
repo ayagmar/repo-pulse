@@ -1218,6 +1218,22 @@ describe('public feed', () => {
           publishes: false,
           set: ['$.pullRequest.title', 't'.repeat(301)],
         },
+        // SQLite's length() and GLOB stop at U+0000, so neither route publishes it.
+        {
+          event: pullRequest('o/title-nul', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', '\u0000'],
+        },
+        {
+          event: pullRequest('o/title-nul-301', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', `a\u0000${'x'.repeat(300)}`],
+        },
+        {
+          event: release('o/url-nul-newline', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://github.com/o/url\u0000\n'],
+        },
         {
           event: pullRequest('o/title-object', 'pull_request.merged'),
           publishes: false,
