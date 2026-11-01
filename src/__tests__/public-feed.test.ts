@@ -1011,14 +1011,17 @@ describe('public feed', () => {
   });
 
   describe('daily activity', () => {
-    interface Day {
-      date: string;
+    interface Counts {
       pushes: number;
       commits: number;
       merges: number;
       releases: number;
       stars: number;
-      repos: string[];
+    }
+    interface Day extends Counts {
+      date: string;
+      repos: (Counts & { repo: string })[];
+      reposTruncated: boolean;
     }
     interface Activity {
       since: string | null;
@@ -1029,22 +1032,22 @@ describe('public feed', () => {
       query = ''
     ): Promise<{ status: number; headers: Headers; body: Activity }> {
       const { response, text } = await getPublic(`activity${query}`);
-      return {
-        status: response.status,
-        headers: response.headers,
-        body: JSON.parse(text) as Activity,
-      };
+      const body = JSON.parse(text) as Activity;
+      // A consumer may keep only the per-repository rows: unless the list is
+      // truncated, they must add up to the day.
+      for (const day of response.status === 200 ? body.days : []) {
+        if (!day.reposTruncated) {
+          for (const field of ['pushes', 'commits', 'merges', 'releases', 'stars'] as const) {
+            const total = day.repos.reduce((sum, repo) => sum + repo[field], 0);
+            expect(total, `${day.date} ${field}`).toBe(day[field]);
+          }
+        }
+      }
+      return { status: response.status, headers: response.headers, body };
     }
 
-    const zero = (date: string): Day => ({
-      date,
-      pushes: 0,
-      commits: 0,
-      merges: 0,
-      releases: 0,
-      stars: 0,
-      repos: [],
-    });
+    const none: Counts = { pushes: 0, commits: 0, merges: 0, releases: 0, stars: 0 };
+    const zero = (date: string): Day => ({ date, ...none, repos: [], reposTruncated: false });
 
     it('sums public activity per UTC day, zero-filled, from public repositories only', async () => {
       visibility.set('ayagmar/ccdesk', 'public');
@@ -1094,7 +1097,12 @@ describe('public feed', () => {
         since: '2026-09-30',
         days: [
           zero('2026-10-22'),
-          { ...zero('2026-10-23'), pushes: 1, commits: 2, repos: ['ayagmar/ccdesk'] },
+          {
+            ...zero('2026-10-23'),
+            pushes: 1,
+            commits: 2,
+            repos: [{ repo: 'ayagmar/ccdesk', ...none, pushes: 1, commits: 2 }],
+          },
           {
             date: '2026-10-24',
             pushes: 2,
@@ -1102,42 +1110,52 @@ describe('public feed', () => {
             merges: 1,
             releases: 1,
             stars: 1,
-            repos: ['ayagmar/ccdesk', 'ayagmar/pi-mobile'],
+            repos: [
+              { repo: 'ayagmar/ccdesk', ...none, pushes: 2, commits: 4, merges: 1 },
+              { repo: 'ayagmar/pi-mobile', ...none, releases: 1, stars: 1 },
+            ],
+            reposTruncated: false,
           },
           zero('2026-10-25'),
-          { ...zero('2026-10-26'), stars: 1, repos: ['ayagmar/pi-mobile'] },
+          {
+            ...zero('2026-10-26'),
+            stars: 1,
+            repos: [{ repo: 'ayagmar/pi-mobile', ...none, stars: 1 }],
+          },
         ],
       });
     });
 
-    it('lists the 10 busiest repositories of a day by name', async () => {
-      for (let index = 0; index < 12; index += 1) {
+    it('keeps the 50 busiest repositories of a day, by name, and counts them all', async () => {
+      for (let index = 0; index < 52; index += 1) {
         const fullName = `o/r${String(index).padStart(2, '0')}`;
         visibility.set(fullName, 'public');
-        await record(star(fullName, 1), `2026-10-25T10:${String(index).padStart(2, '0')}:00.000Z`);
+        await record(star(fullName, 1), new Date(Date.UTC(2026, 9, 25, 10, index)).toISOString());
       }
-      // The two last by name are the busiest.
-      await record(push('o/r10'), '2026-10-25T12:00:00.000Z');
-      await record(push('o/r11'), '2026-10-25T12:01:00.000Z');
+      // The two last by name are the busiest; of the 50 tied, the first 48 by name stay.
+      await record(push('o/r50'), '2026-10-25T12:00:00.000Z');
+      await record(push('o/r51'), '2026-10-25T12:01:00.000Z');
 
+      // A response looks up at most 40 repositories, so the first one counts only
+      // the 40 most recently active; the next, within 60 seconds, looks up the rest.
+      const first = await getActivity('?days=2');
+      expect(first.body.days[0]).toMatchObject({ pushes: 2, stars: 40, reposTruncated: false });
       const { body } = await getActivity('?days=2');
 
-      expect(body.days[0]).toMatchObject({
-        date: '2026-10-25',
-        pushes: 2,
-        stars: 12,
-        repos: [
-          'o/r00',
-          'o/r01',
-          'o/r02',
-          'o/r03',
-          'o/r04',
-          'o/r05',
-          'o/r06',
-          'o/r07',
-          'o/r10',
-          'o/r11',
-        ],
+      const [day] = body.days;
+      expect(day).toMatchObject({ date: '2026-10-25', pushes: 2, commits: 4, stars: 52 });
+      expect(day?.reposTruncated).toBe(true);
+      expect(day?.repos.map((repo) => repo.repo)).toEqual([
+        ...Array.from({ length: 48 }, (_, index) => `o/r${String(index).padStart(2, '0')}`),
+        'o/r50',
+        'o/r51',
+      ]);
+      expect(day?.repos.at(-1)).toEqual({
+        repo: 'o/r51',
+        ...none,
+        pushes: 1,
+        commits: 2,
+        stars: 1,
       });
     });
 
@@ -1157,7 +1175,7 @@ describe('public feed', () => {
       const one = await getActivity('?days=1');
       expect(one.body).toMatchObject({
         since: '2025-09-21',
-        days: [{ date: '2026-10-26', pushes: 1, repos: ['ayagmar/ccdesk'] }],
+        days: [{ date: '2026-10-26', pushes: 1, repos: [{ repo: 'ayagmar/ccdesk', pushes: 1 }] }],
       });
       const most = await getActivity('?days=400');
       expect(most.body.days).toHaveLength(400);

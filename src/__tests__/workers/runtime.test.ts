@@ -343,7 +343,7 @@ describe('Workers runtime integration', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       since: today,
-      days: [{ date: today, stars: 2, repos: ['myorg/activity'] }],
+      days: [{ date: today, stars: 2, repos: [{ repo: 'myorg/activity', stars: 2 }] }],
     });
   });
 

@@ -10,7 +10,7 @@ import { loadMaterial, type MaterialSources } from './public-material.js';
 const DAY_MS = 24 * 60 * 60_000;
 /** The most days a response may ask for: material is read once for this many. */
 export const PUBLIC_ACTIVITY_MAX_DAYS = 400;
-const MAX_REPOSITORIES_PER_DAY = 10;
+const MAX_REPOSITORIES_PER_DAY = 50;
 const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-activity/material';
 
 type ActivityRow = PublicActivityMaterial['rows'][number];
@@ -24,6 +24,14 @@ interface PublicActivitySources extends MaterialSources<PublicActivityMaterial> 
 function utcDay(now: Date, daysBack: number): string {
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   return new Date(today - daysBack * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** By name in code-unit order, the same in every locale. */
+function byName(left: ActivityRow, right: ActivityRow): number {
+  if (left.repository === right.repository) {
+    return 0;
+  }
+  return left.repository < right.repository ? -1 : 1;
 }
 
 function eventCount(row: ActivityRow): number {
@@ -57,13 +65,18 @@ function toDays(rows: readonly ActivityRow[], days: number, now: Date): PublicAc
       stars: sum('stars'),
       // The busiest repositories of the day, listed by name.
       repos: [...dayRows]
-        .sort(
-          (left, right) =>
-            eventCount(right) - eventCount(left) || left.repository.localeCompare(right.repository)
-        )
+        .sort((left, right) => eventCount(right) - eventCount(left) || byName(left, right))
         .slice(0, MAX_REPOSITORIES_PER_DAY)
-        .map((row) => row.repository)
-        .sort(),
+        .sort(byName)
+        .map((row) => ({
+          repo: row.repository,
+          pushes: row.pushes,
+          commits: row.commits,
+          merges: row.merges,
+          releases: row.releases,
+          stars: row.stars,
+        })),
+      reposTruncated: dayRows.length > MAX_REPOSITORIES_PER_DAY,
     };
   });
 }

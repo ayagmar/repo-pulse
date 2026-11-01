@@ -185,15 +185,26 @@ and ending today, with zeros for quiet days.
   "generatedAt": "2026-11-01T14:00:00.000Z",
   "since": "2026-10-20",
   "days": [
-    { "date": "2026-10-05", "pushes": 0, "commits": 0, "merges": 0, "releases": 0,
-      "stars": 0, "repos": [] }
+    { "date": "2026-10-31", "pushes": 3, "commits": 9, "merges": 4, "releases": 1,
+      "stars": 2,
+      "repos": [
+        { "repo": "ayagmar/ayagmar.dev", "pushes": 2, "commits": 7, "merges": 4,
+          "releases": 0, "stars": 0 },
+        { "repo": "ayagmar/pi-mobile", "pushes": 1, "commits": 2, "merges": 0,
+          "releases": 1, "stars": 2 }
+      ],
+      "reposTruncated": false }
   ]
 }
 ```
 
 `pushes` are default-branch pushes and `commits` the commits they carried, `merges` merged
-pull requests, `releases` published releases and `stars` new stars. `repos` names up to 10
-repositories active that day, the busiest ones, sorted by name. `since` is the first UTC
+pull requests, `releases` published releases and `stars` new stars. `repos` breaks the day
+down by repository, sorted by name, so its counts add up to the day's. Past 50 repositories
+it keeps the 50 busiest and sets `reposTruncated`; the day's counts still include them all.
+A response looks up at most 40 repositories on GitHub, like the feed, so on a cold isolate
+a window with more active repositories than that leaves the least recently active ones out
+until a request within the next 60 seconds looks them up. `since` is the first UTC
 day the history has a public event for, or `null`: days before it are zeros because
 nothing was recorded yet. It has the feed's visibility check, errors, `no-store` header
 and rate limit; the two routes share one budget of 10 requests a minute per client.

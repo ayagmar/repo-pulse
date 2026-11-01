@@ -26,15 +26,27 @@ export interface PublicActivityMaterial {
   rows: PublicActivityRow[];
 }
 
-export interface PublicActivityDay {
-  date: string;
+interface PublicActivityCounts {
   pushes: number;
   commits: number;
   merges: number;
   releases: number;
   stars: number;
-  /** Repositories with counted activity that day, at most 10, sorted by name. */
-  repos: string[];
+}
+
+interface PublicActivityRepo extends PublicActivityCounts {
+  repo: string;
+}
+
+export interface PublicActivityDay extends PublicActivityCounts {
+  date: string;
+  /**
+   * Every repository with counted activity that day, sorted by name, so the day's
+   * counts are their sums; at most 50, the busiest.
+   */
+  repos: PublicActivityRepo[];
+  /** True when more than 50 repositories were active: the day's counts still include them all. */
+  reposTruncated: boolean;
 }
 
 export interface PublicActivity {

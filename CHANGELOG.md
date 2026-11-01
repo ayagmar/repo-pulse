@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `GET /public/activity?days=28`: public activity summed per UTC day (pushes, commits,
-  merges, releases, stars and up to 10 active repositories) over the whole event history,
+  merges, releases and stars, in total and per repository) over the whole event history,
   zero-filled, with `since`, the first day the history has a public event for. It counts
   what `/public/feed` would publish, behind the same visibility check, cache, headers and
   rate limit, which the two routes now share. Migration `0009` adds a partial index of
