@@ -1164,6 +1164,143 @@ describe('public feed', () => {
       });
     });
 
+    it('counts exactly the events the feed publishes', async () => {
+      const tag = (length: number): string => 'v'.repeat(length);
+      // Each case in its own repository; `publishes` is what the feed does with it.
+      const cases: {
+        event: RepoEvent;
+        publishes: boolean;
+        at?: string;
+        set?: [string, unknown];
+      }[] = [
+        { event: push('o/push'), publishes: true },
+        { event: star('o/star', 3), publishes: true },
+        { event: release('o/release', 'v1.0.0'), publishes: true },
+        { event: pullRequest('o/merged', 'pull_request.merged'), publishes: true },
+        { event: release('o/tag-200', tag(200)), publishes: true },
+        // 300 UTF-16 units, 150 code points: lengths count code points, as the schema does.
+        { event: release('o/tag-emoji', '\u{1F600}'.repeat(150)), publishes: true },
+        {
+          event: pullRequest('o/title-300', 'pull_request.merged'),
+          publishes: true,
+          set: ['$.pullRequest.title', 't'.repeat(300)],
+        },
+        // The webhook mapper accepts any nonempty tag.
+        { event: release('o/tag-201', tag(201)), publishes: false },
+        { event: release('o/tag-empty', 'v1'), publishes: false, set: ['$.release.tagName', ''] },
+        {
+          event: release('o/url-host', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://example.com/o/url-host'],
+        },
+        {
+          event: release('o/url-nbsp', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://github.com/o/url nbsp'],
+        },
+        {
+          event: release('o/url-line', 'v1'),
+          publishes: false,
+          set: ['$.release.url', 'https://github.com/o/url line'],
+        },
+        {
+          event: push('o/url-2049'),
+          publishes: false,
+          set: ['$.push.compareUrl', `https://github.com/${'a'.repeat(2030)}`],
+        },
+        {
+          event: push('o/url-space'),
+          publishes: false,
+          set: ['$.push.compareUrl', 'https://github.com/o/a...b c'],
+        },
+        {
+          event: pullRequest('o/title-301', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', 't'.repeat(301)],
+        },
+        {
+          event: pullRequest('o/title-object', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.title', { body: 'x' }],
+        },
+        {
+          event: pullRequest('o/number-0', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.number', 0],
+        },
+        {
+          event: pullRequest('o/number-real', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.number', 1.5],
+        },
+        {
+          event: pullRequest('o/number-text', 'pull_request.merged'),
+          publishes: false,
+          set: ['$.pullRequest.number', '41'],
+        },
+        { event: push('o/commits-null'), publishes: false, set: ['$.push.commits', null] },
+        {
+          event: push('o/commits-10001'),
+          publishes: false,
+          set: ['$.push.commits', Array.from({ length: 10_001 }, () => 'c')],
+        },
+        { event: star('o/count-true', 1), publishes: false, set: ['$.star.count', true] },
+        { event: star('o/count-negative', 1), publishes: false, set: ['$.star.count', -1] },
+        {
+          event: star('o/count-unsafe', 1),
+          publishes: false,
+          set: ['$.star.count', Number.MAX_SAFE_INTEGER + 1],
+        },
+        { event: push('o/at-hour-24'), publishes: false, at: '2026-10-25T24:00:00.000Z' },
+        { event: push('o/at-no-ms'), publishes: false, at: '2026-10-25T21:00:00Z' },
+        { event: star('o/unstarred', 2, false, true), publishes: false },
+        { event: pullRequest('o/opened', 'pull_request.opened'), publishes: false },
+        { event: issue('o/issue'), publishes: false },
+      ];
+      for (const [index, { event, at, set }] of cases.entries()) {
+        visibility.set(event.repository.fullName, 'public');
+        await env.DB.prepare(
+          `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+           VALUES (?, ?, ?, ?, ${set ? 'json_set(?, ?, json(?))' : '?'})`
+        )
+          .bind(
+            `parity-${String(index)}`,
+            event.type,
+            event.repository.fullName,
+            at ?? new Date(Date.UTC(2026, 9, 25, 20, index)).toISOString(),
+            JSON.stringify(event),
+            ...(set ? [set[0], JSON.stringify(set[1])] : [])
+          )
+          .run();
+      }
+
+      const feed = JSON.parse((await getFeed('?limit=100')).text) as {
+        events: { type: string; repo: string; push?: { commits: number } }[];
+      };
+      const { body } = await getActivity('?days=2');
+
+      const fromFeed = new Map<string, Counts>();
+      for (const event of feed.events) {
+        const counts = fromFeed.get(event.repo) ?? { ...none };
+        counts.pushes += event.type === 'push.default_branch' ? 1 : 0;
+        counts.commits += event.push?.commits ?? 0;
+        counts.merges += event.type === 'pull_request.merged' ? 1 : 0;
+        counts.releases += event.type === 'release.published' ? 1 : 0;
+        counts.stars += event.type === 'star.created' ? 1 : 0;
+        fromFeed.set(event.repo, counts);
+      }
+      const fromActivity = new Map(
+        body.days.flatMap((day) => day.repos.map(({ repo, ...counts }) => [repo, counts] as const))
+      );
+      expect([...fromFeed.keys()].sort()).toEqual(
+        cases
+          .filter((entry) => entry.publishes)
+          .map((entry) => entry.event.repository.fullName)
+          .sort()
+      );
+      expect(Object.fromEntries(fromActivity)).toEqual(Object.fromEntries(fromFeed));
+    });
+
     it('marks an answer incomplete when UTC midnight brings a repository it never checked', async () => {
       visibility.set('o/old', 'public');
       visibility.set('o/new', 'public');

@@ -10,6 +10,7 @@ import {
   createRepoEvent,
   REPO_EVENT_ACTIONS,
   REPO_EVENT_TYPES,
+  type RepoEvent,
   serializeRepoEvent,
 } from '../../core/models/repo-event.js';
 import { Redactor } from '../../core/security/redact.js';
@@ -315,20 +316,43 @@ describe('Workers runtime integration', () => {
     );
     const today = new Date().toISOString().slice(0, 10);
     const repository = { ...event.repository, fullName: 'myorg/activity' };
-    for (const [deliveryId, receivedAt, isPrivate] of [
-      ['activity-1', `${today}T00:00:00.000Z`, false],
-      ['activity-2', `${today}T00:00:00.001Z`, false],
-      ['activity-3', `${today}T00:00:00.002Z`, true],
-    ] as const) {
+    const push = (compareUrl: string): RepoEvent =>
+      createRepoEvent(REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH, {
+        action: REPO_EVENT_ACTIONS.PUSHED,
+        repository,
+        sender: event.sender,
+        push: {
+          branch: 'main',
+          compareUrl,
+          forced: false,
+          commits: [
+            {
+              id: 'a',
+              message: 'm',
+              url: 'https://github.com/myorg/activity/commit/a',
+              author: 'x',
+            },
+          ],
+        },
+      });
+    const stored: [string, string, RepoEvent][] = [
+      ['activity-1', `${today}T00:00:00.000Z`, { ...event, repository }],
+      ['activity-2', `${today}T00:00:00.001Z`, { ...event, repository }],
+      [
+        'activity-3',
+        `${today}T00:00:00.002Z`,
+        { ...event, repository: { ...repository, private: true } },
+      ],
+      // The publishability rules run in D1 too, the URL whitespace GLOB included.
+      ['activity-4', `${today}T00:00:00.003Z`, push('https://github.com/myorg/activity/compare/a')],
+      ['activity-5', `${today}T00:00:00.004Z`, push('https://github.com/myorg/a\u00a0b')],
+    ];
+    for (const [deliveryId, receivedAt, storedEvent] of stored) {
       await env.DB.prepare(
         `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
-         VALUES (?, 'star.created', 'myorg/activity', ?, ?)`
+         VALUES (?, ?, 'myorg/activity', ?, ?)`
       )
-        .bind(
-          deliveryId,
-          receivedAt,
-          serializeRepoEvent({ ...event, repository: { ...repository, private: isPrivate } })
-        )
+        .bind(deliveryId, storedEvent.type, receivedAt, serializeRepoEvent(storedEvent))
         .run();
     }
 
@@ -343,7 +367,15 @@ describe('Workers runtime integration', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       since: today,
-      days: [{ date: today, stars: 2, repos: [{ repo: 'myorg/activity', stars: 2 }] }],
+      days: [
+        {
+          date: today,
+          stars: 2,
+          pushes: 1,
+          commits: 1,
+          repos: [{ repo: 'myorg/activity', stars: 2, pushes: 1 }],
+        },
+      ],
     });
   });
 

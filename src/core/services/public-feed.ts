@@ -5,6 +5,16 @@ import type {
   PublicFeedStarHistory,
   RepositoryAdmission,
 } from '../models/public-feed.js';
+import {
+  COMMIT_COUNT,
+  GITHUB_URL,
+  isTimestamp,
+  PULL_REQUEST_NUMBER,
+  PULL_REQUEST_TITLE,
+  RELEASE_TAG,
+  STAR_COUNT,
+  toIsoString,
+} from './public-event-rules.js';
 import { loadMaterial, type MaterialSources } from './public-material.js';
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -25,32 +35,6 @@ interface PublicFeedSources extends MaterialSources<PublicFeedMaterial> {
   admit(repositories: readonly string[], lookupBudget: number): Promise<RepositoryAdmission>;
 }
 
-function isGitHubUrl(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length <= 2048 &&
-    value.startsWith('https://github.com/') &&
-    !/\s/.test(value)
-  );
-}
-
-function isCount(value: unknown, maximum = Number.MAX_SAFE_INTEGER): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= maximum;
-}
-
-function isText(value: unknown, maximumLength: number): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= maximumLength;
-}
-
-/** An ISO timestamp as `toISOString` writes it for years 0000 to 9999, which is how events are stored. */
-function isTimestamp(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
-    toIsoString(value) === value
-  );
-}
-
 /** A real calendar day as `YYYY-MM-DD`. */
 function isDate(value: unknown): value is string {
   return (
@@ -58,11 +42,6 @@ function isDate(value: unknown): value is string {
     /^\d{4}-\d{2}-\d{2}$/.test(value) &&
     toIsoString(`${value}T00:00:00.000Z`)?.slice(0, 10) === value
   );
-}
-
-function toIsoString(value: string): string | null {
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
 /**
@@ -76,7 +55,7 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
   const base = { repo: candidate.repository, at: candidate.at };
   switch (candidate.type) {
     case 'release.published':
-      return isGitHubUrl(candidate.releaseUrl) && isText(candidate.releaseTag, 200)
+      return GITHUB_URL.test(candidate.releaseUrl) && RELEASE_TAG.test(candidate.releaseTag)
         ? {
             type: 'release.published',
             ...base,
@@ -85,11 +64,11 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
           }
         : null;
     case 'star.created':
-      return isCount(candidate.starCount)
+      return STAR_COUNT.test(candidate.starCount)
         ? { type: 'star.created', ...base, star: { count: candidate.starCount } }
         : null;
     case 'push.default_branch':
-      return isGitHubUrl(candidate.compareUrl) && isCount(candidate.commitCount, 10_000)
+      return GITHUB_URL.test(candidate.compareUrl) && COMMIT_COUNT.test(candidate.commitCount)
         ? {
             type: 'push.default_branch',
             ...base,
@@ -98,10 +77,9 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
           }
         : null;
     case 'pull_request.merged':
-      return isGitHubUrl(candidate.pullRequestUrl) &&
-        isCount(candidate.pullRequestNumber) &&
-        candidate.pullRequestNumber > 0 &&
-        isText(candidate.pullRequestTitle, 300)
+      return GITHUB_URL.test(candidate.pullRequestUrl) &&
+        PULL_REQUEST_NUMBER.test(candidate.pullRequestNumber) &&
+        PULL_REQUEST_TITLE.test(candidate.pullRequestTitle)
         ? {
             type: 'pull_request.merged',
             ...base,
@@ -129,7 +107,12 @@ function toStarHistory(
   const today = now.toISOString().slice(0, 10);
   const byRepository = new Map<string, PublicFeedStarHistory['points']>();
   for (const day of starDays) {
-    if (!isDate(day.date) || day.date < firstDay || day.date > today || !isCount(day.stars)) {
+    if (
+      !isDate(day.date) ||
+      day.date < firstDay ||
+      day.date > today ||
+      !STAR_COUNT.test(day.stars)
+    ) {
       continue;
     }
     const points = byRepository.get(day.repository) ?? [];

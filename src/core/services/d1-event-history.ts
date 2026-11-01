@@ -3,6 +3,7 @@ import type { PublicFeedMaterial } from '../models/public-feed.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { deserializeRepoEvent, serializeRepoEvent } from '../models/repo-event.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
+import { SQL_IS_PUBLISHABLE } from './public-event-rules.js';
 
 export interface EventHistoryEntry {
   deliveryId: string;
@@ -97,12 +98,9 @@ const PUBLIC_EVENTS_WHERE = `event_type IN (
   )
   AND json_type(event_json, '$.repository.private') = 'false'`;
 
-/**
- * Of those, the ones the feed publishes as well-formed counts: it drops a push whose
- * commits are not an array.
- */
+/** Of those, the ones the feed would publish, by the feed's own rules. */
 const PUBLIC_ACTIVITY_WHERE = `${PUBLIC_EVENTS_WHERE}
-  AND (event_type <> 'push.default_branch' OR json_type(event_json, '$.push.commits') = 'array')`;
+  AND ${SQL_IS_PUBLISHABLE}`;
 
 /** The fields a digest needs from one recorded event. */
 export interface EventActivity {
