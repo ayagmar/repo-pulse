@@ -4,6 +4,8 @@ interface MergedPullRequest {
   number: number;
   title: string;
   url: string;
+  /** Opened by a bot account, such as a dependency update. */
+  byBot: boolean;
 }
 
 export interface RepositoryActivity {
@@ -14,6 +16,8 @@ export interface RepositoryActivity {
   forks: number;
   commits: number;
   pullRequestsOpened: number;
+  /** Of `pullRequestsOpened`, those a bot opened. */
+  pullRequestsOpenedByBots: number;
   pullRequestsMerged: MergedPullRequest[];
   issuesOpened: number;
   issuesClosed: number;

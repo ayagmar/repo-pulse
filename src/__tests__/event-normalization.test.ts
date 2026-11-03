@@ -161,6 +161,23 @@ describe('mapGitHubEvent', () => {
       expect(result.issue.labels).toEqual(['bug']);
     });
 
+    it('records why an issue was closed, when GitHub says', () => {
+      const closed = (stateReason: unknown): unknown => {
+        const result = mapGitHubEvent('issues', {
+          action: 'closed',
+          repository: mockRepo,
+          sender: mockSender,
+          issue: { ...mockIssue, state: 'closed' as const, state_reason: stateReason },
+        } as unknown as GitHubWebhookPayload);
+        return result !== null && 'issue' in result ? result.issue : undefined;
+      };
+
+      expect(closed('not_planned')).toMatchObject({ stateReason: 'not_planned' });
+      expect(closed('completed')).toMatchObject({ stateReason: 'completed' });
+      expect(closed('reopened')).not.toHaveProperty('stateReason');
+      expect(closed(null)).not.toHaveProperty('stateReason');
+    });
+
     it('maps issue.closed to a normalized event', () => {
       const result = mapGitHubEvent('issues', {
         action: 'closed',
@@ -245,6 +262,35 @@ describe('mapGitHubEvent', () => {
       expectTypeOf(result.pullRequest.headBranch).toBeString();
       expect(result.pullRequest.headBranch).toBe('feature-branch');
       expect(result.pullRequest.changedFiles).toBe(3);
+    });
+
+    it('records who opened a pull request, what GitHub knows of them, and its commit count', () => {
+      const mapped = (pr: object): unknown => {
+        const result = mapGitHubEvent('pull_request', {
+          action: 'opened',
+          repository: mockRepo,
+          sender: mockSender,
+          pull_request: { ...mockPR, ...pr },
+        });
+        return result !== null && 'pullRequest' in result ? result.pullRequest : undefined;
+      };
+
+      expect(
+        mapped({
+          user: { login: 'razakiau' },
+          author_association: 'FIRST_TIME_CONTRIBUTOR',
+          commits: 2,
+        })
+      ).toMatchObject({
+        author: 'razakiau',
+        authorAssociation: 'first_time_contributor',
+        commits: 2,
+      });
+      // A payload without them, or with nonsense, is still accepted.
+      expect(mapped({ user: null, author_association: 7, commits: -1 })).not.toHaveProperty(
+        'author'
+      );
+      expect(mapped({ commits: 'two' })).not.toHaveProperty('commits');
     });
 
     it('maps closed pull requests to pull_request.closed', () => {
@@ -437,6 +483,25 @@ describe('mapGitHubEvent', () => {
         body: 'notes',
         prerelease: true,
       });
+    });
+
+    it('records how many assets a release has and their total size, and none when it has none', () => {
+      const mapped = (assets: unknown): unknown => {
+        const result = mapGitHubEvent('release', {
+          action: 'published',
+          repository: mockRepo,
+          sender: mockSender,
+          release: { ...release, assets },
+        } as unknown as GitHubWebhookPayload);
+        return result?.type === REPO_EVENT_TYPES.RELEASE_PUBLISHED ? result.release : undefined;
+      };
+
+      expect(mapped([{ size: 1000 }, { size: 24 }, {}])).toMatchObject({
+        assetCount: 3,
+        assetBytes: 1024,
+      });
+      expect(mapped([])).not.toHaveProperty('assetCount');
+      expect(mapped(undefined)).not.toHaveProperty('assetCount');
     });
 
     it('ignores the follow-up release actions so a release is announced once', () => {

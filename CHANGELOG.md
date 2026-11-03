@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Clearer Discord messages. Every per-event alert shows `sender · owner/repo` above the
+  title and only the timestamp below; titles use one emoji per state (`🟢` issue opened,
+  `✅` closed, `🚫` closed as not planned, `🔄` reopened, `📈` star spike, `👍` approved).
+  Routine alerts, from bots, the repository owner and `PEOPLE_IGNORED_LOGINS`, are
+  posted with Discord's `SUPPRESS_NOTIFICATIONS` flag, so no push; outside people's
+  events, force-pushes, star milestones, digests and the star-spike alert still make a
+  sound. The decision is stored with the event at acceptance (`silent`); events stored
+  before it are loud. Pull request alerts replace the Branch and Changes fields with one
+  line (`by razakiau · +41 −41 in 22 files · 3 commits · merged 2h after opening · closes
+  #190`), release alerts show their asset count and size and what changed rather than a
+  download table, star and fork titles carry the total, and a push shows an author only
+  when it is not the sender. Excerpts drop tables, HTML, images and link targets, never
+  leave a code block open, cut at a sentence and are left out for bots. The digests are
+  titled by date, start with one line of what a person would act on, count bots' pull
+  requests (`4 PRs merged (3 by bots)`) and list only people's, and say how long ago a
+  release was; the star-spike alert names the latest stargazers and labels its referrers
+  as 14-day totals. `👋 First time here` now reads `👋 First event recorded from them`.
+  New optional fields on stored events (`silent`, pull request `author`,
+  `authorAssociation`, `commits`, issue `stateReason`, `authorAssociation`, release
+  `assetCount`, `assetBytes`): older events render without them, and the previous release
+  ignores them. No migration, no new GitHub call or D1 query.
 - Each star milestone of a repository goes to one star only: a star at or past 10, 25,
   50, 100, 250, 500, 1,000, 2,500, 5,000 or a multiple of 10,000 that no earlier star took
   posts `🎉 owner/repo reached 1,000 stars`, observed after who starred, with the time since

@@ -1,6 +1,11 @@
 import type { RepositoryInsights } from '../interfaces/repository-insights.js';
-import type { MomentumAlert, NotableStargazer, Referrer } from '../models/momentum-alert.js';
-import type { D1EventHistory } from './d1-event-history.js';
+import type {
+  LatestStargazer,
+  MomentumAlert,
+  NotableStargazer,
+  Referrer,
+} from '../models/momentum-alert.js';
+import type { D1EventHistory, RecentStar } from './d1-event-history.js';
 import type { D1RadarLog, StarCounts } from './d1-radar-log.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
@@ -33,6 +38,7 @@ const ALERT_PREFIX = 'stars:';
 const STARGAZERS_CHECKED = 20;
 const NOTABLE_FOLLOWERS = 100;
 const LISTED_STARGAZERS = 3;
+const LISTED_LATEST_STARGAZERS = 5;
 const LISTED_REFERRERS = 3;
 
 interface StarSpike {
@@ -59,6 +65,21 @@ function findStarSpikes(counts: readonly StarCounts[]): StarSpike[] {
     }))
     .filter((spike) => spike.recentStars >= SPIKE_FACTOR * spike.expectedStars)
     .sort((left, right) => right.recentStars - left.recentStars);
+}
+
+function latestStargazers(stars: readonly RecentStar[]): LatestStargazer[] {
+  const seen = new Set<string>();
+  const latest: LatestStargazer[] = [];
+  for (const star of stars) {
+    if (latest.length === LISTED_LATEST_STARGAZERS) {
+      break;
+    }
+    if (!seen.has(star.login)) {
+      seen.add(star.login);
+      latest.push({ login: star.login, url: `https://github.com/${star.login}` });
+    }
+  }
+  return latest;
 }
 
 function errorMessage(error: unknown): string {
@@ -136,6 +157,7 @@ export class MomentumRadar {
       recentStars: spike.recentStars,
       expectedStars: spike.expectedStars,
       totalStars: stars[0]?.starCount ?? spike.recentStars,
+      latestStargazers: latestStargazers(stars),
       notableStargazers: await this.findNotableStargazers([
         ...new Set(stars.map((star) => star.login)),
       ]),

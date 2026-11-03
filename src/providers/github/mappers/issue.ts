@@ -12,6 +12,7 @@ import {
 import type { GitHubIssue, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';
 import {
+  optionalAssociation,
   optionalTimestamp,
   requireNullableString,
   requireNumber,
@@ -24,6 +25,11 @@ import {
 function mapIssue(issue: GitHubIssue): Issue {
   const issueData = requireObject(issue, 'issue');
   const createdAt = optionalTimestamp(issueData.created_at);
+  const stateReason =
+    issueData.state_reason === 'completed' || issueData.state_reason === 'not_planned'
+      ? issueData.state_reason
+      : undefined;
+  const authorAssociation = optionalAssociation(issueData.author_association);
 
   return {
     number: requireNumber(issueData.number, 'issue.number'),
@@ -33,6 +39,8 @@ function mapIssue(issue: GitHubIssue): Issue {
     body: requireNullableString(issueData.body, 'issue.body'),
     labels: requireStringArrayFromObjects(issueData.labels, 'issue.labels', 'name'),
     ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(stateReason !== undefined ? { stateReason } : {}),
+    ...(authorAssociation !== undefined ? { authorAssociation } : {}),
   };
 }
 

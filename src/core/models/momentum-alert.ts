@@ -5,6 +5,12 @@ export interface NotableStargazer {
   followers: number;
 }
 
+/** A recent stargazer, named whatever their follower count. */
+export interface LatestStargazer {
+  login: string;
+  url: string;
+}
+
 /** A site that sent visitors to the repository in the last 14 days, per GitHub traffic. */
 export interface Referrer {
   name: string;
@@ -23,6 +29,8 @@ export interface MomentumAlert {
   /** Stars a window that long got on average over the two weeks before it. */
   expectedStars: number;
   totalStars: number;
+  /** The latest stars recorded in the window, newest first, at most five. */
+  latestStargazers: LatestStargazer[];
   /** Most followed first. Empty without a GitHub token. */
   notableStargazers: NotableStargazer[];
   /** Most views first. Empty without a GitHub token. */

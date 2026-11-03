@@ -154,9 +154,11 @@ describe('event history', () => {
     );
     expect(descriptions).toHaveLength(2);
     expect(descriptions).toContainEqual(
-      expect.stringMatching(/\[alice\].*\n\n👋 First time here$/s)
+      expect.stringMatching(/\[alice\].*\n\n👋 First event recorded from them$/s)
     );
-    expect(descriptions).toContainEqual(expect.stringMatching(/^\[carol\][^\n]*\n[^\n]*total$/));
+    expect(descriptions).toContainEqual(
+      '[carol](https://github.com/carol) starred this repository'
+    );
 
     const history = await app.fetch(
       adminGet('/events'),

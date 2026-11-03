@@ -12,6 +12,9 @@ import {
 import type { GitHubPullRequest, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';
 import {
+  optionalAssociation,
+  optionalCount,
+  optionalString,
   optionalTimestamp,
   requireBoolean,
   requireNullableString,
@@ -20,6 +23,12 @@ import {
   requireState,
   requireString,
 } from './validation.js';
+
+function optionalObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 function mapPullRequest(pr: GitHubPullRequest, merged: unknown): PullRequest {
   const pullRequestData = requireObject(pr, 'pull_request');
@@ -40,6 +49,18 @@ function mapPullRequest(pr: GitHubPullRequest, merged: unknown): PullRequest {
   const createdAt = optionalTimestamp(pullRequestData.created_at);
   if (createdAt !== undefined) {
     pullRequest.createdAt = createdAt;
+  }
+  const author = optionalString(optionalObject(pullRequestData.user)?.login);
+  const authorAssociation = optionalAssociation(pullRequestData.author_association);
+  const commits = optionalCount(pullRequestData.commits);
+  if (author !== undefined) {
+    pullRequest.author = author;
+  }
+  if (authorAssociation !== undefined) {
+    pullRequest.authorAssociation = authorAssociation;
+  }
+  if (commits !== undefined) {
+    pullRequest.commits = commits;
   }
   if (pullRequestData.additions !== undefined) {
     pullRequest.additions = requireNumber(pullRequestData.additions, 'pull_request.additions');

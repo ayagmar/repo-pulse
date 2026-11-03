@@ -2,7 +2,7 @@ import type { ResponseTimes, WaitingThread } from '../models/digest.js';
 import type { RepoEvent } from '../models/repo-event.js';
 import { REPO_EVENT_TYPES, REVIEW_STATES } from '../models/repo-event.js';
 import type { ThreadActivityMaterial, ThreadEventRow } from './d1-event-history.js';
-import { conversationSide } from './people.js';
+import { conversationSide, isOutsidePerson } from './people.js';
 
 /**
  * Whether a review says something: an approval, a change request, or a comment review
@@ -37,6 +37,20 @@ export function shouldAlert(event: RepoEvent, ignoredLogins: ReadonlySet<string>
     default:
       return true;
   }
+}
+
+/**
+ * Whether an alerting event is posted without a push notification: routine traffic, from a
+ * bot, the repository's owner or a login in `PEOPLE_IGNORED_LOGINS`, which is whatever
+ * `isOutsidePerson` does not accept. A force-push is always loud. Decided once, at
+ * acceptance, and stored with the event. A star milestone is loud too, but is only known
+ * once the event is persisted, so the formatter applies that exception itself.
+ */
+export function isSilentAlert(event: RepoEvent, ignoredLogins: ReadonlySet<string>): boolean {
+  if (event.type === REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH && event.push.forced) {
+    return false;
+  }
+  return !isOutsidePerson(event.sender, event.repository.owner, ignoredLogins);
 }
 
 /** One stored event of a thread, with its times in milliseconds. */

@@ -178,6 +178,8 @@ export interface EventActivity {
   pullRequestNumber: number | null;
   pullRequestTitle: string | null;
   pullRequestUrl: string | null;
+  /** Who opened the pull request; null on events stored before it was recorded. */
+  pullRequestAuthor: string | null;
   /** Null when the event has no numeric sender id. */
   senderId: number | null;
   senderLogin: string | null;
@@ -209,6 +211,7 @@ export class D1EventHistory {
            json_extract(event_json, '$.pullRequest.number') AS pullRequestNumber,
            json_extract(event_json, '$.pullRequest.title') AS pullRequestTitle,
            json_extract(event_json, '$.pullRequest.url') AS pullRequestUrl,
+           json_extract(event_json, '$.pullRequest.author') AS pullRequestAuthor,
            CASE WHEN json_type(event_json, '$.sender.id') = 'integer'
              THEN json_extract(event_json, '$.sender.id') END AS senderId,
            json_extract(event_json, '$.sender.login') AS senderLogin,

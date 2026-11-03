@@ -44,6 +44,8 @@ export interface GitHubIssue {
   pull_request?: object;
   /** Sent for pull requests on some payloads; not guaranteed. */
   draft?: boolean;
+  state_reason?: string | null;
+  author_association?: string;
 }
 
 export interface GitHubPullRequest {
@@ -67,6 +69,9 @@ export interface GitHubPullRequest {
   updated_at?: string;
   closed_at?: string | null;
   merged_at?: string | null;
+  user?: { login?: string };
+  author_association?: string;
+  commits?: number;
 }
 
 interface GitHubComment {
@@ -107,6 +112,7 @@ export interface GitHubRelease {
   html_url: string;
   body: string | null;
   prerelease: boolean;
+  assets?: { size?: number }[];
 }
 
 export interface GitHubWebhookPayload {
