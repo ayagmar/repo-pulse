@@ -14,7 +14,7 @@ interface ExcerptOptions {
 }
 
 const ELLIPSIS = '…';
-const FENCE = /^\s*(```|~~~)/;
+const FENCE = /^\s*(`{3,}|~{3,})/;
 const TABLE_ROW = /^\s*\|.*\|\s*$|^\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 const CHECKBOX = /^\s*[-*+]\s+\[[ xX]\]\s/;
 const HEADING = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/;
@@ -43,6 +43,8 @@ function toBlocks(body: string, options: ExcerptOptions): Block[] {
   const blocks: Block[] = [];
   let paragraph: string[] = [];
   let fence: string[] | null = null;
+  /** The opening fence's marker, such as ```` or ~~~: only the same character, at least as many, closes it. */
+  let fenceMarker = '';
   /** The level of the heading of a section being dropped, until a heading as high ends it. */
   let skippedLevel: number | null = null;
 
@@ -57,16 +59,30 @@ function toBlocks(body: string, options: ExcerptOptions): Block[] {
   for (const line of withoutHidden.split('\n')) {
     if (fence !== null) {
       fence.push(line);
-      if (FENCE.test(line)) {
-        if (skippedLevel === null) {
-          blocks.push({ text: fence.join('\n'), fenced: true });
+      const closing = /^\s*(`{3,}|~{3,})\s*$/.exec(line)?.[1];
+      if (
+        closing !== undefined &&
+        closing.startsWith(fenceMarker.slice(0, 1)) &&
+        closing.length >= fenceMarker.length
+      ) {
+        // Discord renders only backtick fences, so a block holding a backtick fence line
+        // cannot be shown whole and is dropped; a tilde block is shown as a backtick one.
+        const inner = fence.slice(1, -1);
+        if (skippedLevel === null && !inner.some((innerLine) => /^\s*```/.test(innerLine))) {
+          const backticks = (marker: string): string => marker.replace(/~{3,}/, '```');
+          blocks.push({
+            text: [backticks(fence[0] ?? ''), ...inner, '```'].join('\n'),
+            fenced: true,
+          });
         }
         fence = null;
       }
       continue;
     }
-    if (FENCE.test(line)) {
+    const opening = FENCE.exec(line)?.[1];
+    if (opening !== undefined) {
       endParagraph();
+      fenceMarker = opening;
       fence = [line.trim()];
       continue;
     }

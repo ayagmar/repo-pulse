@@ -107,6 +107,9 @@ describe('excerpts in alerts', () => {
       `Intro.\n\n\`\`\`sh\nnever closed`,
       `\`\`\`\n${'y'.repeat(600)}\n\`\`\``,
       `Steps:\n\`\`\`\nfirst\n\`\`\`\n\nthen\n\n\`\`\`\n${'z'.repeat(300)}\n\`\`\``,
+      // Discord renders no tilde fences: a backtick line inside one would open a fence there.
+      'Intro.\n\n~~~\n```\n~~~\nmore',
+      'Intro.\n\n````md\n```js\ncode\n```\n````\nmore',
     ];
     for (const body of bodies) {
       const event = {
