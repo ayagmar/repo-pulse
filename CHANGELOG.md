@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Each star milestone of a repository goes to one star only: a star at or past 10, 25,
+  50, 100, 250, 500, 1,000, 2,500, 5,000 or a multiple of 10,000 that no earlier star took
+  posts `🎉 owner/repo reached 1,000 stars`, observed after who starred, with the time since
+  the previous milestone (or since the repository was created) and the net recorded stars
+  of the last seven days, all decided and stored at acceptance. Unstarring and starring
+  again no longer repeats it, a jump past two milestones celebrates the higher one, and
+  milestones a repository had passed when this release first sees it are not celebrated.
+  A star whose milestone cannot be recorded is posted as a plain star. Discord delivery
+  stays at least once. Migration `0011` adds `star_milestone_baselines`, `star_milestones`
+  and the partial index `idx_events_star_repository`; the previous release runs with it
+  applied. Star events also store `starred_at` and the repository's `created_at`.
+- The log for a failed sender history write, `people.history_read_failed`, is now
+  `event_processor.enrichment_failed`, with `senderHistory` and `starMilestone` saying
+  which optional writes were attempted.
 - "⏳ Waiting on you" in the daily and weekly digests: open issues and pull requests where
   an outside person spoke last and nobody on the owner's side (the owner and
   `PEOPLE_IGNORED_LOGINS`) has answered, closed or merged it since, oldest wait first, up

@@ -46,7 +46,7 @@ export function mapGitHubEvent(
     switch (eventType) {
       case 'star': {
         if (action === 'created') {
-          return mapStarCreated(repository, sender);
+          return mapStarCreated(repository, sender, payload.starred_at);
         }
         if (action === 'deleted') {
           return mapStarDeleted(repository, sender);

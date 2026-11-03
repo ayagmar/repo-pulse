@@ -10,6 +10,7 @@ import type { FailureClassification } from '../models/failure-classification.js'
 import type { RepoEvent } from '../models/repo-event.js';
 import { deserializeRepoEvent, REPO_EVENT_TYPES } from '../models/repo-event.js';
 import { prepareEventHistoryInsert, THREAD_ACTIVATION } from './d1-event-history.js';
+import { prepareStarMilestoneStatements } from './d1-star-milestones.js';
 import type { D1DatabaseLike } from './d1-types.js';
 
 interface PersistDeliveryInput {
@@ -20,6 +21,8 @@ interface PersistDeliveryInput {
   maxAttempts: number;
   /** Record what was seen from this sender before, on the stored event. */
   rememberSenderId?: number;
+  /** For a star event: record its repository's milestones, and any it celebrates. */
+  recordStarMilestone?: boolean;
 }
 
 interface DeliveryForProcessing {
@@ -135,7 +138,9 @@ export class D1DeliveryLedger {
    * delivery, in one D1 batch. The delivery copies the event as recorded in `events`:
    * this one, or the one first accepted under this delivery id if its delivery row was
    * pruned since, so a history-only event is never queued, redelivered or not. The first
-   * recorded comment or review also sets the activation instant, which never moves.
+   * recorded comment or review also sets the activation instant, which never moves. With
+   * `recordStarMilestone`, a star event's milestone is decided in the same batch, before
+   * the delivery copies the event (see `prepareStarMilestoneStatements`).
    */
   async persistAcceptedDelivery(input: PersistDeliveryInput): Promise<PersistDeliveryResult> {
     const acceptedAt = new Date().toISOString();
@@ -173,18 +178,30 @@ export class D1DeliveryLedger {
         input.maxAttempts,
         input.deliveryId
       );
-    const statements = [
-      prepareEventHistoryInsert(this.db, {
-        deliveryId: input.deliveryId,
-        repository: input.repository,
-        event: input.event,
-        receivedAt: acceptedAt,
-        ...(input.rememberSenderId !== undefined
-          ? { rememberSenderId: input.rememberSenderId }
-          : {}),
-      }),
-    ];
-    const historyIndex = 0;
+    const { event } = input;
+    const milestone =
+      input.recordStarMilestone === true &&
+      (event.type === REPO_EVENT_TYPES.STAR_CREATED || event.type === REPO_EVENT_TYPES.STAR_DELETED)
+        ? prepareStarMilestoneStatements(this.db, {
+            deliveryId: input.deliveryId,
+            event,
+            acceptedAt,
+          })
+        : null;
+    const statements = [...(milestone?.beforeHistory ?? [])];
+    const historyIndex =
+      statements.push(
+        prepareEventHistoryInsert(this.db, {
+          deliveryId: input.deliveryId,
+          repository: input.repository,
+          event: input.event,
+          receivedAt: acceptedAt,
+          ...(input.rememberSenderId !== undefined
+            ? { rememberSenderId: input.rememberSenderId }
+            : {}),
+        })
+      ) - 1;
+    statements.push(...(milestone?.afterHistory ?? []));
     const deliveryIndex = statements.push(insertDelivery) - 1;
     const isConversation =
       input.event.type === REPO_EVENT_TYPES.COMMENT_CREATED ||

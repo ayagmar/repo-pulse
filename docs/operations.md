@@ -119,6 +119,14 @@ Issue comment and Pull request review deliveries feed comment and review alerts 
 - The waiting list covers threads with an event received in the last 90 days, the 200 most recently active, each with at most 100 stored events, up to 2,000 events among them. Logs: `thread_activity.digest_read_failed` (the read failed; the digest went out without the sections, or was skipped if it had nothing else) and `thread_activity.threads_omitted` (`incompleteThreads`: left out because a limit cut their history; `untimedThreads`: left out of waits and first replies because an event received since activation has no GitHub time).
 - Rolling back: unsubscribe the App from Issue comment and Pull request review, wait until `GET /admin/deliveries?status=pending,processing` lists no `comment.created` or `review.submitted` delivery, then deploy the previous release. It cannot format those events, so a queued one would fail. Migration `0010` stays; the previous release ignores its table and index.
 
+## Star milestones
+
+Each repository's milestones are celebrated once (see [the system design](system-design.md#star-milestones)). There is nothing to configure or subscribe.
+
+- Turning it on: `npm run deploy` applies migration `0011`. Each repository's first star event after that sets where its milestones start, from the highest star count recorded or seen so far; milestones at or below it are never celebrated. That first star is a plain alert.
+- Log: `event_processor.enrichment_failed` with `starMilestone: true` means the milestone tables could not be written for that star; it was accepted and posted as a plain star, and nothing of its milestone was recorded, so the next star can still celebrate it.
+- Rolling back: deploy the previous release. Migration `0011` stays and is ignored. That release does not keep milestones: it titles a star whose count equals a milestone `🎉 100 stars!`, again after an unstar and restar, and never after a jump. Stars it accepts are recorded without milestone decisions, so after deploying this release again, the next star past a milestone not yet assigned here celebrates it, even if the previous release already did.
+
 ## Discord actions
 
 With `DISCORD_ACTIONS=on`, issue-opened alerts carry **Close** and **Label…** buttons that only the users in `DISCORD_ALLOWED_USER_IDS` can use. [SETUP.md](../SETUP.md#discord-actions-optional) covers the Discord application and webhook; [the system design](system-design.md#discord-actions) covers the request checks and the work behind a click.

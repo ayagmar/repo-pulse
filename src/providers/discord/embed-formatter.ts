@@ -17,12 +17,15 @@ import type {
   PushEvent,
   ReleaseEvent,
   RepoEvent,
+  RepoEventOf,
   ReviewEvent,
   SenderHistory,
   StarEvent,
   Thread,
 } from '../../core/models/repo-event.js';
 import { REPO_EVENT_TYPES, REVIEW_STATES } from '../../core/models/repo-event.js';
+import type { StarMilestone } from '../../core/models/star-milestone.js';
+import { RECENT_STARS_DAYS, readStarMilestone } from '../../core/models/star-milestone.js';
 import { issueActionCustomId } from './interactions.js';
 
 /**
@@ -104,13 +107,6 @@ const COLORS = {
   comment: 0x6e7781,
 } as const;
 
-/** Star counts worth celebrating; past the last one, every further 10,000. */
-const STAR_MILESTONES = new Set([10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000]);
-
-function isStarMilestone(count: number): boolean {
-  return STAR_MILESTONES.has(count) || (count > 10_000 && count % 10_000 === 0);
-}
-
 const GITHUB_ICON_URL = 'https://github.githubassets.com/favicons/favicon.png';
 
 function truncate(str: string, maxLength: number): string {
@@ -187,15 +183,55 @@ function createEmbed(
   };
 }
 
-function formatStarEvent(event: StarEvent): DiscordWebhookPayload {
-  const removed = event.type === REPO_EVENT_TYPES.STAR_DELETED;
-  const milestone = !removed && isStarMilestone(event.star.count);
+/** How long from `from` to `to`, or null when either is not a time or `from` is later. */
+function durationBetween(from: string | undefined, to: string): string | null {
+  if (from === undefined) {
+    return null;
+  }
+  const milliseconds = Date.parse(to) - Date.parse(from);
+  return Number.isFinite(milliseconds) && milliseconds >= 0 ? formatDuration(milliseconds) : null;
+}
+
+/**
+ * A celebration, rendered only from what acceptance stored. The star is the first seen
+ * past the milestone, not proof its sender was the one who reached it.
+ */
+function formatStarMilestone(
+  event: RepoEventOf<'star.created'>,
+  milestone: StarMilestone
+): DiscordWebhookPayload {
+  const { previous, recentStars } = milestone;
+  const sincePrevious =
+    previous === null ? null : durationBetween(previous.reachedAt, milestone.reachedAt);
+  const sinceCreated =
+    previous === null ? durationBetween(event.repository.createdAt, milestone.reachedAt) : null;
+  const sign = recentStars.net > 0 ? '+' : '';
+  const lines = [
+    `Observed after ${senderLink(event)} starred ${repoLink(event)} · ⭐ **${event.star.count.toLocaleString('en-US')}** total`,
+    ...(previous !== null && sincePrevious !== null
+      ? [`⏱️ ${sincePrevious} since ${plural(previous.milestone, 'star')}`]
+      : []),
+    ...(sinceCreated !== null ? [`⏱️ ${sinceCreated} since the repository was created`] : []),
+    `📈 ${sign}${recentStars.net.toLocaleString('en-US')} net recorded star${Math.abs(recentStars.net) === 1 ? '' : 's'} in the last ${String(RECENT_STARS_DAYS)} days`,
+  ];
   return createEmbed(event, {
-    title: removed
-      ? '💫 Star removed'
-      : milestone
-        ? `🎉 ${event.star.count.toLocaleString('en-US')} stars!`
-        : '⭐ New star',
+    title: `🎉 ${event.repository.fullName} reached ${plural(milestone.milestone, 'star')}`,
+    url: event.repository.url,
+    description: lines.join('\n'),
+    color: COLORS.star,
+  });
+}
+
+function formatStarEvent(event: StarEvent): DiscordWebhookPayload {
+  if (event.type === REPO_EVENT_TYPES.STAR_CREATED) {
+    const milestone = readStarMilestone(event.starMilestone);
+    if (milestone !== null) {
+      return formatStarMilestone(event, milestone);
+    }
+  }
+  const removed = event.type === REPO_EVENT_TYPES.STAR_DELETED;
+  return createEmbed(event, {
+    title: removed ? '💫 Star removed' : '⭐ New star',
     url: event.repository.url,
     description: `${senderLink(event)} ${removed ? 'unstarred' : 'starred'} ${repoLink(event)}\n⭐ **${String(event.star.count)}** total`,
     color: COLORS.star,

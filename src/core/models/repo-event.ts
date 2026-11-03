@@ -3,6 +3,8 @@
  * Normalized representation of inbound repository activity.
  */
 
+import type { StarMilestone } from './star-milestone.js';
+
 export interface Repository {
   id: number;
   name: string;
@@ -14,6 +16,8 @@ export interface Repository {
   stars: number;
   forks: number;
   language: string | null;
+  /** GitHub's `created_at`, ISO 8601. Recorded on star events only, when the payload has it. */
+  createdAt?: string;
 }
 
 export interface User {
@@ -158,6 +162,11 @@ interface RepoEventPayloadMap {
     star: {
       count: number;
     };
+    /**
+     * The milestone this star was the first to be seen past, decided at acceptance.
+     * Absent for every other star, and for stars stored before milestones were.
+     */
+    starMilestone?: StarMilestone;
   };
   [REPO_EVENT_TYPES.STAR_DELETED]: {
     action: typeof REPO_EVENT_ACTIONS.DELETED;
@@ -244,8 +253,8 @@ interface BaseRepoEvent<TType extends RepoEventType, TAction extends string> {
   /** When the event was accepted: receipt time, not GitHub's. */
   timestamp: Date;
   /**
-   * When it happened on GitHub, ISO 8601, for issue, pull request, comment and review
-   * events whose payload has a valid time for it. Absent on events stored before it was
+   * When it happened on GitHub, ISO 8601, for star, issue, pull request, comment and
+   * review events whose payload has a valid time for it. Absent on events stored before it was
    * recorded and when the payload has none.
    */
   occurredAt?: string;

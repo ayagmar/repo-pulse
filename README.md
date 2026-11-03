@@ -32,7 +32,7 @@ Discord accepts GitHub webhooks directly: add `/github` to a channel's webhook U
 Repo Pulse is for when you want to choose what gets announced and keep a record of what was sent:
 
 - Pushes are announced only for the default branch, as one message with the latest commits. Bot pushes, branch deletions, and GitHub's own pull-request merge commits are skipped, because the merged pull request is announced already.
-- A star that reaches 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, or a multiple of 10,000 is announced as a milestone. A star removed and added back at that count is announced again.
+- Each repository's 10th, 25th, 50th, 100th, 250th, 500th, 1,000th, 2,500th, 5,000th star, and every 10,000 after that, goes to one star only, the first seen at or past it, whose alert becomes `🎉 myorg/repo reached 1,000 stars`, with who starred, how long since the previous milestone, and the net stars of the last seven days. A star removed and added back is not announced again, and a jump past two milestones announces the higher one. Milestones a repository had passed before this release are not announced late.
 - When at least 5 people star a repository in 3 hours, and that is 4 times what it usually gets, one alert says so, at most once a day per repository. With a GitHub token, it names the most-followed new stargazers and the sites sending visitors.
 - Failed Discord sends are retried with backoff, following Discord's rate-limit headers, up to 5 attempts.
 - If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).

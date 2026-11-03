@@ -76,6 +76,29 @@ describe('mapGitHubEvent', () => {
       expect(result.star.count).toBe(10);
     });
 
+    it("keeps GitHub's star time and the repository's creation time, when valid", () => {
+      const created = mapGitHubEvent('star', {
+        action: 'created',
+        starred_at: '2026-11-03T10:00:00Z',
+        repository: { ...mockRepo, created_at: '2025-01-02T03:04:05Z' },
+        sender: mockSender,
+      });
+      const deleted = mapGitHubEvent('star', {
+        action: 'deleted',
+        starred_at: null,
+        // Some payloads send a Unix time here; it is left out rather than misread.
+        repository: { ...mockRepo, created_at: 1_735_786_000 },
+        sender: mockSender,
+      });
+
+      expect(created).toMatchObject({
+        occurredAt: '2026-11-03T10:00:00.000Z',
+        repository: { createdAt: '2025-01-02T03:04:05.000Z' },
+      });
+      expect(deleted).not.toHaveProperty('occurredAt');
+      expect(deleted?.repository).not.toHaveProperty('createdAt');
+    });
+
     it('returns null for unknown star actions', () => {
       const result = mapGitHubEvent('star', {
         action: 'unknown',
