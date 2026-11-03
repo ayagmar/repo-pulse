@@ -61,7 +61,7 @@ Values configured in [`wrangler.jsonc`](../wrangler.jsonc):
 - `DELIVERY_DRAIN_BATCH_SIZE`: deliveries sent per drain pass. On the Workers Free plan an invocation may make 50 subrequests, D1 queries included, and a delivery takes about five, so keep it at 5 or below there.
 - `DIGEST_TIME_ZONE`: IANA time zone for the daily digest, such as `Europe/Paris`. Defaults to `UTC`.
 - `DIGEST_HOUR`: local hour, 0 to 23, when the daily digest, and on Mondays the weekly one, is posted. Defaults to `9`.
-- `DISCORD_ACTIONS`: `on` puts Close and Label buttons on issue alerts and opens `POST /discord/interactions`; `off` (committed) or unset leaves alerts as they were and the route at `404`. `on` needs the three `DISCORD_*` secrets below and `DISCORD_WEBHOOK_URL`; anything missing or malformed is a configuration error. See [Discord actions](#discord-actions).
+- `DISCORD_ACTIONS`: `on` puts Close and Label buttons on issue alerts and opens `POST /discord/interactions`; `off` or unset leaves alerts as they were and the route at `404`. `on` needs the three `DISCORD_*` secrets below and `DISCORD_WEBHOOK_URL`; anything missing or malformed is a configuration error. The committed `wrangler.jsonc` has it `on` for the maintainer's deployment; set it to `off` in your own copy until you have done the [Discord actions](#discord-actions) setup. See [Discord actions](#discord-actions).
 
 Secrets configured in `.dev.vars` or via `wrangler secret put`:
 

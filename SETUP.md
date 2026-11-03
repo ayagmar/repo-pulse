@@ -76,8 +76,11 @@ npm exec -- wrangler secret put ADMIN_API_TOKEN
 npm exec -- wrangler secret put DISCORD_WEBHOOK_URL
 ```
 
-Then create the [GitHub App](#github-app), set its three secrets, and deploy with
-`npm run deploy`. The Worker refuses to start without them.
+Then create the [GitHub App](#github-app), set its three secrets, set
+`"DISCORD_ACTIONS": "off"` in `wrangler.jsonc` unless you also do the
+[Discord actions](#discord-actions-optional) setup, and deploy with `npm run deploy`.
+The Worker refuses to start without the App's secrets, or with actions on and their
+secrets missing.
 
 `npm run deploy` applies pending D1 migrations, then deploys the Worker. Source maps and
 sampled traces are enabled in Wrangler configuration; deployment is required for those

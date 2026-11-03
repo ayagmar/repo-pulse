@@ -354,7 +354,10 @@ describe('webhook admission', () => {
 
   /** A star from a repository webhook: no `installation`, and no `fork` either. */
   function repositoryStar(): Record<string, unknown> {
-    return JSON.parse(createWebhookPayload()) as Record<string, unknown>;
+    const { installation: _installation, ...payload } = JSON.parse(
+      createWebhookPayload()
+    ) as Record<string, unknown>;
+    return payload;
   }
 
   function appStar(
@@ -443,7 +446,10 @@ describe('webhook admission', () => {
     info.mockClear();
 
     // A repository webhook carries no installation.
-    await expect(deliver('star', repositoryStar())).resolves.toMatchObject({ status: 200 });
+    await expect(deliver('star', repositoryStar())).resolves.toMatchObject({
+      status: 200,
+      body: { message: "Event 'star' ignored: Invalid installation" },
+    });
     // Not admitted, so not refused for lacking a repository either.
     await expect(deliver('star', { sender: {} })).resolves.toMatchObject({ status: 200 });
     for (const rejected of [
