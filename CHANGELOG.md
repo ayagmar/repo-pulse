@@ -7,10 +7,11 @@
   `PEOPLE_IGNORED_LOGINS`) has answered, closed or merged it since, oldest wait first, up
   to five plus `…and N more`. Bots never answer and never wait; labels are not answers.
   It counts from the first comment or review recorded, since earlier ones were never
-  stored, and covers threads with activity in the last 90 days. The weekly digest adds
-  "⏱️ Response times": median time to merge, and to a first reply, by GitHub's times. A
-  digest without activity is now posted when someone is waiting, headed "no new events".
-  Digests keep the whole embed within Discord's 6,000 characters.
+  stored, and covers threads with activity in the last 90 days and at most 100 events. The
+  weekly digest adds "⏱️ Response times": median time to merge, and to a first reply, by
+  GitHub's times; a reply or merge without GitHub's time is left out, not dated by its
+  arrival. A digest without activity is now posted when someone is waiting, headed "no
+  new events". Digests keep the whole embed within Discord's 6,000 characters.
 - Issue comment (`issue_comment.created`) and Pull request review
   (`pull_request_review.submitted`) deliveries are accepted as `comment.created` and
   `review.submitted`. Those from outside people alert with an excerpt and a link; the owner's side,

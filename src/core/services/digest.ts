@@ -38,13 +38,12 @@ const UNRELEASED_LOOKBACK_MS = 30 * DAY_MS;
 const UNRELEASED_MAX_REPOSITORIES = 20;
 
 /**
- * The waiting list and response times read every event of the threads active this
- * recently, at most this many threads and rows. A wait whose thread had no event in
- * the lookback is not listed.
+ * The waiting list and response times read the events of the threads active this
+ * recently: at most this many threads, events per thread and rows. A wait whose thread
+ * had no event in the lookback is not listed, nor one whose thread has more events.
  */
 const THREAD_LOOKBACK_MS = 90 * DAY_MS;
-const THREAD_LIMIT = 200;
-const THREAD_ROW_LIMIT = 2000;
+const THREAD_LIMITS = { threads: 200, eventsPerThread: 100, rows: 2000 };
 
 /** The weekly digest lists this many of the week's most active outside people. */
 const LISTED_PEOPLE = 5;
@@ -387,20 +386,17 @@ export class DigestSender {
     const end = window.end.getTime();
     let read = this.threadReads.get(end);
     if (read === undefined) {
-      read = this.history.readThreadActivity(
-        new Date(end - THREAD_LOOKBACK_MS),
-        THREAD_LIMIT,
-        THREAD_ROW_LIMIT
-      );
+      read = this.history.readThreadActivity(new Date(end - THREAD_LOOKBACK_MS), THREAD_LIMITS);
       this.threadReads.set(end, read);
     }
     try {
       const material = await read;
       const summary = summarizeThreadActivity(material, window, this.options.ignoredLogins);
-      if (summary.incompleteThreads > 0) {
+      if (summary.incompleteThreads > 0 || summary.untimedThreads > 0) {
         logger.warn('thread_activity.threads_omitted', {
           component: 'digest',
-          omittedThreads: summary.incompleteThreads,
+          incompleteThreads: summary.incompleteThreads,
+          untimedThreads: summary.untimedThreads,
         });
       }
       return summary;

@@ -44,7 +44,7 @@ const people = {
   alice: user('alice', 10),
   bob: user('bob', 11),
   carol: user('carol', 12),
-  collaborator: user('Collab', 13),
+  collaborator: user('Test-Collab', 13),
   bot: user('coderabbitai[bot]', 14),
 };
 
@@ -230,7 +230,7 @@ describe('waiting on you', () => {
     env = createTestEnv(database.databasePath, {
       DIGEST_TIME_ZONE: 'UTC',
       DIGEST_HOUR: '9',
-      PEOPLE_IGNORED_LOGINS: 'collab',
+      PEOPLE_IGNORED_LOGINS: 'test-collab',
     });
     cleanups.push(() => {
       env.DB.close();
@@ -297,10 +297,9 @@ describe('waiting on you', () => {
   ): Promise<ReturnType<typeof summarizeThreadActivity>> {
     const material = await new D1EventHistory(env.DB).readThreadActivity(
       new Date(Date.parse(asOf) - 90 * 24 * 60 * 60_000),
-      200,
-      2000
+      { threads: 200, eventsPerThread: 100, rows: 2000 }
     );
-    return summarizeThreadActivity(material, window, new Set(['collab']));
+    return summarizeThreadActivity(material, window, new Set(['test-collab']));
   }
 
   function activationOf(): unknown {
@@ -599,47 +598,56 @@ describe('waiting on you', () => {
       commentOn({ number: 99 }, people.owner, '2026-10-12T00:00:00Z'),
       '2026-10-12T00:00:01Z'
     );
+    // A pull request opened before creation times were recorded: its stored opened
+    // event's receipt time is the start, the one receipt-time fallback allowed.
     const legacy = new Database(databasePath);
-    // A merge stored before creation times were: its opened event gives the start.
-    const insert = legacy.prepare(
-      `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
-       VALUES (?, ?, 'myorg/repo', ?, ?)`
-    );
-    const legacyPullRequest = (state: string): Payload => ({
-      number: 30,
-      title: 'Legacy',
-      url: 'https://github.com/myorg/repo/pull/30',
-      state,
-      merged: state === 'closed',
-      body: null,
-      draft: false,
-      headBranch: 'a',
-      baseBranch: 'main',
-    });
-    const legacyEvent = (type: string, state: string): string =>
-      JSON.stringify({
-        type,
-        action: type === 'pull_request.opened' ? 'opened' : 'closed',
-        repository: { id: 1, fullName: 'myorg/repo', owner: 'myorg', url: '', private: false },
-        sender: { id: 11, login: 'bob', avatarUrl: '', url: '' },
-        timestamp: '2026-10-01T00:00:00.000Z',
-        pullRequest: legacyPullRequest(state),
-      });
-    insert.run(
-      'legacy-open',
-      'pull_request.opened',
-      '2026-10-10T00:00:00.000Z',
-      legacyEvent('pull_request.opened', 'open')
-    );
-    insert.run(
-      'legacy-merge',
-      'pull_request.merged',
-      '2026-10-13T00:00:00.000Z',
-      legacyEvent('pull_request.merged', 'closed')
-    );
+    legacy
+      .prepare(
+        `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+         VALUES ('legacy-open', 'pull_request.opened', 'myorg/repo', ?, ?)`
+      )
+      .run(
+        '2026-10-10T00:00:00.000Z',
+        JSON.stringify({
+          type: 'pull_request.opened',
+          action: 'opened',
+          repository: { id: 1, fullName: 'myorg/repo', owner: 'myorg', url: '', private: false },
+          sender: { id: 11, login: 'bob', avatarUrl: '', url: '' },
+          timestamp: '2026-10-10T00:00:00.000Z',
+          pullRequest: {
+            number: 30,
+            title: 'Legacy',
+            url: 'https://github.com/myorg/repo/pull/30',
+            state: 'open',
+            merged: false,
+            body: null,
+            draft: false,
+            headBranch: 'a',
+            baseBranch: 'main',
+          },
+        })
+      );
     legacy.close();
+    // A merge without a valid merge time: when it happened is unknown.
+    const untimedMerge = pullRequestAction(
+      'closed',
+      { number: 35 },
+      people.owner,
+      '2026-10-15T00:00:00Z',
+      { merged: true, createdAt: '2026-10-12T00:00:00Z' }
+    );
+    (untimedMerge.payload.pull_request as Payload).merged_at = null;
 
     const steps: [Delivery, string][] = [
+      // Merged after 3 days, from its legacy opened event.
+      [
+        pullRequestAction('closed', { number: 30 }, people.owner, '2026-10-13T00:00:00Z', {
+          merged: true,
+          createdAt: null,
+        }),
+        '2026-10-13T00:00:01Z',
+      ],
+      [untimedMerge, '2026-10-15T00:00:01Z'],
       // Merged after 2 days, its merge delivered after the week ended: counted by merge time.
       [
         pullRequestAction('closed', { number: 31 }, people.owner, '2026-10-14T00:00:00Z', {
@@ -735,7 +743,7 @@ describe('waiting on you', () => {
         ),
         '2026-10-14T02:00:01Z',
       ],
-      // Closed before anyone answered: no first reply.
+      // Closed without a word, reopened, then answered: the first reply took 3 days.
       [
         issueAction('opened', { number: 43 }, people.carol, '2026-10-13T00:00:00Z'),
         '2026-10-13T00:00:01Z',
@@ -745,12 +753,36 @@ describe('waiting on you', () => {
         '2026-10-13T01:00:01Z',
       ],
       [
-        commentOn(
-          { number: 43, createdAt: '2026-10-13T00:00:00Z', state: 'closed' },
-          people.owner,
-          '2026-10-13T02:00:00Z'
+        issueAction(
+          'reopened',
+          { number: 43, createdAt: '2026-10-13T00:00:00Z' },
+          people.carol,
+          '2026-10-14T00:00:00Z'
         ),
-        '2026-10-13T02:00:01Z',
+        '2026-10-14T00:00:01Z',
+      ],
+      [
+        commentOn(
+          { number: 43, createdAt: '2026-10-13T00:00:00Z' },
+          people.owner,
+          '2026-10-16T00:00:00Z'
+        ),
+        '2026-10-16T00:00:01Z',
+      ],
+      // Answered by a review without a submission time: when is unknown, so no sample.
+      [
+        pullRequestAction('opened', { number: 45 }, people.bob, '2026-10-13T00:00:00Z'),
+        '2026-10-13T00:00:01Z',
+      ],
+      [
+        review(
+          { number: 45, createdAt: '2026-10-13T00:00:00Z' },
+          people.owner,
+          null,
+          'approved',
+          null
+        ),
+        '2026-10-15T00:00:00Z',
       ],
       // Answered by a bot only.
       [
@@ -773,11 +805,13 @@ describe('waiting on you', () => {
     const week = { start: new Date('2026-10-12T09:00:00Z'), end: new Date('2026-10-19T09:00:00Z') };
     const summary = await waiting('2026-10-19T09:30:00Z', week);
 
-    // Merges: 3d for the legacy one, by receipt times, then 2d and 4d. First replies: 5h and 1h.
+    // Merges: 3d, 2d and 4d. First replies: 5h, 1h and 3d.
     expect(summary.responseTimes).toEqual({
       merge: { medianMs: 3 * 24 * 60 * 60_000, count: 3 },
-      firstReply: { medianMs: 3 * 60 * 60_000, count: 2 },
+      firstReply: { medianMs: 5 * 60 * 60_000, count: 3 },
     });
+    // The untimed merge and the untimed review leave their threads out of replies.
+    expect(summary.untimedThreads).toBe(2);
   });
 
   function posted(): {
@@ -836,6 +870,25 @@ describe('waiting on you', () => {
       "👥 Who's showing up",
     ]);
     expect(weekly?.fields?.[1]?.value).toBe('Merge: 2d 4h median (1 PR)');
+  });
+
+  it('reports merge times before any comment or review was recorded', async () => {
+    await deliver(
+      pullRequestAction('closed', { number: 20 }, people.owner, '2026-10-14T14:00:00Z', {
+        merged: true,
+        createdAt: '2026-10-13T10:00:00Z',
+      }),
+      '2026-10-14T14:00:01Z'
+    );
+    fetchMock.mockClear();
+
+    await sendDueDigests(env, new Date('2026-10-19T09:00:00Z'));
+
+    expect(activationOf()).toEqual([]);
+    const weekly = posted().find((embed) => embed.title.startsWith('📦'));
+    expect(weekly?.fields).toEqual([
+      { name: '⏱️ Response times', value: 'Merge: 1d 4h median (1 PR)' },
+    ]);
   });
 
   it('posts without the section when the threads cannot be read, and skips a digest left empty', async () => {
@@ -905,12 +958,18 @@ describe('waiting on you', () => {
         return env.DB.prepare(query);
       },
     });
-    await history.readThreadActivity(new Date('2026-07-01T00:00:00Z'), 200, 2000);
+    await history.readThreadActivity(new Date('2026-07-01T00:00:00Z'), {
+      threads: 200,
+      eventsPerThread: 100,
+      rows: 2000,
+    });
 
     const plan = (
       raw
         .prepare(`EXPLAIN QUERY PLAN ${queries[0] ?? ''}`)
-        .all('thread_replies', '2026-07-01T00:00:00.000Z', 200, 2000) as { detail: string }[]
+        .all('thread_replies', '2026-07-01T00:00:00.000Z', 200, 101, 100, 2000) as {
+        detail: string;
+      }[]
     ).map((step) => step.detail);
     expect(plan).toContainEqual(
       expect.stringContaining(

@@ -42,7 +42,9 @@ export function shouldAlert(event: RepoEvent, ignoredLogins: ReadonlySet<string>
 /** One stored event of a thread, with its times in milliseconds. */
 interface ThreadStep {
   row: ThreadEventRow;
-  /** GitHub's time, or receipt time when the event has none. */
+  /** GitHub's time, or null when the event has none. */
+  occurredAt: number | null;
+  /** GitHub's time, or else receipt time, which is never earlier: the sort key. */
   at: number;
   receivedAt: number;
   side: 'owner' | 'outside' | null;
@@ -119,11 +121,22 @@ interface ThreadSummary {
   firstReplyMs: number | null;
   /** Milliseconds from creation to merge, if merged in the window. */
   mergeMs: number | null;
+  /** Whether the waiting list and first reply had to leave the thread out. */
+  untimed: boolean;
 }
 
+/**
+ * One thread's wait and durations. Ordering needs GitHub's times. An event without one
+ * received before activation happened before it too, as receipt never precedes
+ * occurrence, so its receipt time orders it among what came before activation, which
+ * no wait or first reply counts from. One received since could have happened at any
+ * time before its receipt, so the thread's wait and first reply are left out rather
+ * than guessed. Merge time needs GitHub's merge time; its start may fall back to a
+ * stored opened event's receipt time, for pull requests recorded before creation times.
+ */
 function summarizeThread(
   rows: readonly ThreadEventRow[],
-  activatedAt: number,
+  activatedAt: number | null,
   window: { start: number; end: number },
   ignoredLogins: ReadonlySet<string>
 ): ThreadSummary {
@@ -133,10 +146,12 @@ function summarizeThread(
       if (receivedAt === null) {
         return [];
       }
+      const occurredAt = parseTime(row.occurredAt);
       return [
         {
           row,
-          at: parseTime(row.occurredAt) ?? receivedAt,
+          occurredAt,
+          at: occurredAt ?? receivedAt,
           receivedAt,
           side: conversationSide(
             { id: row.senderId, login: row.senderLogin },
@@ -148,6 +163,10 @@ function summarizeThread(
     })
     .sort(compareSteps);
   const inWindow = (time: number): boolean => time >= window.start && time < window.end;
+  const untimed =
+    activatedAt !== null &&
+    steps.some((step) => step.occurredAt === null && step.receivedAt >= activatedAt);
+  const tracksReplies = activatedAt !== null && !untimed;
 
   let state: string | null = null;
   let draft: boolean | null = null;
@@ -157,10 +176,9 @@ function summarizeThread(
   let mergedAt: number | null = null;
   // The outside request the owner's side has not answered, nor closed, since.
   let pending: ThreadStep | null = null;
-  // The thread's first outside request, and what came first after it.
+  // The thread's first outside request, and the first answer after it.
   let firstRequest: ThreadStep | null = null;
   let firstReplyAt: number | null = null;
-  let endedUnanswered = false;
 
   for (const step of steps) {
     const { row } = step;
@@ -172,20 +190,20 @@ function summarizeThread(
       openedAt ??= step.at;
     }
     if (row.eventType === REPO_EVENT_TYPES.PULL_REQUEST_MERGED) {
-      mergedAt ??= step.at;
+      mergedAt ??= step.occurredAt;
+    }
+    if (!tracksReplies) {
+      continue;
     }
 
     if (isOwnerReply(step)) {
       pending = null;
-      if (firstRequest !== null && firstReplyAt === null && !endedUnanswered) {
+      if (firstRequest !== null && firstReplyAt === null) {
         firstReplyAt = step.at;
       }
     } else if (ENDING_TYPES.has(row.eventType)) {
       // Closing or merging ends the wait, but it is not an answer.
       pending = null;
-      if (firstRequest !== null && firstReplyAt === null) {
-        endedUnanswered = true;
-      }
     } else if (step.at >= activatedAt && isOutsideRequest(step)) {
       pending ??= step;
       firstRequest ??= step;
@@ -218,7 +236,7 @@ function summarizeThread(
       firstRequest !== null &&
       firstReplyAt !== null &&
       createdAt !== null &&
-      createdAt >= activatedAt &&
+      createdAt >= (activatedAt ?? Infinity) &&
       inWindow(firstReplyAt)
         ? firstReplyAt - firstRequest.at
         : null,
@@ -226,6 +244,7 @@ function summarizeThread(
       mergedAt !== null && startedAt !== null && inWindow(mergedAt) && mergedAt >= startedAt
         ? mergedAt - startedAt
         : null,
+    untimed,
   };
 }
 
@@ -248,6 +267,11 @@ export interface ThreadActivitySummary {
   responseTimes: ResponseTimes;
   /** Threads left out because the read did not return all their events. */
   incompleteThreads: number;
+  /**
+   * Threads left out of the waiting list and first replies because an event received
+   * since activation has no GitHub time.
+   */
+  untimedThreads: number;
 }
 
 /**
@@ -258,12 +282,15 @@ export interface ThreadActivitySummary {
  * (see `isOutsideRequest`) came after the owner's side last answered and after it was
  * last closed. Labels are not answers. Only requests at or after the activation instant
  * count: comments were not recorded before it, so an earlier answer cannot be known.
- * A thread whose open state or draft state no stored event shows does not wait.
+ * A thread whose open state or draft state no stored event shows does not wait. Before
+ * activation, nothing waits and there are no first replies.
  *
  * Merge time runs from the pull request's creation, or its stored opened event, to its
- * merge. First-reply time runs from a thread's first outside request to the first
- * answer after it, for threads created at or after activation and not closed before an
- * answer. Both count in the window when the merge or answer happened on GitHub.
+ * merge on GitHub, and does not depend on activation. First-reply time runs from a
+ * thread's first outside request to the first answer after it, closed and reopened in
+ * between or not, for threads created at or after activation. Both count in the window
+ * when the merge or answer happened on GitHub. See `summarizeThread` for events without
+ * GitHub's time.
  */
 export function summarizeThreadActivity(
   material: ThreadActivityMaterial,
@@ -271,15 +298,6 @@ export function summarizeThreadActivity(
   ignoredLogins: ReadonlySet<string>
 ): ThreadActivitySummary {
   const activatedAt = parseTime(material.activatedAt);
-  const empty: ThreadActivitySummary = {
-    waiting: [],
-    responseTimes: { merge: null, firstReply: null },
-    incompleteThreads: 0,
-  };
-  if (activatedAt === null) {
-    return empty;
-  }
-
   const threads = new Map<string, ThreadEventRow[]>();
   for (const row of material.rows) {
     const key = `${String(row.repositoryId)}#${String(row.number)}`;
@@ -293,12 +311,17 @@ export function summarizeThreadActivity(
   const firstReplies: number[] = [];
   const merges: number[] = [];
   let incompleteThreads = 0;
+  let untimedThreads = 0;
   for (const rows of threads.values()) {
-    if (rows.length < (rows[0]?.threadEvents ?? 0)) {
+    const threadEvents = rows[0]?.threadEvents ?? null;
+    if (threadEvents === null || rows.length < threadEvents) {
       incompleteThreads += 1;
       continue;
     }
     const summary = summarizeThread(rows, activatedAt, bounds, ignoredLogins);
+    if (summary.untimed) {
+      untimedThreads += 1;
+    }
     if (summary.waiting !== null) {
       waiting.push(summary.waiting);
     }
@@ -320,5 +343,6 @@ export function summarizeThreadActivity(
     waiting,
     responseTimes: { merge: median(merges), firstReply: median(firstReplies) },
     incompleteThreads,
+    untimedThreads,
   };
 }

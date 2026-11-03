@@ -154,8 +154,11 @@ export interface ThreadEventRow {
   reviewState: string | null;
   /** 1 when the comment or review has a body. */
   hasBody: number;
-  /** How many events the thread has in all, returned or not. */
-  threadEvents: number;
+  /**
+   * How many events the thread has in all, returned or not, or null when it has more
+   * than the read's per-thread limit.
+   */
+  threadEvents: number | null;
 }
 
 export interface ThreadActivityMaterial {
@@ -223,16 +226,18 @@ export class D1EventHistory {
   }
 
   /**
-   * Every stored event of the `threadLimit` threads most recently active since `since`,
-   * oldest first per thread, up to `rowLimit` rows, and the activation instant. Nothing
-   * before activation. Each row carries its thread's full event count, so a thread cut
-   * by `rowLimit` can be told apart and left out. One query: candidates through the
-   * type and time index, their events through the thread index, whatever their age.
+   * The stored events of the `threadLimit` threads most recently active since `since`,
+   * oldest first per thread, and the activation instant, if any. One query: candidates
+   * through the type and time index, then each one's events, whatever their age, through
+   * the thread index, reading at most `threadEventLimit + 1` of them per thread, and
+   * returning at most `rowLimit` rows. Each row carries how many events its thread has,
+   * or null when it has more than `threadEventLimit`, so a thread that is too long, or
+   * cut by `rowLimit`, can be told apart and left out. What it costs in D1 rows read is
+   * bounded by these limits, not by the history.
    */
   async readThreadActivity(
     since: Date,
-    threadLimit: number,
-    rowLimit: number
+    limits: { threads: number; eventsPerThread: number; rows: number }
   ): Promise<ThreadActivityMaterial> {
     const rows = await this.db
       .prepare(
@@ -247,7 +252,6 @@ export class D1EventHistory {
            FROM events INDEXED BY idx_events_type_received_at
            WHERE ${THREAD_EVENTS_WHERE}
              AND received_at >= ?
-             AND EXISTS (SELECT 1 FROM activation)
            GROUP BY repositoryId, threadNumber
            ORDER BY lastReceivedAt DESC, repositoryId ASC, threadNumber ASC
            LIMIT ?
@@ -257,15 +261,19 @@ export class D1EventHistory {
              candidates.lastReceivedAt,
              candidates.repositoryId,
              candidates.threadNumber,
-             delivery_id AS deliveryId,
-             event_type AS eventType,
-             received_at AS receivedAt,
-             event_json AS eventJson
+             events.delivery_id AS deliveryId,
+             events.event_type AS eventType,
+             events.received_at AS receivedAt,
+             events.event_json AS eventJson
            FROM candidates
-           JOIN events INDEXED BY idx_events_thread
-             ON ${THREAD_REPOSITORY_ID} = candidates.repositoryId
-            AND ${THREAD_NUMBER} = candidates.threadNumber
-           WHERE ${THREAD_EVENTS_WHERE}
+           JOIN events ON events.rowid IN (
+             SELECT rowid
+             FROM events INDEXED BY idx_events_thread
+             WHERE ${THREAD_REPOSITORY_ID} = candidates.repositoryId
+               AND ${THREAD_NUMBER} = candidates.threadNumber
+               AND ${THREAD_EVENTS_WHERE}
+             LIMIT ?
+           )
          )
          SELECT
            deliveryId,
@@ -315,14 +323,22 @@ export class D1EventHistory {
            json_extract(eventJson, '$.review.state') AS reviewState,
            (json_type(eventJson, '$.comment.body') = 'text'
              OR json_type(eventJson, '$.review.body') = 'text') AS hasBody,
-           COUNT(*) OVER (PARTITION BY repositoryId, threadNumber) AS threadEvents,
+           CASE WHEN COUNT(*) OVER (PARTITION BY repositoryId, threadNumber) <= ?
+             THEN COUNT(*) OVER (PARTITION BY repositoryId, threadNumber) END AS threadEvents,
            (SELECT activated_at FROM activation) AS activatedAt
          FROM thread_events
          ORDER BY lastReceivedAt DESC, repositoryId ASC, threadNumber ASC,
            receivedAt ASC, deliveryId ASC
          LIMIT ?`
       )
-      .bind(THREAD_ACTIVATION, since.toISOString(), threadLimit, rowLimit)
+      .bind(
+        THREAD_ACTIVATION,
+        since.toISOString(),
+        limits.threads,
+        limits.eventsPerThread + 1,
+        limits.eventsPerThread,
+        limits.rows
+      )
       .all<ThreadEventRow & { activatedAt: string }>();
 
     return {
