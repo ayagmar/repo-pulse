@@ -143,7 +143,7 @@ describe('scripts/check-secrets.sh', () => {
         '',
       ].join('\n'),
       'src/config.ts': "throw new Error('Invalid GITHUB_APP_ID: expected a number');\n",
-      'wrangler.jsonc': '{ "vars": { "GITHUB_WEBHOOK_SOURCES": "repository" } }\n',
+      'wrangler.jsonc': '{ "vars": { "DISCORD_ACTIONS": "off" } }\n',
     });
 
     expect(stderr).toBe('');

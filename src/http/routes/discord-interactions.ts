@@ -40,8 +40,8 @@ export function createDiscordInteractionRoutes(): Hono<HttpEnv> {
     const actions = config.discord.actions;
     const app = config.github.app;
     const webhookUrl = config.discord.webhookUrl;
-    // createConfig enables actions only with the App and the webhook configured.
-    if (actions === undefined || app === undefined || webhookUrl === undefined) {
+    // createConfig enables actions only with the webhook configured.
+    if (actions === undefined || webhookUrl === undefined) {
       return c.notFound();
     }
 
@@ -124,7 +124,7 @@ export function createDiscordInteractionRoutes(): Hono<HttpEnv> {
           actionLog: new D1DiscordActions(c.env.DB),
           eventHistory,
           issues: new GitHubIssueActions((request) => auth.installationToken(request), redactor),
-          // Never GITHUB_TOKEN or the App's token: they can read private repositories.
+          // Never the App's token: it can read private repositories.
           isPublicSource: (repository) =>
             new RepositoryVisibilityGate().isPublicSource(repository, c.env.GITHUB_PUBLIC_TOKEN),
           webhookUrl,

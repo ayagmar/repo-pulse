@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -147,6 +148,42 @@ export function createTestD1Database(databasePath: string): TestD1Database {
   };
 }
 
+/**
+ * Passes config but cannot sign, so a token mint fails before any request, as a
+ * GitHub outage would. Tests that need a token use `mintingApp()`.
+ */
+const UNUSABLE_APP_KEY = [
+  '-----BEGIN PRIVATE KEY-----',
+  'test-only',
+  '-----END PRIVATE KEY-----',
+].join('\n');
+
+/** A fresh PKCS#8 PEM key, so no key is ever committed. */
+function generateAppPrivateKey(): string {
+  return generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  }).privateKey;
+}
+
+/**
+ * Overrides for an App that can mint tokens. Its own installation, because the
+ * token cache lives as long as the module: another test on the default installation
+ * must not pick up a token minted here.
+ */
+export function mintingApp(): Pick<
+  ConfigEnv,
+  'GITHUB_APP_PRIVATE_KEY' | 'GITHUB_APP_INSTALLATION_ID'
+> {
+  return { GITHUB_APP_PRIVATE_KEY: generateAppPrivateKey(), GITHUB_APP_INSTALLATION_ID: String(2) };
+}
+
+/** GitHub's answer to an installation token request, valid past every test clock. */
+export function installationTokenResponse(token: string): Response {
+  return Response.json({ token, expires_at: '2099-01-01T00:00:00Z' }, { status: 201 });
+}
+
 export function createTestEnv(databasePath: string, overrides: TestEnvOverrides = {}): TestEnv {
   return {
     DB: createTestD1Database(databasePath),
@@ -157,6 +194,9 @@ export function createTestEnv(databasePath: string, overrides: TestEnvOverrides 
     GITHUB_WEBHOOK_SECRET: 'test-secret',
     ADMIN_API_TOKEN: 'admin-token',
     DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only',
+    GITHUB_APP_ID: String(1),
+    GITHUB_APP_INSTALLATION_ID: String(1),
+    GITHUB_APP_PRIVATE_KEY: UNUSABLE_APP_KEY,
     ...overrides,
   } as TestEnv;
 }

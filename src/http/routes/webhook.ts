@@ -115,38 +115,22 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
       );
     }
 
-    if (!config.github.webhookSources.has(inbound.source)) {
+    const rejection = rejectAppDelivery(inbound.payload, config.github.app.installationId);
+    if (rejection !== null) {
+      logger.info('webhook.app_delivery_rejected', {
+        component: 'webhook',
+        deliveryId: inbound.deliveryId,
+        eventType: inbound.eventType,
+        reason: rejection,
+      });
       return c.json<WebhookSuccessResponse>(
         {
           success: true,
-          message: `Event '${inbound.eventType}' ignored: ${inbound.source} deliveries are not admitted`,
+          message: `Event '${inbound.eventType}' ignored: ${rejection}`,
           eventType: inbound.eventType,
         },
         200
       );
-    }
-
-    if (inbound.source === 'app') {
-      // createConfig admits `app` only with the App configured; this check fails closed.
-      const rejection = config.github.app
-        ? rejectAppDelivery(inbound.payload, config.github.app.installationId)
-        : 'GitHub App is not configured';
-      if (rejection !== null) {
-        logger.info('webhook.app_delivery_rejected', {
-          component: 'webhook',
-          deliveryId: inbound.deliveryId,
-          eventType: inbound.eventType,
-          reason: rejection,
-        });
-        return c.json<WebhookSuccessResponse>(
-          {
-            success: true,
-            message: `Event '${inbound.eventType}' ignored: ${rejection}`,
-            eventType: inbound.eventType,
-          },
-          200
-        );
-      }
     }
 
     let repository: string;

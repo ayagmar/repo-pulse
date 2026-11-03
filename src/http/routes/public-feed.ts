@@ -88,7 +88,7 @@ export function createPublicFeedRoutes(
 
   /** What both routes build from, apart from their material: the shared gate and the caches. */
   const shared = (c: Context<HttpEnv>): SharedSources => ({
-    // Never GITHUB_TOKEN: it can read private repositories.
+    // Never the App's token: it can read private repositories.
     admit: (repositories, lookupBudget) =>
       gate.admit(repositories, lookupBudget, c.env.GITHUB_PUBLIC_TOKEN),
     cache: defaultCache(),

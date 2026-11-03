@@ -12,7 +12,14 @@ import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { D1DigestLog } from '../core/services/d1-digest-log.js';
 import { D1EventHistory } from '../core/services/d1-event-history.js';
 import { dueDigestWindow } from '../core/services/digest.js';
-import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
+import {
+  createTempDatabasePath,
+  createTestEnv,
+  installationTokenResponse,
+  mintingApp,
+} from './test-helpers.js';
+
+const app = mintingApp();
 
 const HOUR_MS = 60 * 60_000;
 
@@ -465,12 +472,14 @@ describe('digests', () => {
   it('lists repositories with commits since their latest release, most commits first', async () => {
     fetchMock.mockImplementation((url: string, init: RequestInit) =>
       Promise.resolve(
-        url === 'https://api.github.com/graphql'
-          ? fakeGitHub(init)
-          : new Response(null, { status: 204 })
+        url.endsWith('/access_tokens')
+          ? installationTokenResponse('test-github-token')
+          : url === 'https://api.github.com/graphql'
+            ? fakeGitHub(init)
+            : new Response(null, { status: 204 })
       )
     );
-    const env = createDigestEnv({ GITHUB_TOKEN: 'test-github-token' });
+    const env = createDigestEnv(app);
     await record(env, '2026-09-01T12:00:00.000Z', [push('dormant', 1)]);
     await record(env, '2026-09-25T12:00:00.000Z', [push('docs', 2), push('draft', 1)]);
     await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1), push('cli', 1)]);
@@ -498,6 +507,9 @@ describe('digests', () => {
     const timeout = new AbortController();
     vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
     fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.endsWith('/access_tokens')) {
+        return Promise.resolve(installationTokenResponse('test-github-token'));
+      }
       if (url !== 'https://api.github.com/graphql') {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
@@ -510,7 +522,7 @@ describe('digests', () => {
         });
       });
     });
-    const env = createDigestEnv({ GITHUB_TOKEN: 'test-github-token' });
+    const env = createDigestEnv(app);
     await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
 
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
@@ -522,12 +534,12 @@ describe('digests', () => {
   it('still posts the daily digest when GitHub fails', async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(
-        url === 'https://api.github.com/graphql'
+        url.startsWith('https://api.github.com/')
           ? new Response('Bad credentials', { status: 401 })
           : new Response(null, { status: 204 })
       )
     );
-    const env = createDigestEnv({ GITHUB_TOKEN: 'test-expired-token' });
+    const env = createDigestEnv(app);
     await record(env, '2026-10-14T12:00:00.000Z', [push('web', 1)]);
 
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));

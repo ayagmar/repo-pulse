@@ -29,8 +29,7 @@ function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime']
   logger.setLevel(config.server.logLevel);
   const redactor = new Redactor([
     config.github.webhookSecret,
-    config.github.apiToken,
-    config.github.app?.privateKey,
+    config.github.app.privateKey,
     config.admin.apiToken,
     config.discord.webhookUrl,
     env.GITHUB_PUBLIC_TOKEN,
@@ -106,27 +105,18 @@ export async function drainDueDeliveries(
  * failed mint is not retried until the next invocation.
  */
 export class InvocationInsights {
-  private insights: RepositoryInsights | null | undefined;
+  private insights: RepositoryInsights | undefined;
 
-  get(runtime: HttpEnv['Variables']['runtime']): RepositoryInsights | null {
+  get(runtime: HttpEnv['Variables']['runtime']): RepositoryInsights {
     this.insights ??= createInsights(runtime);
     return this.insights;
   }
 }
 
-/** The App's installation token when the App is configured, else `GITHUB_TOKEN`. */
-function createInsights({
-  config,
-  redactor,
-}: HttpEnv['Variables']['runtime']): GitHubInsights | null {
-  const { app, apiToken } = config.github;
-  if (app) {
-    const auth = new GitHubAppAuth(app, redactor);
-    return new GitHubInsights(() => auth.installationToken(READ_TOKEN), redactor);
-  }
-  return apiToken === undefined
-    ? null
-    : new GitHubInsights(() => Promise.resolve(apiToken), redactor);
+/** Insights read with the App's installation token. */
+function createInsights({ config, redactor }: HttpEnv['Variables']['runtime']): GitHubInsights {
+  const auth = new GitHubAppAuth(config.github.app, redactor);
+  return new GitHubInsights(() => auth.installationToken(READ_TOKEN), redactor);
 }
 
 export async function sendDueDigests(

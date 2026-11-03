@@ -857,8 +857,8 @@ describe('public feed', () => {
     });
   });
 
-  it('looks up with the public-only token, never with GITHUB_TOKEN', async () => {
-    env = { ...env, GITHUB_TOKEN: 'test-private-token', GITHUB_PUBLIC_TOKEN: 'test-public-token' };
+  it('looks up with the public-only token, never with the App token', async () => {
+    env = { ...env, GITHUB_PUBLIC_TOKEN: 'test-public-token' };
     visibility.set('ayagmar/runnerd', 'public');
     visibility.set('ayagmar/trellis', 'private');
     await record(push('ayagmar/runnerd'), '2026-10-25T21:14:00.000Z');
