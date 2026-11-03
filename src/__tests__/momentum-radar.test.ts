@@ -188,9 +188,14 @@ describe('momentum radar', () => {
 
     expect(postedEmbeds()).toEqual([
       expect.objectContaining({
-        title: '🚀 myorg/cli is taking off',
-        description: '⭐ **6 stars** in the last 3 hours, against about 0.1 usually. **20** total.',
+        title: '📈 myorg/cli is taking off',
+        description: '**6 stars** in 3 hours (usually under 1 per 3 hours). 20 stars in total.',
         fields: [
+          {
+            name: 'Latest stars',
+            value:
+              '[c](https://github.com/c), [known](https://github.com/known), [b](https://github.com/b), [a](https://github.com/a), [famous](https://github.com/famous) and 1 more',
+          },
           {
             name: 'Notable stargazers',
             value: [
@@ -199,7 +204,7 @@ describe('momentum radar', () => {
             ].join('\n'),
           },
           {
-            name: 'Top referrers, last 14 days',
+            name: 'Where visitors came from (14 days)',
             value: [
               'news.ycombinator.com · 480 views from 410 visitors',
               'github.com · 35 views from 20 visitors',
@@ -257,10 +262,10 @@ describe('momentum radar', () => {
     const afterFirstCheck = postedEmbeds().map((embed) => embed.title);
     await check(env, '2026-10-15T12:15:00.000Z');
 
-    expect(afterFirstCheck).toEqual(['🚀 myorg/web is taking off']);
+    expect(afterFirstCheck).toEqual(['📈 myorg/web is taking off']);
     expect(postedEmbeds().map((embed) => embed.title)).toEqual([
-      '🚀 myorg/web is taking off',
-      '🚀 myorg/cli is taking off',
+      '📈 myorg/web is taking off',
+      '📈 myorg/cli is taking off',
     ]);
   });
 
@@ -292,11 +297,11 @@ describe('momentum radar', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(postedEmbeds()[1]).toMatchObject({
-      description: '⭐ **5 stars** in the last 3 hours, up from almost none. **5** total.',
+      description: '**5 stars** in 3 hours (usually almost none). 5 stars in total.',
     });
   });
 
-  it('still alerts, without stargazers or referrers, when GitHub fails', async () => {
+  it('still alerts, naming the latest stars but no notable stargazers or referrers, when GitHub fails', async () => {
     fetchMock.mockImplementation((url) =>
       Promise.resolve(
         url.startsWith('https://api.github.com/')
@@ -311,7 +316,7 @@ describe('momentum radar', () => {
     await check(env, now.toISOString());
 
     expect(postedEmbeds()).toHaveLength(1);
-    expect(postedEmbeds()[0]?.fields).toBeUndefined();
+    expect(postedEmbeds()[0]?.fields?.map((field) => field.name)).toEqual(['Latest stars']);
   });
 
   it('retries an alert at the next check when building it fails', async () => {

@@ -757,7 +757,7 @@ describe('Discord interactions', () => {
       expect(last?.body).toMatchObject({
         embeds: [
           {
-            title: '🐛 Opened issue #12: Crash on start',
+            title: '🟢 Opened issue #12: Crash on start',
             fields: [
               {
                 name: 'Actions',

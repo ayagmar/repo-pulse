@@ -13,7 +13,7 @@ import type { D1DigestLog } from './d1-digest-log.js';
 import type { D1EventHistory, EventActivity, ThreadActivityMaterial } from './d1-event-history.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
-import { isOutsidePerson } from './people.js';
+import { isBotLogin, isOutsidePerson } from './people.js';
 import { summarizeThreadActivity } from './thread-activity.js';
 
 const MINUTE_MS = 60_000;
@@ -171,11 +171,17 @@ function emptyActivity(event: EventActivity): RepositoryActivity {
     forks: 0,
     commits: 0,
     pullRequestsOpened: 0,
+    pullRequestsOpenedByBots: 0,
     pullRequestsMerged: [],
     issuesOpened: 0,
     issuesClosed: 0,
     releases: [],
   };
+}
+
+/** The author is the pull request's, not whoever acted on it, when the event recorded it. */
+function openedByBot(event: EventActivity): boolean {
+  return isBotLogin(event.pullRequestAuthor ?? event.senderLogin ?? '');
 }
 
 function summarizeRepositories(events: readonly EventActivity[]): RepositoryActivity[] {
@@ -202,6 +208,9 @@ function summarizeRepositories(events: readonly EventActivity[]): RepositoryActi
         break;
       case REPO_EVENT_TYPES.PULL_REQUEST_OPENED:
         activity.pullRequestsOpened += 1;
+        if (openedByBot(event)) {
+          activity.pullRequestsOpenedByBots += 1;
+        }
         break;
       case REPO_EVENT_TYPES.PULL_REQUEST_MERGED:
         if (
@@ -213,6 +222,7 @@ function summarizeRepositories(events: readonly EventActivity[]): RepositoryActi
             number: event.pullRequestNumber,
             title: event.pullRequestTitle,
             url: event.pullRequestUrl,
+            byBot: openedByBot(event),
           });
         }
         break;

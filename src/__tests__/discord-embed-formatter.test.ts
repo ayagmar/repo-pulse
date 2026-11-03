@@ -108,9 +108,11 @@ describe('formatDiscordEmbed', () => {
       )
     );
 
-    expect(added.description).toContain(' starred ');
-    expect(added.description).toContain('**100**');
-    expect(removed.title).not.toBe(added.title);
+    expect(added.title).toBe('⭐ New star · 100 total');
+    expect(added.description).toBe(
+      '[testuser](https://github.com/testuser) starred this repository'
+    );
+    expect(removed.title).toBe('💫 Star removed · 99 total');
     expect(removed.description).toContain('unstarred');
   });
 
@@ -132,17 +134,17 @@ describe('formatDiscordEmbed', () => {
     // Exact counts without a stored milestone: a fallback, a duplicate, a seeded one, or
     // an event stored before milestones were.
     for (const count of [10, 1000, 30_000]) {
-      expect(getFirstEmbed(formatDiscordEmbed(star(count))).title).toBe('⭐ New star');
+      expect(getFirstEmbed(formatDiscordEmbed(star(count))).title).toMatch(/^⭐ New star · /);
     }
-    expect(getFirstEmbed(formatDiscordEmbed(star(1000, { milestone: 999 }))).title).toBe(
-      '⭐ New star'
+    expect(getFirstEmbed(formatDiscordEmbed(star(1000, { milestone: 999 }))).title).toMatch(
+      /^⭐ New star · /
     );
 
     const celebration = getFirstEmbed(formatDiscordEmbed(star(1003, stored)));
     expect(celebration.title).toBe('🎉 owner/test-repo reached 1,000 stars');
     expect(celebration.description).toBe(
       [
-        'Observed after [testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo) · ⭐ **1,003** total',
+        'Observed after [testuser](https://github.com/testuser) starred this repository · **1,003** total',
         '⏱️ 33d since 500 stars',
         '📈 +42 net recorded stars in the last 7 days',
       ].join('\n')
@@ -154,7 +156,7 @@ describe('formatDiscordEmbed', () => {
     created.repository = { ...created.repository, createdAt: '2026-10-20T12:00:00.000Z' };
     expect(getFirstEmbed(formatDiscordEmbed(created)).description).toBe(
       [
-        'Observed after [testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo) · ⭐ **10** total',
+        'Observed after [testuser](https://github.com/testuser) starred this repository · **10** total',
         '⏱️ 14d since the repository was created',
         '📈 -1 net recorded star in the last 7 days',
       ].join('\n')
@@ -224,10 +226,11 @@ describe('formatDiscordEmbed', () => {
       )
     );
 
-    expect(templateOnly.description).toBeUndefined();
-    expect(long.description).not.toContain('hidden');
-    expect(long.description?.length).toBeLessThanOrEqual(300);
-    expect(long.description?.endsWith('...')).toBe(true);
+    expect(templateOnly.description).toBe('+100 −20 in 5 files');
+    const excerpt = long.description?.split('\n\n')[1] ?? '';
+    expect(excerpt).not.toContain('hidden');
+    expect(excerpt.length).toBeLessThanOrEqual(300);
+    expect(excerpt.endsWith('…')).toBe(true);
   });
 
   it('distinguishes opened, draft, merged and closed pull requests by title and color', () => {
@@ -259,9 +262,8 @@ describe('formatDiscordEmbed', () => {
     for (const embed of embeds) {
       expect(embed.title).toContain('#456: feat: Add new feature');
     }
-    expect(embeds[0]?.fields?.find((field) => field.name === 'Changes')?.value).toBe(
-      '+100 −20 in 5 files'
-    );
+    expect(embeds[0]?.description).toMatch(/^\+100 −20 in 5 files\n\n/);
+    expect(embeds[0]?.fields).toBeUndefined();
   });
 
   it('links forks to the new repository', () => {
@@ -345,8 +347,7 @@ describe('formatDiscordEmbed', () => {
     const release = format(false);
 
     expect(release.title).toBe('🚀 Released Spring cleaning');
-    expect(release.description).toBe('## Changes\n- faster');
-    expect(release.fields).toEqual([{ name: 'Tag', value: '`v1.2.0`', inline: true }]);
+    expect(release.description).toBe('tag `v1.2.0`\n\nChanges\n\n- faster');
     expect(format(true).title).toBe('🧪 Pre-release Spring cleaning');
     expect(format(true).color).not.toBe(release.color);
   });
@@ -381,9 +382,10 @@ describe('formatDiscordEmbed', () => {
     const embed = getFirstEmbed(formatDiscordEmbed(event));
 
     expect(embed.timestamp).toBe(event.timestamp.toISOString());
-    expect(embed.author?.name).toBe('testuser');
+    // The repository is above the title, next to who acted; only the timestamp is below.
+    expect(embed.author?.name).toBe('testuser · owner/test-repo');
     expect(embed.author?.url).toBe('https://github.com/testuser');
-    expect(embed.footer?.text).toBe('owner/test-repo');
+    expect(embed.footer).toBeUndefined();
   });
 
   it('says whether the sender is new or has been seen before, and nothing when unknown', () => {
@@ -418,14 +420,14 @@ describe('formatDiscordEmbed', () => {
     expect(getFirstEmbed(formatDiscordEmbed(issue))).not.toHaveProperty('description');
     expect(
       getFirstEmbed(formatDiscordEmbed({ ...issue, senderHistory: firstTime })).description
-    ).toBe('👋 First time here');
+    ).toBe('👋 First event recorded from them');
     expect(getFirstEmbed(formatDiscordEmbed(star)).description).toBe(
-      '[testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo)\n⭐ **3** total'
+      '[testuser](https://github.com/testuser) starred this repository'
     );
     expect(
       getFirstEmbed(formatDiscordEmbed({ ...star, senderHistory: returning })).description
     ).toBe(
-      '[testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo)\n⭐ **3** total\n\n↩️ Seen before: 12 events in 3 repos since 4 Mar 2026'
+      '[testuser](https://github.com/testuser) starred this repository\n\n↩️ Seen before: 12 events in 3 repos since 4 Mar 2026'
     );
   });
 });
@@ -439,6 +441,7 @@ describe('formatDiscordDigest', () => {
       forks: 0,
       commits: 1,
       pullRequestsOpened: 0,
+      pullRequestsOpenedByBots: 0,
       pullRequestsMerged: [],
       issuesOpened: 0,
       issuesClosed: 0,
@@ -464,7 +467,9 @@ describe('formatDiscordDigest', () => {
       responseTimes: null,
     });
 
-    const lines = payload.embeds[0]?.description?.split('\n') ?? [];
+    const lines = (payload.embeds[0]?.description?.split('\n') ?? []).filter((line) =>
+      line.startsWith('**')
+    );
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain('**[myorg/monorepo]');
     expect(lines[0]).toContain('[pkg@1.2.59]');
@@ -518,6 +523,7 @@ describe('formatDiscordDigest', () => {
       (embed?.title.length ?? 0) +
       (embed?.description?.length ?? 0) +
       (embed?.footer?.text.length ?? 0) +
+      (embed?.author?.name.length ?? 0) +
       fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
     expect(total).toBeLessThanOrEqual(6000);
     expect(embed?.description?.length).toBeLessThanOrEqual(4096);
@@ -534,7 +540,7 @@ describe('formatDiscordDigest', () => {
     const waiting = fields[0]?.value.split('\n') ?? [];
     expect(waiting.at(-1)).toBe(`…and ${String(12 - (waiting.length - 1))} more`);
     expect(waiting[0]).toMatch(
-      /^\[org\/waiting-0-x+#10000\]\(.+\) A very long title x+\.\.\. · @someone-x+ · 18d$/
+      /^\[org\/waiting-0-x+#10000\]\(.+\) A very long title x+… · @someone-x+ · 18d$/
     );
     expect(fields[1]?.value).toBe(
       'Merge: 2d 4h median (6 PRs) · First reply: 5h median (4 threads)'
@@ -565,8 +571,8 @@ describe('formatDiscordDigest', () => {
       responseTimes: { merge: null, firstReply: { medianMs: 20 * 60_000, count: 1 } },
     });
 
-    expect(payload.embeds[0]).not.toHaveProperty('description');
-    expect(payload.embeds[0]?.title).toBe('📦 Weekly pulse: no new events');
+    expect(payload.embeds[0]?.description).toBe('No new events');
+    expect(payload.embeds[0]?.title).toBe('📦 Weekly pulse · Mon 12 Oct to Sun 18 Oct');
     expect(payload.embeds[0]?.fields).toEqual([
       {
         name: '⏳ Waiting on you',

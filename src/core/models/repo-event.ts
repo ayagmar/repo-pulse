@@ -36,6 +36,10 @@ export interface Issue {
   labels: string[];
   /** GitHub's `created_at`, ISO 8601. Absent on events stored before it was recorded. */
   createdAt?: string;
+  /** Why it was closed, as GitHub's `state_reason` says. Absent when unknown or still open. */
+  stateReason?: 'completed' | 'not_planned';
+  /** GitHub's `author_association` of the issue's author, lowercase. Absent on older events. */
+  authorAssociation?: string;
 }
 
 export interface PullRequest {
@@ -53,6 +57,11 @@ export interface PullRequest {
   changedFiles?: number;
   /** GitHub's `created_at`, ISO 8601. Absent on events stored before it was recorded. */
   createdAt?: string;
+  /** Who opened it; the event's sender is whoever acted. Absent on older events. */
+  author?: string;
+  /** GitHub's `author_association` of the author, lowercase. Absent on older events. */
+  authorAssociation?: string;
+  commits?: number;
 }
 
 /**
@@ -122,6 +131,9 @@ interface Release {
   url: string;
   body: string | null;
   prerelease: boolean;
+  /** Assets attached when the release was published; absent on older events. */
+  assetCount?: number;
+  assetBytes?: number;
 }
 
 export const REPO_EVENT_ACTIONS = {
@@ -264,6 +276,13 @@ interface BaseRepoEvent<TType extends RepoEventType, TAction extends string> {
    * alerts, as every event stored before this field did.
    */
   alert?: false;
+  /**
+   * True when the alert is for routine traffic (a bot, the repository owner or an ignored
+   * login) and is posted without a push notification. Decided once at acceptance, like
+   * `alert`, so a retry never re-reads the configuration. Absent means loud, as every
+   * event stored before this field was.
+   */
+  silent?: true;
   /**
    * Set when the event was accepted, for outside people only. Absent for the owner,
    * ignored logins and bots, for events stored before it existed, and when it could

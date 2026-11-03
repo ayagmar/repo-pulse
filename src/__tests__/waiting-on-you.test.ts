@@ -377,10 +377,10 @@ describe('waiting on you', () => {
       expect.objectContaining({
         title: '💬 Comment on PR #2: Add a flag',
         url: 'https://github.com/myorg/repo/pull/2#issuecomment-1791799200',
-        description: 'Could you look at this?\n\n👋 First time here',
+        description: 'Could you look at this?\n\n👋 First event recorded from them',
       }),
       expect.objectContaining({
-        title: '✅ Approved PR #2: Add a flag',
+        title: '👍 Approved PR #2: Add a flag',
         url: 'https://github.com/myorg/repo/pull/2#pullrequestreview-1',
       }),
       expect.objectContaining({
@@ -845,7 +845,9 @@ describe('waiting on you', () => {
 
     const [daily, weekly] = posted();
     expect(daily).toEqual({
-      title: '📊 Daily pulse: no new events',
+      title: '📊 Daily pulse · Mon 19 Oct',
+      description: 'No new events',
+      author: { name: 'Repo Pulse' },
       color: expect.any(Number) as number,
       timestamp: '2026-10-19T09:00:00.000Z',
       fields: [
@@ -863,7 +865,7 @@ describe('waiting on you', () => {
       ],
       footer: expect.any(Object) as object,
     });
-    expect(weekly?.title).toBe('📦 Weekly pulse: 8 events in 1 repository');
+    expect(weekly?.title).toBe('📦 Weekly pulse · Mon 12 Oct to Sun 18 Oct');
     expect(weekly?.fields?.map((field) => field.name)).toEqual([
       '⏳ Waiting on you',
       '⏱️ Response times',
@@ -923,9 +925,7 @@ describe('waiting on you', () => {
       new Error('D1 unavailable')
     );
     await sendDueDigests(env, new Date('2026-10-13T09:00:00Z'));
-    expect(posted()).toEqual([
-      expect.objectContaining({ title: '📊 Daily pulse: 1 event in 1 repository' }),
-    ]);
+    expect(posted()).toEqual([expect.objectContaining({ title: '📊 Daily pulse · Tue 13 Oct' })]);
     expect(posted()[0]?.fields).toBeUndefined();
   });
 

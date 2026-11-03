@@ -1,3 +1,8 @@
+/** Whether a login is a GitHub bot account (`renovate[bot]`). */
+export function isBotLogin(login: string): boolean {
+  return login.toLowerCase().endsWith('[bot]');
+}
+
 /**
  * Whether a sender is an outside person, whose events Repo Pulse remembers and lists:
  * identified by a GitHub user id, and not the repository's owner, a login in
@@ -17,7 +22,7 @@ export function isOutsidePerson(
 
   const login = sender.login.toLowerCase();
   const owner = typeof repositoryOwner === 'string' ? repositoryOwner.toLowerCase() : null;
-  const excluded = login.endsWith('[bot]') || ignoredLogins.has(login) || login === owner;
+  const excluded = isBotLogin(login) || ignoredLogins.has(login) || login === owner;
   return !excluded;
 }
 
@@ -42,7 +47,7 @@ export function conversationSide(
     return null;
   }
   const login = sender.login.toLowerCase();
-  if (login.endsWith('[bot]')) {
+  if (isBotLogin(login)) {
     return null;
   }
   const owner = typeof repositoryOwner === 'string' ? repositoryOwner.toLowerCase() : null;

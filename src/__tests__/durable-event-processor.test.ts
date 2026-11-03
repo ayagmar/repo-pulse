@@ -470,6 +470,28 @@ describe('DurableEventProcessor sender history', () => {
     await expect(enqueue(processor, 'first', starBy('alice'))).rejects.toThrow('D1 unavailable');
   });
 
+  it('freezes at acceptance which alerts post silently, and keeps it when the logins change', async () => {
+    const database = createDatabase();
+    await enqueue(createProcessor(database), 'alice', starBy('alice'));
+    await enqueue(createProcessor(database), 'owner', starBy('MyOrg', 2));
+    await enqueue(createProcessor(database), 'ignored', starBy('Owner-Alt', 3));
+    await enqueue(createProcessor(database), 'bot', starBy('dependabot[bot]', 4));
+
+    // Redelivered after Alice became an ignored login, and the others stopped being one.
+    const later = createProcessor(database, ['alice']);
+    for (const [id, login, sender] of [
+      ['alice', 'alice', 1],
+      ['ignored', 'Owner-Alt', 3],
+    ] as const) {
+      await enqueue(later, id, starBy(login, sender));
+    }
+
+    await expect(queuedEvent(database, 'alice')).resolves.not.toHaveProperty('silent');
+    for (const id of ['owner', 'ignored', 'bot']) {
+      await expect(queuedEvent(database, id)).resolves.toHaveProperty('silent', true);
+    }
+  });
+
   it('requeues a pruned delivery with its first event, whoever is excluded now', async () => {
     const database = createDatabase();
     const firstAlice = starBy('alice');
@@ -490,6 +512,6 @@ describe('DurableEventProcessor sender history', () => {
       ...firstAlice,
       senderHistory: firstTime,
     });
-    await expect(queuedEvent(database, 'bot')).resolves.toEqual(firstBot);
+    await expect(queuedEvent(database, 'bot')).resolves.toEqual({ ...firstBot, silent: true });
   });
 });

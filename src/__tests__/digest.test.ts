@@ -358,8 +358,10 @@ describe('digests', () => {
 
     expect(postedEmbeds()).toMatchObject([
       {
-        title: '📊 Daily pulse: 5 events in 2 repositories',
+        title: '📊 Daily pulse · Thu 15 Oct',
         description: [
+          '1 new star · 1 release',
+          '',
           '**[myorg/cli](https://github.com/myorg/cli)** ⭐ +1',
           '**[myorg/web](https://github.com/myorg/web)** 3 commits · released [v1.0.0](https://github.com/myorg/web/releases/tag/v1.0.0)',
         ].join('\n'),
@@ -411,17 +413,19 @@ describe('digests', () => {
 
     expect(postedEmbeds()).toMatchObject([
       {
-        title: '📊 Daily pulse: 1 event in 1 repository',
+        title: '📊 Daily pulse · Mon 19 Oct',
         description: '**[myorg/web](https://github.com/myorg/web)** 2 commits',
       },
       {
-        title: '📦 Weekly pulse: 6 events in 2 repositories',
+        title: '📦 Weekly pulse · Mon 12 Oct to Sun 18 Oct',
         description: [
+          '1 new star',
+          '',
           '**[myorg/web](https://github.com/myorg/web)** 2 commits · 4 PRs merged',
-          '↳ _…and 1 earlier PR_',
           '↳ [#3](https://github.com/myorg/web/pull/3) Add logout',
           '↳ [#4](https://github.com/myorg/web/pull/4) Fix session expiry',
           '↳ [#5](https://github.com/myorg/web/pull/5) Remember me',
+          '↳ _…and 1 earlier PR_',
           '**[myorg/cli](https://github.com/myorg/cli)** ⭐ +1',
         ].join('\n'),
         footer: { text: '12 Oct, 09:00 to 19 Oct, 09:00 · Africa/Casablanca' },
@@ -490,8 +494,8 @@ describe('digests', () => {
       {
         name: '🚢 Not released yet',
         value: [
-          '[myorg/docs](https://github.com/myorg/docs/compare/docs%403...main) 12 commits since docs@3 (20 Aug 2026)',
-          '[myorg/web](https://github.com/myorg/web/compare/v1.0.0...main) 4 commits since v1.0.0 (30 Sept 2026)',
+          '[myorg/docs](https://github.com/myorg/docs/compare/docs%403...main) 12 commits since docs@3, 55d ago',
+          '[myorg/web](https://github.com/myorg/web/compare/v1.0.0...main) 4 commits since v1.0.0, 14d ago',
         ].join('\n'),
       },
     ]);

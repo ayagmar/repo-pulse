@@ -93,3 +93,18 @@ export function optionalText(value: unknown, field: string): string | null {
   }
   return value.trim() === '' ? null : value;
 }
+
+/** A non-empty string, or undefined when it is missing or anything else. */
+export function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/** A non-negative integer, or undefined when it is missing or anything else. */
+export function optionalCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** GitHub's `author_association` (`FIRST_TIME_CONTRIBUTOR`), lowercase, or undefined. */
+export function optionalAssociation(value: unknown): string | undefined {
+  return optionalString(value)?.toLowerCase();
+}

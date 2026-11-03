@@ -120,7 +120,8 @@ describe('star milestones', () => {
   }
 
   async function queuedTitle(deliveryId: string): Promise<string> {
-    return (await queued(deliveryId)).title;
+    // The running total is in every plain star's title; what these tests tell apart is the kind.
+    return (await queued(deliveryId)).title.replace(/ · -?[\d,.]+ total$/, '');
   }
 
   /** Accept each star in turn, a minute apart, and return the title each would post. */
@@ -301,14 +302,14 @@ describe('star milestones', () => {
 
     await expect(description(hundred.deliveryId)).resolves.toBe(
       [
-        'Observed after [alice](https://github.com/alice) starred [myorg/repo](https://github.com/myorg/repo) · ⭐ **100** total',
+        'Observed after [alice](https://github.com/alice) starred this repository · **100** total',
         '⏱️ 314d since the repository was created',
         '📈 +1 net recorded star in the last 7 days',
       ].join('\n')
     );
     await expect(description(twoFifty.deliveryId)).resolves.toBe(
       [
-        'Observed after [alice](https://github.com/alice) starred [myorg/renamed](https://github.com/myorg/renamed) · ⭐ **250** total',
+        'Observed after [alice](https://github.com/alice) starred this repository · **250** total',
         '⏱️ 30d since 100 stars',
         '📈 +2 net recorded stars in the last 7 days',
       ].join('\n')
