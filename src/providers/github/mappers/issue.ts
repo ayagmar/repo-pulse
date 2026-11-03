@@ -12,6 +12,7 @@ import {
 import type { GitHubIssue, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';
 import {
+  optionalTimestamp,
   requireNullableString,
   requireNumber,
   requireObject,
@@ -22,6 +23,7 @@ import {
 
 function mapIssue(issue: GitHubIssue): Issue {
   const issueData = requireObject(issue, 'issue');
+  const createdAt = optionalTimestamp(issueData.created_at);
 
   return {
     number: requireNumber(issueData.number, 'issue.number'),
@@ -30,21 +32,29 @@ function mapIssue(issue: GitHubIssue): Issue {
     state: requireState(issueData.state, 'issue.state'),
     body: requireNullableString(issueData.body, 'issue.body'),
     labels: requireStringArrayFromObjects(issueData.labels, 'issue.labels', 'name'),
+    ...(createdAt !== undefined ? { createdAt } : {}),
   };
 }
+
+/** The issue's field holding when this action happened on GitHub. */
+type ActionTimeField = 'created_at' | 'closed_at' | 'updated_at';
 
 function createIssueEvent<TType extends IssueEvent['type']>(
   type: TType,
   action: RepoEventOf<TType>['action'],
   repository: GitHubRepository,
   sender: GitHubUser,
-  issue: GitHubIssue
+  issue: GitHubIssue,
+  actionTime: ActionTimeField
 ): RepoEventOf<TType> {
+  const mapped = mapIssue(issue);
+  const occurredAt = optionalTimestamp(issue[actionTime]);
   return createRepoEvent(type, {
     action,
     repository: mapRepository(repository),
     sender: mapUser(sender),
-    issue: mapIssue(issue),
+    issue: mapped,
+    ...(occurredAt !== undefined ? { occurredAt } : {}),
   } as RepoEventInput<TType>);
 }
 
@@ -58,7 +68,8 @@ export function mapIssueOpened(
     REPO_EVENT_ACTIONS.OPENED,
     repository,
     sender,
-    issue
+    issue,
+    'created_at'
   );
 }
 
@@ -72,7 +83,8 @@ export function mapIssueClosed(
     REPO_EVENT_ACTIONS.CLOSED,
     repository,
     sender,
-    issue
+    issue,
+    'closed_at'
   );
 }
 
@@ -86,6 +98,8 @@ export function mapIssueReopened(
     REPO_EVENT_ACTIONS.REOPENED,
     repository,
     sender,
-    issue
+    issue,
+    // GitHub has no reopen time; the reopen is the issue's latest update.
+    'updated_at'
   );
 }

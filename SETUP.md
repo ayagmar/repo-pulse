@@ -98,7 +98,8 @@ reads what digests and alerts add.
      (macOS: `pbcopy`), the same secret the Worker has
    - Repository permissions, all **Read-only**: Metadata, Contents, Issues,
      Pull requests, Administration
-   - Subscribe to events: Star, Fork, Issues, Pull request, Push, Release
+   - Subscribe to events: Star, Fork, Issues, Issue comment, Pull request,
+     Pull request review, Push, Release
    - Where can this GitHub App be installed: **Only on this account**
 2. Note the App ID. Generate a private key; GitHub downloads it as PKCS#1, and the
    Worker needs PKCS#8:

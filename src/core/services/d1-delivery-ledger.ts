@@ -8,8 +8,8 @@ import type {
 import { DELIVERY_STATUSES } from '../models/delivery-ledger.js';
 import type { FailureClassification } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
-import { deserializeRepoEvent } from '../models/repo-event.js';
-import { prepareEventHistoryInsert } from './d1-event-history.js';
+import { deserializeRepoEvent, REPO_EVENT_TYPES } from '../models/repo-event.js';
+import { prepareEventHistoryInsert, THREAD_ACTIVATION } from './d1-event-history.js';
 import type { D1DatabaseLike } from './d1-types.js';
 
 interface PersistDeliveryInput {
@@ -77,13 +77,21 @@ interface PersistDeliveryAccepted {
   outcome: 'accepted';
 }
 
+/** Recorded for history only, as its stored event says: no delivery is queued. */
+interface PersistDeliveryRecorded {
+  outcome: 'recorded';
+}
+
 interface PersistDeliveryDuplicate {
   outcome: 'duplicate';
 }
 
 export type ClaimedDelivery = DeliveryForProcessing;
 type RetryDeliveryResult = RetryQueuedResult | RetryNotFoundResult | RetryRejectedResult;
-type PersistDeliveryResult = PersistDeliveryAccepted | PersistDeliveryDuplicate;
+type PersistDeliveryResult =
+  | PersistDeliveryAccepted
+  | PersistDeliveryRecorded
+  | PersistDeliveryDuplicate;
 
 function toDate(value: string | null): Date | null {
   return value === null ? null : new Date(value);
@@ -122,10 +130,15 @@ function mapProviderAttemptRow(row: ProviderAttemptRow): ProviderAttemptRecord {
 export class D1DeliveryLedger {
   constructor(private readonly db: D1DatabaseLike) {}
 
+  /**
+   * Record an accepted event and, unless its stored event is history-only, queue its
+   * delivery, in one D1 batch. The delivery copies the event as recorded in `events`:
+   * this one, or the one first accepted under this delivery id if its delivery row was
+   * pruned since, so a history-only event is never queued, redelivered or not. The first
+   * recorded comment or review also sets the activation instant, which never moves.
+   */
   async persistAcceptedDelivery(input: PersistDeliveryInput): Promise<PersistDeliveryResult> {
     const acceptedAt = new Date().toISOString();
-    // The delivery copies the event as recorded in `events`: this one, or the one first
-    // accepted under this delivery id if its delivery row was pruned since.
     const insertDelivery = this.db
       .prepare(
         `INSERT OR IGNORE INTO deliveries (
@@ -147,7 +160,8 @@ export class D1DeliveryLedger {
         )
         SELECT ?, ?, event_type, ?, event_json, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL
         FROM events
-        WHERE delivery_id = ?`
+        WHERE delivery_id = ?
+          AND json_type(event_json, '$.alert') IS NOT 'false'`
       )
       .bind(
         input.deliveryId,
@@ -159,7 +173,7 @@ export class D1DeliveryLedger {
         input.maxAttempts,
         input.deliveryId
       );
-    const [, deliveryResult] = await this.db.batch([
+    const statements = [
       prepareEventHistoryInsert(this.db, {
         deliveryId: input.deliveryId,
         repository: input.repository,
@@ -169,10 +183,32 @@ export class D1DeliveryLedger {
           ? { rememberSenderId: input.rememberSenderId }
           : {}),
       }),
-      insertDelivery,
-    ]);
+    ];
+    const historyIndex = 0;
+    const deliveryIndex = statements.push(insertDelivery) - 1;
+    const isConversation =
+      input.event.type === REPO_EVENT_TYPES.COMMENT_CREATED ||
+      input.event.type === REPO_EVENT_TYPES.REVIEW_SUBMITTED;
+    if (isConversation && input.event.occurredAt !== undefined) {
+      statements.push(
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO feature_activations (feature, activated_at, delivery_id)
+             SELECT ?, ?, delivery_id
+             FROM events
+             WHERE delivery_id = ? AND event_type IN ('comment.created', 'review.submitted')`
+          )
+          .bind(THREAD_ACTIVATION, input.event.occurredAt, input.deliveryId)
+      );
+    }
+    const results = await this.db.batch(statements);
 
-    return deliveryResult?.meta.changes === 0 ? { outcome: 'duplicate' } : { outcome: 'accepted' };
+    if ((results[deliveryIndex]?.meta.changes ?? 0) > 0) {
+      return { outcome: 'accepted' };
+    }
+    return (results[historyIndex]?.meta.changes ?? 0) > 0
+      ? { outcome: 'recorded' }
+      : { outcome: 'duplicate' };
   }
 
   async claimNextPendingDelivery(

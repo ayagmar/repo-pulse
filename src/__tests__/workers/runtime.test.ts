@@ -16,10 +16,15 @@ import {
 import { Redactor } from '../../core/security/redact.js';
 import { D1DeliveryLedger } from '../../core/services/d1-delivery-ledger.js';
 import { D1DiscordActions } from '../../core/services/d1-discord-actions.js';
-import { D1EventHistory } from '../../core/services/d1-event-history.js';
+import {
+  D1EventHistory,
+  type ThreadActivityMaterial,
+} from '../../core/services/d1-event-history.js';
+import type { D1DatabaseLike } from '../../core/services/d1-types.js';
 import { dueDigestWindow } from '../../core/services/digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
+import { summarizeThreadActivity } from '../../core/services/thread-activity.js';
 import worker from '../../index.js';
 import { signAppJwt } from '../../providers/github/app-auth.js';
 
@@ -56,6 +61,7 @@ describe('Workers runtime integration', () => {
     await env.DB.prepare('DELETE FROM deliveries').run();
     await env.DB.prepare('DELETE FROM events').run();
     await env.DB.prepare('DELETE FROM digest_sends').run();
+    await env.DB.prepare('DELETE FROM feature_activations').run();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -175,6 +181,134 @@ describe('Workers runtime integration', () => {
     await expect(new D1EventHistory(env.DB).listRecentEvents()).resolves.toMatchObject([
       { deliveryId: 'recorded', event: { type: 'star.created' } },
     ]);
+  });
+
+  /** The digest's thread read on real D1, and the rows D1 says it read. */
+  async function readThreadsCountingRows(
+    now: number
+  ): Promise<{ material: ThreadActivityMaterial; rowsRead: number }> {
+    let rowsRead = Number.NaN;
+    const counting = {
+      prepare: (query: string): Pick<D1PreparedStatement, 'bind'> => {
+        const statement = env.DB.prepare(query);
+        return {
+          bind: (...values: unknown[]): D1PreparedStatement => {
+            const bound = statement.bind(...values);
+            return Object.assign(Object.create(bound) as D1PreparedStatement, {
+              all: async <Row>(): Promise<D1Result<Row>> => {
+                const result = await bound.all<Row>();
+                rowsRead = result.meta.rows_read;
+                return result;
+              },
+            });
+          },
+        };
+      },
+    } as unknown as D1DatabaseLike;
+    const material = await new D1EventHistory(counting).readThreadActivity(
+      new Date(now - 90 * 24 * 3_600_000),
+      { threads: 200, eventsPerThread: 100, rows: 2000 }
+    );
+    return { material, rowsRead };
+  }
+
+  it('reads who is waiting on real D1, reading rows by thread rather than by history size', async () => {
+    const now = Date.now();
+    const at = (hoursAgo: number): string => new Date(now - hoursAgo * 3_600_000).toISOString();
+    // Ten thousand unrelated rows: recent stars, and issues of another repository last
+    // active long before the lookback.
+    await env.DB.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4999)
+       INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+       SELECT 'star-' || i, 'star.created', 'myorg/other', ?, '{}' FROM n
+       UNION ALL
+       SELECT 'old-' || i, 'issue.opened', 'myorg/other', '2025-01-01T00:00:00.000Z',
+         json_object('repository', json_object('id', 9), 'issue', json_object('number', i))
+       FROM n`
+    )
+      .bind(at(1))
+      .run();
+    const thread = {
+      kind: 'issue' as const,
+      number: 5,
+      title: 'Crash on start',
+      url: 'https://github.com/myorg/repo/issues/5',
+      state: 'open' as const,
+      draft: null,
+      createdAt: at(30),
+    };
+    const comment = (id: number, login: string, hoursAgo: number): RepoEvent =>
+      createRepoEvent(REPO_EVENT_TYPES.COMMENT_CREATED, {
+        action: REPO_EVENT_ACTIONS.CREATED,
+        repository: event.repository,
+        sender: { ...event.sender, id, login },
+        occurredAt: at(hoursAgo),
+        thread,
+        comment: { id, url: `${thread.url}#issuecomment-${String(id)}`, body: 'Any news?' },
+      });
+    // The owner's comment is recorded only, and activates the feature in the same batch.
+    for (const [deliveryId, stored, outcome] of [
+      ['reply', { ...comment(1, 'myorg', 20), alert: false as const }, 'recorded'],
+      ['question', comment(2, 'alice', 10), 'accepted'],
+    ] as const) {
+      await expect(
+        ledger.persistAcceptedDelivery({
+          deliveryId,
+          sourceEventType: 'issue_comment',
+          repository: 'myorg/repo',
+          event: stored,
+          maxAttempts: 5,
+        })
+      ).resolves.toEqual({ outcome });
+    }
+    await expect(ledger.getStats()).resolves.toMatchObject({ total: 1 });
+
+    const { material, rowsRead } = await readThreadsCountingRows(now);
+
+    expect(material.activatedAt).toBe(at(20));
+    expect(
+      summarizeThreadActivity(material, { start: new Date(0), end: new Date(now) }, new Set())
+        .waiting
+    ).toMatchObject([{ number: 5, login: 'alice', since: new Date(at(10)) }]);
+    expect(rowsRead).toBeLessThan(50);
+  });
+
+  it('bounds the rows read for a selected thread with a long history, and leaves it out', async () => {
+    const now = Date.now();
+    const recent = new Date(now - 3_600_000).toISOString();
+    await env.DB.prepare(
+      `INSERT INTO feature_activations (feature, activated_at, delivery_id)
+       VALUES ('thread_replies', '2025-01-01T00:00:00.000Z', 'first')`
+    ).run();
+    // Ten thousand old comments on one thread, and one recent, which selects it.
+    await env.DB.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+       INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
+       SELECT 'comment-' || i, 'comment.created', 'myorg/repo',
+         CASE WHEN i = 10000 THEN ? ELSE '2025-06-01T00:00:00.000Z' END,
+         json_object(
+           'repository', json_object('id', 1, 'fullName', 'myorg/repo', 'owner', 'myorg'),
+           'sender', json_object('id', 2, 'login', 'alice'),
+           'occurredAt', CASE WHEN i = 10000 THEN ? ELSE '2025-06-01T00:00:00.000Z' END,
+           'thread', json_object('kind', 'issue', 'number', 6, 'title', 'Long', 'url', 'u',
+             'state', 'open', 'draft', json('null')),
+           'comment', json_object('id', i, 'url', 'u', 'body', 'Hi')
+         )
+       FROM n`
+    )
+      .bind(recent, recent)
+      .run();
+
+    const { material, rowsRead } = await readThreadsCountingRows(now);
+
+    expect(material.rows.length).toBeLessThanOrEqual(101);
+    const summary = summarizeThreadActivity(
+      material,
+      { start: new Date(0), end: new Date(now) },
+      new Set()
+    );
+    expect(summary).toMatchObject({ waiting: [], incompleteThreads: 1 });
+    expect(rowsRead).toBeLessThan(1000);
   });
 
   it('persists notification outcomes using real D1 batch and RETURNING semantics', async () => {

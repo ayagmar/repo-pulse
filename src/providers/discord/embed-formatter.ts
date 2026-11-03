@@ -2,21 +2,27 @@ import type {
   Digest,
   PersonActivity,
   RepositoryActivity,
+  ResponseTimes,
   UnreleasedWork,
+  WaitingThread,
 } from '../../core/models/digest.js';
+import { formatDuration } from '../../core/models/duration.js';
 import type { IssueActionOutcome } from '../../core/models/issue-action.js';
 import type { MomentumAlert } from '../../core/models/momentum-alert.js';
 import type {
+  CommentEvent,
   ForkEvent,
   IssueEvent,
   PullRequestEvent,
   PushEvent,
   ReleaseEvent,
   RepoEvent,
+  ReviewEvent,
   SenderHistory,
   StarEvent,
+  Thread,
 } from '../../core/models/repo-event.js';
-import { REPO_EVENT_TYPES } from '../../core/models/repo-event.js';
+import { REPO_EVENT_TYPES, REVIEW_STATES } from '../../core/models/repo-event.js';
 import { issueActionCustomId } from './interactions.js';
 
 /**
@@ -73,12 +79,15 @@ export interface DiscordWebhookPayload {
 const TITLE_LIMIT = 256;
 const DESCRIPTION_LIMIT = 4096;
 const FIELD_VALUE_LIMIT = 1024;
+/** Title, description, field names and values, footer and author name together. */
+const EMBED_TOTAL_LIMIT = 6000;
 const EXCERPT_LIMIT = 300;
 const COMMIT_SUBJECT_LIMIT = 72;
 const LISTED_COMMITS = 5;
 const LISTED_RELEASES = 3;
 const LISTED_PULL_REQUESTS = 3;
 const LISTED_UNRELEASED = 5;
+const LISTED_WAITING = 5;
 
 // GitHub's state colors, so a message reads like the badge it links to.
 const COLORS = {
@@ -92,6 +101,7 @@ const COLORS = {
   forcePush: 0xbc4c00,
   release: 0x2da44e,
   prerelease: 0xbf8700,
+  comment: 0x6e7781,
 } as const;
 
 /** Star counts worth celebrating; past the last one, every further 10,000. */
@@ -229,9 +239,13 @@ function formatPullRequestEvent(event: PullRequestEvent): DiscordWebhookPayload 
         ? ['❌ Closed', COLORS.closed]
         : event.type === REPO_EVENT_TYPES.PULL_REQUEST_REOPENED
           ? ['🔄 Reopened', COLORS.open]
-          : pr.draft
-            ? ['📝 Opened draft', COLORS.draft]
-            : ['📥 Opened', COLORS.open];
+          : event.type === REPO_EVENT_TYPES.PULL_REQUEST_READY_FOR_REVIEW
+            ? ['👀 Ready for review', COLORS.open]
+            : event.type === REPO_EVENT_TYPES.PULL_REQUEST_CONVERTED_TO_DRAFT
+              ? ['📝 Converted to draft', COLORS.draft]
+              : pr.draft
+                ? ['📝 Opened draft', COLORS.draft]
+                : ['📥 Opened', COLORS.open];
 
   const fields: NonNullable<DiscordEmbed['fields']> = [
     {
@@ -307,6 +321,37 @@ function formatReleaseEvent(event: ReleaseEvent): DiscordWebhookPayload {
   });
 }
 
+function threadName(thread: Thread): string {
+  return `${thread.kind === 'pull_request' ? 'PR' : 'issue'} #${String(thread.number)}: ${thread.title}`;
+}
+
+function formatCommentEvent(event: CommentEvent): DiscordWebhookPayload {
+  const description = excerpt(event.comment.body);
+  return createEmbed(event, {
+    title: `💬 Comment on ${threadName(event.thread)}`,
+    url: event.comment.url,
+    ...(description !== null ? { description } : {}),
+    color: COLORS.comment,
+  });
+}
+
+function formatReviewEvent(event: ReviewEvent): DiscordWebhookPayload {
+  const { review } = event;
+  const [title, color] =
+    review.state === REVIEW_STATES.APPROVED
+      ? ['✅ Approved', COLORS.open]
+      : review.state === REVIEW_STATES.CHANGES_REQUESTED
+        ? ['🛑 Changes requested on', COLORS.closed]
+        : ['💬 Reviewed', COLORS.comment];
+  const description = excerpt(review.body);
+  return createEmbed(event, {
+    title: `${title} ${threadName(event.thread)}`,
+    url: review.url,
+    ...(description !== null ? { description } : {}),
+    color,
+  });
+}
+
 /**
  * Format a RepoEvent into a Discord webhook payload
  */
@@ -325,7 +370,15 @@ export function formatDiscordEmbed(event: RepoEvent): DiscordWebhookPayload {
     case REPO_EVENT_TYPES.PULL_REQUEST_CLOSED:
     case REPO_EVENT_TYPES.PULL_REQUEST_MERGED:
     case REPO_EVENT_TYPES.PULL_REQUEST_REOPENED:
+    case REPO_EVENT_TYPES.PULL_REQUEST_READY_FOR_REVIEW:
+    case REPO_EVENT_TYPES.PULL_REQUEST_CONVERTED_TO_DRAFT:
       return formatPullRequestEvent(event);
+
+    case REPO_EVENT_TYPES.COMMENT_CREATED:
+      return formatCommentEvent(event);
+
+    case REPO_EVENT_TYPES.REVIEW_SUBMITTED:
+      return formatReviewEvent(event);
 
     case REPO_EVENT_TYPES.FORK_CREATED:
       return formatForkEvent(event);
@@ -489,43 +542,122 @@ function formatDigestTime(instant: Date, timeZone: string): string {
 }
 
 /**
- * Format a digest as one embed with a line per repository, most active first. The
- * weekly digest also lists each repository's latest merged pull requests.
+ * As many of `lines` as fit in `limit` characters, one per line, then `more(n)` for the
+ * `n` of `total` left out. Each line is kept only if the "more" line for those after it
+ * would still fit, so the result never exceeds `limit`.
  */
-export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
-  const lines: string[] = [];
+function fitLines(
+  lines: readonly string[],
+  total: number,
+  limit: number,
+  more: (omitted: number) => string
+): string {
+  const kept: string[] = [];
   let length = 0;
-  for (const [index, activity] of digest.repositories.entries()) {
-    const block = [
-      `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`,
-      ...(digest.period === 'weekly' ? mergedPullRequestLines(activity.pullRequestsMerged) : []),
-    ].join('\n');
-    // Leave room for the "and N more" line.
-    if (length + block.length + 1 > DESCRIPTION_LIMIT - 64) {
-      lines.push(`_…and ${repositories(digest.repositories.length - index)} more_`);
+  for (const [index, line] of lines.entries()) {
+    const after = total - index - 1;
+    const separator = kept.length > 0 ? 1 : 0;
+    const reserve = after > 0 ? more(after).length + 1 : 0;
+    if (length + separator + line.length + reserve > limit) {
       break;
     }
-    lines.push(block);
-    length += block.length + 1;
+    kept.push(line);
+    length += separator + line.length;
   }
+  if (kept.length < total) {
+    kept.push(more(total - kept.length));
+  }
+  return kept.join('\n');
+}
 
+/** Open threads where an outside person waits, oldest wait first, as one embed field. */
+function waitingField(
+  waiting: readonly WaitingThread[],
+  asOf: Date
+): NonNullable<DiscordEmbed['fields']> {
+  if (waiting.length === 0) {
+    return [];
+  }
+  const lines = waiting
+    .slice(0, LISTED_WAITING)
+    .map(
+      (thread) =>
+        `[${thread.repository}#${String(thread.number)}](${thread.url}) ${truncate(thread.title, COMMIT_SUBJECT_LIMIT)} · @${thread.login} · ${formatDuration(asOf.getTime() - thread.since.getTime())}`
+    );
+  return [
+    {
+      name: '⏳ Waiting on you',
+      value: fitLines(
+        lines,
+        waiting.length,
+        FIELD_VALUE_LIMIT,
+        (omitted) => `…and ${String(omitted)} more`
+      ),
+    },
+  ];
+}
+
+/** The window's median merge and first-reply times, as one embed field. */
+function responseTimesField(times: ResponseTimes | null): NonNullable<DiscordEmbed['fields']> {
+  const parts = [
+    times?.merge
+      ? `Merge: ${formatDuration(times.merge.medianMs, true)} median (${plural(times.merge.count, 'PR')})`
+      : null,
+    times?.firstReply
+      ? `First reply: ${formatDuration(times.firstReply.medianMs, true)} median (${plural(times.firstReply.count, 'thread')})`
+      : null,
+  ].filter((part) => part !== null);
+  return parts.length > 0 ? [{ name: '⏱️ Response times', value: parts.join(' · ') }] : [];
+}
+
+/**
+ * Format a digest as one embed with a line per repository, most active first. The
+ * weekly digest also lists each repository's latest merged pull requests. The waiting
+ * list and response times are laid out first; the repository lines get what is left
+ * of Discord's limit on an embed's total text.
+ */
+export function formatDiscordDigest(digest: Digest): DiscordWebhookPayload {
   const fields = [
+    ...waitingField(digest.waiting, digest.windowEnd),
+    ...responseTimesField(digest.responseTimes),
     ...unreleasedField(digest.unreleased, digest.timeZone),
     ...peopleField(digest.people),
   ];
   const heading = digest.period === 'weekly' ? '📦 Weekly pulse' : '📊 Daily pulse';
+  const title =
+    digest.eventCount > 0
+      ? `${heading}: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`
+      : `${heading}: no new events`;
+  const footer = `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`;
+  const used =
+    title.length +
+    footer.length +
+    fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+  const blocks = digest.repositories.map((activity) =>
+    [
+      `**[${activity.repository}](${activity.url})** ${activitySummary(activity)}`,
+      ...(digest.period === 'weekly' ? mergedPullRequestLines(activity.pullRequestsMerged) : []),
+    ].join('\n')
+  );
+  const description =
+    blocks.length > 0
+      ? fitLines(
+          blocks,
+          blocks.length,
+          Math.min(DESCRIPTION_LIMIT, EMBED_TOTAL_LIMIT - used),
+          (omitted) => `_…and ${repositories(omitted)} more_`
+        )
+      : '';
+
   return {
     embeds: [
       {
-        title: `${heading}: ${plural(digest.eventCount, 'event')} in ${repositories(digest.repositories.length)}`,
-        description: lines.join('\n'),
+        title,
+        ...(description !== '' ? { description } : {}),
         color: COLORS.push,
         timestamp: digest.windowEnd.toISOString(),
         ...(fields.length > 0 ? { fields } : {}),
-        footer: {
-          text: `${formatDigestTime(digest.windowStart, digest.timeZone)} to ${formatDigestTime(digest.windowEnd, digest.timeZone)} · ${digest.timeZone}`,
-          icon_url: GITHUB_ICON_URL,
-        },
+        footer: { text: footer, icon_url: GITHUB_ICON_URL },
       },
     ],
   };

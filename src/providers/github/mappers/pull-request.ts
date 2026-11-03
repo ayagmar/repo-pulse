@@ -12,6 +12,7 @@ import {
 import type { GitHubPullRequest, GitHubRepository, GitHubUser } from '../types.js';
 import { mapRepository, mapUser } from './repository.js';
 import {
+  optionalTimestamp,
   requireBoolean,
   requireNullableString,
   requireNumber,
@@ -20,7 +21,7 @@ import {
   requireString,
 } from './validation.js';
 
-function mapPullRequest(pr: GitHubPullRequest, merged = pr.merged): PullRequest {
+function mapPullRequest(pr: GitHubPullRequest, merged: unknown): PullRequest {
   const pullRequestData = requireObject(pr, 'pull_request');
   const head = requireObject(pullRequestData.head, 'pull_request.head');
   const base = requireObject(pullRequestData.base, 'pull_request.base');
@@ -36,6 +37,10 @@ function mapPullRequest(pr: GitHubPullRequest, merged = pr.merged): PullRequest 
     baseBranch: requireString(base.ref, 'pull_request.base.ref'),
   };
 
+  const createdAt = optionalTimestamp(pullRequestData.created_at);
+  if (createdAt !== undefined) {
+    pullRequest.createdAt = createdAt;
+  }
   if (pullRequestData.additions !== undefined) {
     pullRequest.additions = requireNumber(pullRequestData.additions, 'pull_request.additions');
   }
@@ -52,19 +57,26 @@ function mapPullRequest(pr: GitHubPullRequest, merged = pr.merged): PullRequest 
   return pullRequest;
 }
 
+/** The pull request's field holding when this action happened on GitHub. */
+type ActionTimeField = 'created_at' | 'closed_at' | 'merged_at' | 'updated_at';
+
 function createPullRequestEvent<TType extends PullRequestEvent['type']>(
   type: TType,
   action: RepoEventOf<TType>['action'],
   repository: GitHubRepository,
   sender: GitHubUser,
   pr: GitHubPullRequest,
-  merged = pr.merged
+  actionTime: ActionTimeField,
+  merged: unknown = pr.merged
 ): RepoEventOf<TType> {
+  const pullRequest = mapPullRequest(pr, merged);
+  const occurredAt = optionalTimestamp(pr[actionTime]);
   return createRepoEvent(type, {
     action,
     repository: mapRepository(repository),
     sender: mapUser(sender),
-    pullRequest: mapPullRequest(pr, merged),
+    pullRequest,
+    ...(occurredAt !== undefined ? { occurredAt } : {}),
   } as RepoEventInput<TType>);
 }
 
@@ -78,7 +90,8 @@ export function mapPullRequestOpened(
     REPO_EVENT_ACTIONS.OPENED,
     repository,
     sender,
-    pr
+    pr,
+    'created_at'
   );
 }
 
@@ -92,7 +105,8 @@ export function mapPullRequestClosed(
     REPO_EVENT_ACTIONS.CLOSED,
     repository,
     sender,
-    pr
+    pr,
+    'closed_at'
   );
 }
 
@@ -107,6 +121,7 @@ export function mapPullRequestMerged(
     repository,
     sender,
     pr,
+    'merged_at',
     true
   );
 }
@@ -121,6 +136,40 @@ export function mapPullRequestReopened(
     REPO_EVENT_ACTIONS.REOPENED,
     repository,
     sender,
-    pr
+    pr,
+    // GitHub has no time for a reopen or a draft change; it is the latest update.
+    'updated_at'
+  );
+}
+
+/** Stored for the waiting list's draft state only; never alerted. */
+export function mapPullRequestReadyForReview(
+  repository: GitHubRepository,
+  sender: GitHubUser,
+  pr: GitHubPullRequest
+): RepoEventOf<typeof REPO_EVENT_TYPES.PULL_REQUEST_READY_FOR_REVIEW> {
+  return createPullRequestEvent(
+    REPO_EVENT_TYPES.PULL_REQUEST_READY_FOR_REVIEW,
+    REPO_EVENT_ACTIONS.READY_FOR_REVIEW,
+    repository,
+    sender,
+    pr,
+    'updated_at'
+  );
+}
+
+/** Stored for the waiting list's draft state only; never alerted. */
+export function mapPullRequestConvertedToDraft(
+  repository: GitHubRepository,
+  sender: GitHubUser,
+  pr: GitHubPullRequest
+): RepoEventOf<typeof REPO_EVENT_TYPES.PULL_REQUEST_CONVERTED_TO_DRAFT> {
+  return createPullRequestEvent(
+    REPO_EVENT_TYPES.PULL_REQUEST_CONVERTED_TO_DRAFT,
+    REPO_EVENT_ACTIONS.CONVERTED_TO_DRAFT,
+    repository,
+    sender,
+    pr,
+    'updated_at'
   );
 }

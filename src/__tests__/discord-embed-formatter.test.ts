@@ -436,6 +436,8 @@ describe('formatDiscordDigest', () => {
       repositories: [activity('myorg/monorepo', 60), activity('myorg/cli', 0)],
       unreleased: [],
       people: [],
+      waiting: [],
+      responseTimes: null,
     });
 
     const lines = payload.embeds[0]?.description?.split('\n') ?? [];
@@ -444,5 +446,110 @@ describe('formatDiscordDigest', () => {
     expect(lines[0]).toContain('[pkg@1.2.59]');
     expect(lines[0]).toMatch(/ and 57 more$/);
     expect(lines[1]).toContain('**[myorg/cli]');
+  });
+
+  it('keeps the whole embed within Discord’s 6,000 characters, waiting list first', () => {
+    const long = (prefix: string, length: number): string => prefix.padEnd(length, 'x');
+    const payload = formatDiscordDigest({
+      period: 'weekly',
+      date: '2026-10-19',
+      timeZone: 'UTC',
+      windowStart: new Date('2026-10-12T09:00:00.000Z'),
+      windowEnd: new Date('2026-10-19T09:00:00.000Z'),
+      eventCount: 900,
+      repositories: Array.from({ length: 300 }, (_, index) =>
+        activity(long(`org/repo-${String(index)}-`, 100), 5)
+      ),
+      unreleased: Array.from({ length: 5 }, (_, index) => ({
+        repository: long(`org/unreleased-${String(index)}-`, 100),
+        compareUrl: long('https://github.com/compare/', 300),
+        tagName: long('v', 100),
+        releasedAt: new Date('2026-10-01T00:00:00.000Z'),
+        commitsSinceRelease: 10 + index,
+      })),
+      people: Array.from({ length: 5 }, (_, index) => ({
+        login: long(`person-${String(index)}-`, 39),
+        url: long('https://github.com/', 300),
+        events: 3,
+        repositories: 2,
+        isNew: true,
+      })),
+      waiting: Array.from({ length: 12 }, (_, index) => ({
+        repository: long(`org/waiting-${String(index)}-`, 100),
+        number: 10_000 + index,
+        title: long('A very long title ', 256),
+        url: long('https://github.com/org/repo/issues/', 200),
+        login: long('someone-', 39),
+        since: new Date(Date.parse('2026-10-01T00:00:00.000Z') + index * 3_600_000),
+      })),
+      responseTimes: {
+        merge: { medianMs: 52 * 3_600_000, count: 6 },
+        firstReply: { medianMs: 5 * 3_600_000, count: 4 },
+      },
+    });
+
+    const embed = payload.embeds[0];
+    const fields = embed?.fields ?? [];
+    const total =
+      (embed?.title.length ?? 0) +
+      (embed?.description?.length ?? 0) +
+      (embed?.footer?.text.length ?? 0) +
+      fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+    expect(total).toBeLessThanOrEqual(6000);
+    expect(embed?.description?.length).toBeLessThanOrEqual(4096);
+    expect(embed?.description).toMatch(/\n_…and \d+ repositories more_$/);
+    for (const field of fields) {
+      expect(field.value.length).toBeLessThanOrEqual(1024);
+    }
+    expect(fields.map((field) => field.name)).toEqual([
+      '⏳ Waiting on you',
+      '⏱️ Response times',
+      '🚢 Not released yet',
+      "👥 Who's showing up",
+    ]);
+    const waiting = fields[0]?.value.split('\n') ?? [];
+    expect(waiting.at(-1)).toBe(`…and ${String(12 - (waiting.length - 1))} more`);
+    expect(waiting[0]).toMatch(
+      /^\[org\/waiting-0-x+#10000\]\(.+\) A very long title x+\.\.\. · @someone-x+ · 18d$/
+    );
+    expect(fields[1]?.value).toBe(
+      'Merge: 2d 4h median (6 PRs) · First reply: 5h median (4 threads)'
+    );
+  });
+
+  it('heads a digest with only waiting threads truthfully, and leaves out an empty half', () => {
+    const payload = formatDiscordDigest({
+      period: 'weekly',
+      date: '2026-10-19',
+      timeZone: 'UTC',
+      windowStart: new Date('2026-10-12T09:00:00.000Z'),
+      windowEnd: new Date('2026-10-19T09:00:00.000Z'),
+      eventCount: 0,
+      repositories: [],
+      unreleased: [],
+      people: [],
+      waiting: [
+        {
+          repository: 'myorg/repo',
+          number: 12,
+          title: 'Crash on start',
+          url: 'https://github.com/myorg/repo/issues/12',
+          login: 'alice',
+          since: new Date('2026-10-19T04:30:00.000Z'),
+        },
+      ],
+      responseTimes: { merge: null, firstReply: { medianMs: 20 * 60_000, count: 1 } },
+    });
+
+    expect(payload.embeds[0]).not.toHaveProperty('description');
+    expect(payload.embeds[0]?.title).toBe('📦 Weekly pulse: no new events');
+    expect(payload.embeds[0]?.fields).toEqual([
+      {
+        name: '⏳ Waiting on you',
+        value:
+          '[myorg/repo#12](https://github.com/myorg/repo/issues/12) Crash on start · @alice · 4h',
+      },
+      { name: '⏱️ Response times', value: 'First reply: <1h median (1 thread)' },
+    ]);
   });
 });

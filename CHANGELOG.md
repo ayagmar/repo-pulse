@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- "⏳ Waiting on you" in the daily and weekly digests: open issues and pull requests where
+  an outside person spoke last and nobody on the owner's side (the owner and
+  `PEOPLE_IGNORED_LOGINS`) has answered, closed or merged it since, oldest wait first, up
+  to five plus `…and N more`. Bots never answer and never wait; labels are not answers.
+  It counts from the first comment or review recorded, since earlier ones were never
+  stored, and covers threads with activity in the last 90 days and at most 100 events. The
+  weekly digest adds "⏱️ Response times": median time to merge, and to a first reply, by
+  GitHub's times; a reply or merge without GitHub's time is left out, not dated by its
+  arrival. A digest without activity is now posted when someone is waiting, headed "no
+  new events". Digests keep the whole embed within Discord's 6,000 characters.
+- Issue comment (`issue_comment.created`) and Pull request review
+  (`pull_request_review.submitted`) deliveries are accepted as `comment.created` and
+  `review.submitted`. Those from outside people alert with an excerpt and a link; the owner's side,
+  bots, comment reviews without text and unknown review states are recorded without an
+  alert (`202`, "Webhook recorded without an alert"), a decision stored with the event and
+  kept on redelivery. `pull_request.ready_for_review` and `pull_request.converted_to_draft`
+  are recorded the same way. The GitHub App needs the two new event subscriptions,
+  after deploying.
+- Issue and pull request events store GitHub's time for the action (`occurredAt`) and
+  the thread's creation time (`createdAt`). The digest's activity summary leaves out
+  comments, reviews and draft changes.
+- Migration `0010` adds `feature_activations` and the partial index
+  `idx_events_thread`. The previous release runs with it applied.
 - **Breaking:** events come only from the GitHub App. `GITHUB_APP_ID`,
   `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` are required, and a delivery
   without the configured installation, repository webhooks included, is answered `200`
