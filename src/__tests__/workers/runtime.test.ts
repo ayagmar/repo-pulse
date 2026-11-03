@@ -20,7 +20,7 @@ import {
   D1EventHistory,
   type ThreadActivityMaterial,
 } from '../../core/services/d1-event-history.js';
-import type { D1DatabaseLike } from '../../core/services/d1-types.js';
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../../core/services/d1-types.js';
 import { dueDigestWindow } from '../../core/services/digest.js';
 import { DurableEventProcessor } from '../../core/services/durable-event-processor.js';
 import { NotificationDispatcher } from '../../core/services/notification-dispatcher.js';
@@ -62,6 +62,8 @@ describe('Workers runtime integration', () => {
     await env.DB.prepare('DELETE FROM events').run();
     await env.DB.prepare('DELETE FROM digest_sends').run();
     await env.DB.prepare('DELETE FROM feature_activations').run();
+    await env.DB.prepare('DELETE FROM star_milestone_baselines').run();
+    await env.DB.prepare('DELETE FROM star_milestones').run();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -332,6 +334,110 @@ describe('Workers runtime integration', () => {
       processingAttempts: 1,
       providerAttemptCount: 1,
     });
+  });
+
+  it('decides star milestones in one real D1 batch: all of it or none, once', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const starAt = (count: number): RepoEvent => ({
+      ...event,
+      repository: { ...event.repository, stars: count },
+      star: { count },
+    });
+    const accept = (
+      count: number,
+      deliveryId: string,
+      db: D1DatabaseLike = env.DB
+    ): ReturnType<DurableEventProcessor['enqueue']> =>
+      new DurableEventProcessor(
+        new D1DeliveryLedger(db),
+        new NotificationDispatcher(new Redactor([]))
+      ).enqueue(starAt(count), {
+        deliveryId,
+        sourceEventType: 'star',
+        repository: event.repository.fullName,
+      });
+    const milestones = async (): Promise<unknown[]> =>
+      (
+        await env.DB.prepare(
+          `SELECT 'baseline' AS kind, seen_count AS count, delivery_id AS deliveryId
+           FROM star_milestone_baselines
+           UNION ALL
+           SELECT 'milestone', milestone, delivery_id FROM star_milestones
+           ORDER BY kind, count`
+        ).all()
+      ).results;
+    const storedMilestone = async (deliveryId: string): Promise<unknown> => {
+      const stored = await new D1EventHistory(env.DB).findEvent(deliveryId);
+      return stored !== null && 'starMilestone' in stored ? stored.starMilestone : undefined;
+    };
+    /** D1 failing once, when it runs the first statement containing `sql`. */
+    const failingOnce = (sql: string): D1DatabaseLike => {
+      let failed = false;
+      return {
+        prepare: (query): D1PreparedStatementLike => {
+          if (failed || !query.includes(sql)) {
+            return env.DB.prepare(query);
+          }
+          failed = true;
+          const parameters = query
+            .split('?')
+            .slice(1)
+            .map(() => '?');
+          return env.DB.prepare(`SELECT ${parameters.join(', ')} FROM missing_table`);
+        },
+        batch: (statements) => env.DB.batch(statements as D1PreparedStatement[]),
+        exec: (query) => env.DB.exec(query),
+      };
+    };
+
+    await accept(95, 'seen');
+    // The snapshot fails after the claim ran: the claim and the snapshot are both undone.
+    await expect(accept(100, 'failed', failingOnce("'$.starMilestone'"))).resolves.toEqual({
+      outcome: 'accepted',
+    });
+    await expect(storedMilestone('failed')).resolves.toBeUndefined();
+    await expect(milestones()).resolves.toEqual([
+      { kind: 'baseline', count: 95, deliveryId: 'seen' },
+    ]);
+
+    // Two deliveries racing for 100: one takes it.
+    await Promise.all([accept(100, 'left'), accept(101, 'right')]);
+    const [left, right] = await Promise.all([storedMilestone('left'), storedMilestone('right')]);
+    expect([left, right].filter((stored) => stored !== undefined)).toEqual([
+      {
+        milestone: 100,
+        reachedAt: expect.any(String) as unknown,
+        previous: null,
+        recentStars: { since: expect.any(String) as unknown, net: 3 },
+      },
+    ]);
+
+    // A batch that commits but whose answer is lost, then redelivered after pruning.
+    const losing: D1DatabaseLike = {
+      prepare: (query) => env.DB.prepare(query),
+      batch: async (statements) => {
+        await env.DB.batch(statements as D1PreparedStatement[]);
+        throw new Error('Network connection lost');
+      },
+      exec: (query) => env.DB.exec(query),
+    };
+    await expect(accept(250, 'lost', losing)).rejects.toThrow('Network connection lost');
+    const celebrated = await storedMilestone('lost');
+    expect(celebrated).toMatchObject({ milestone: 250, previous: { milestone: 100 } });
+    await env.DB.prepare("DELETE FROM deliveries WHERE delivery_id = 'lost'").run();
+    await expect(accept(260, 'lost')).resolves.toEqual({ outcome: 'accepted' });
+    await expect(ledger.getDelivery('lost')).resolves.toMatchObject({
+      event: { star: { count: 250 }, starMilestone: celebrated },
+    });
+    await expect(milestones()).resolves.toEqual([
+      { kind: 'baseline', count: 95, deliveryId: 'seen' },
+      {
+        kind: 'milestone',
+        count: 100,
+        deliveryId: expect.stringMatching(/^(left|right)$/) as unknown,
+      },
+      { kind: 'milestone', count: 250, deliveryId: 'lost' },
+    ]);
   });
 
   it("follows Morocco's clock changes with the runtime's time zone data", () => {

@@ -2,6 +2,7 @@ import { DELIVERY_DEFAULTS } from '../../config/delivery-policy.js';
 import type { NotificationFailureResult } from '../interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
+import { REPO_EVENT_TYPES } from '../models/repo-event.js';
 import type { ClaimedDelivery, D1DeliveryLedger } from './d1-delivery-ledger.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
@@ -96,10 +97,12 @@ export class DurableEventProcessor {
 
   /**
    * Persist an accepted event. Whether it alerts is decided here, once, and stored with
-   * it: a history-only event is recorded and never queued. For an outside person, an
-   * alerting event also records what was seen from them before. That history is
-   * optional: if persisting with it fails, the event is persisted without it, and only
-   * that failure fails the request.
+   * it: a history-only event is recorded and never queued. Two optional enrichments are
+   * decided in the same batch: for an outside person, an alerting event records what
+   * was seen from them before, and a star event records its repository's milestones and
+   * the one it celebrates, if any. If persisting with them fails, nothing of them was
+   * written, and the event is persisted without them, as a plain alert; only that
+   * failure fails the request.
    */
   async enqueue(
     event: RepoEvent,
@@ -114,25 +117,30 @@ export class DurableEventProcessor {
       event: alert ? event : { ...event, alert: false as const },
       maxAttempts: this.maxAttempts,
     };
-    if (
-      this.people === null ||
-      !alert ||
-      !isOutsidePerson(event.sender, event.repository.owner, ignoredLogins)
-    ) {
+    const senderHistory =
+      this.people !== null &&
+      alert &&
+      isOutsidePerson(event.sender, event.repository.owner, ignoredLogins);
+    const starMilestone =
+      event.type === REPO_EVENT_TYPES.STAR_CREATED || event.type === REPO_EVENT_TYPES.STAR_DELETED;
+    if (!(senderHistory || starMilestone)) {
       return this.ledger.persistAcceptedDelivery(input);
     }
 
     try {
       return await this.ledger.persistAcceptedDelivery({
         ...input,
-        rememberSenderId: event.sender.id,
+        ...(senderHistory ? { rememberSenderId: event.sender.id } : {}),
+        ...(starMilestone ? { recordStarMilestone: true } : {}),
       });
     } catch {
       // No exception text: D1 errors can quote bound values.
-      logger.warn('people.history_read_failed', {
+      logger.warn('event_processor.enrichment_failed', {
         component: 'event_processor',
         deliveryId: context.deliveryId,
         repository: context.repository,
+        senderHistory,
+        starMilestone,
       });
       return this.ledger.persistAcceptedDelivery(input);
     }

@@ -265,12 +265,15 @@ describe('one scheduled invocation', () => {
     rejectedTasks: number;
     /** Queries that would recompute what acceptance decided or recorded. */
     enrichmentQueries: number;
+    /** Posts of the milestone that acceptance decided. */
+    milestonePosts: number;
     deliveries: DeliveryRow[];
   }
 
   /**
    * The worst case: a Monday at the digest hour and a radar minute, with deliveries
-   * to drain, among them a comment and a review alert, a daily and a weekly digest
+   * to drain, among them a comment and a review alert and a star milestone decided at
+   * acceptance, a daily and a weekly digest
    * (which read the week's threads and when each of the week's stargazers was first
    * seen), a star alert, and no cached App token. `discordFailure` makes Discord answer
    * 503 to the comment and review alerts; `outcomeWriteFailure` makes D1 fail to record
@@ -344,15 +347,21 @@ describe('one scheduled invocation', () => {
       });
     }
 
-    // Six stars in the hour before the digest, each still waiting to be posted.
+    // Six stars in the hour before the digest, each still waiting to be posted, the first
+    // of them past 100 since the repository was first seen at 99, the day before.
+    vi.setSystemTime(new Date('2026-10-25T08:00:00Z'));
+    await processor.enqueue(star('early', 99), {
+      deliveryId: 'star-seen',
+      repository: 'myorg/cli',
+      sourceEventType: 'star',
+    });
+    await env.DB.prepare("DELETE FROM deliveries WHERE delivery_id = 'star-seen'").run();
     for (let index = 0; index < 6; index += 1) {
       vi.setSystemTime(new Date(Date.parse('2026-10-26T08:00:00Z') + index * 5 * 60_000));
-      await ledger.persistAcceptedDelivery({
+      await processor.enqueue(star(index === 0 ? 'famous' : `user${String(index)}`, 100 + index), {
         deliveryId: `star-${String(index)}`,
-        sourceEventType: 'star',
         repository: 'myorg/cli',
-        event: star(index === 0 ? 'famous' : `user${String(index)}`, 100 + index),
-        maxAttempts: 5,
+        sourceEventType: 'star',
       });
     }
 
@@ -415,7 +424,15 @@ describe('one scheduled invocation', () => {
         sentDigests: sent.results.map((row) => row.digestId),
         rejectedTasks: tasks.filter((task) => task.status === 'rejected').length,
         enrichmentQueries: counted.sql.filter(
-          (text) => text.includes('$.senderHistory') || text.includes('INTO feature_activations')
+          (text) =>
+            text.includes('$.senderHistory') ||
+            text.includes('INTO feature_activations') ||
+            text.includes('star_milestone')
+        ).length,
+        milestonePosts: fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            url.startsWith('https://discord.com/') &&
+            (init.body as string).includes('"title":"🎉 myorg/cli reached 100 stars"')
         ).length,
         deliveries: deliveries.results,
         subrequests: counted.queries() + urls.length,
@@ -449,6 +466,8 @@ describe('one scheduled invocation', () => {
       discordPosts: 8,
       sentDigests: ['daily:2026-10-26', 'weekly:2026-10-26'],
       rejectedTasks: 0,
+      enrichmentQueries: 0,
+      milestonePosts: 1,
     });
     expect(run.digestFields).toEqual([
       ['⏳ Waiting on you', '🚢 Not released yet'],

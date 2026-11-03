@@ -114,28 +114,52 @@ describe('formatDiscordEmbed', () => {
     expect(removed.description).toContain('unstarred');
   });
 
-  it('celebrates the star that reaches a milestone, and only that one', () => {
-    const starTitle = (count: number, type: 'created' | 'deleted' = 'created'): string =>
-      getFirstEmbed(
-        formatDiscordEmbed(
-          type === 'created'
-            ? createEvent(REPO_EVENT_TYPES.STAR_CREATED, {
-                action: REPO_EVENT_ACTIONS.CREATED,
-                star: { count },
-              })
-            : createEvent(REPO_EVENT_TYPES.STAR_DELETED, {
-                action: REPO_EVENT_ACTIONS.DELETED,
-                star: { count },
-              })
-        )
-      ).title;
+  it('celebrates a star only from the milestone stored with it, never from its count', () => {
+    const star = (count: number, starMilestone?: unknown): RepoEventOf<'star.created'> => ({
+      ...createEvent(REPO_EVENT_TYPES.STAR_CREATED, {
+        action: REPO_EVENT_ACTIONS.CREATED,
+        star: { count },
+      }),
+      ...(starMilestone !== undefined ? { starMilestone: starMilestone as never } : {}),
+    });
+    const stored = {
+      milestone: 1000,
+      reachedAt: '2026-11-03T12:00:00.000Z',
+      previous: { milestone: 500, reachedAt: '2026-10-01T09:00:00.000Z' },
+      recentStars: { since: '2026-10-27T12:00:00.000Z', net: 42 },
+    };
 
-    expect(starTitle(10)).toBe('🎉 10 stars!');
-    expect(starTitle(1000)).toBe('🎉 1,000 stars!');
-    expect(starTitle(30_000)).toBe('🎉 30,000 stars!');
-    expect(starTitle(11)).toBe('⭐ New star');
-    expect(starTitle(15_000)).toBe('⭐ New star');
-    expect(starTitle(100, 'deleted')).toBe('💫 Star removed');
+    // Exact counts without a stored milestone: a fallback, a duplicate, a seeded one, or
+    // an event stored before milestones were.
+    for (const count of [10, 1000, 30_000]) {
+      expect(getFirstEmbed(formatDiscordEmbed(star(count))).title).toBe('⭐ New star');
+    }
+    expect(getFirstEmbed(formatDiscordEmbed(star(1000, { milestone: 999 }))).title).toBe(
+      '⭐ New star'
+    );
+
+    const celebration = getFirstEmbed(formatDiscordEmbed(star(1003, stored)));
+    expect(celebration.title).toBe('🎉 owner/test-repo reached 1,000 stars');
+    expect(celebration.description).toBe(
+      [
+        'Observed after [testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo) · ⭐ **1,003** total',
+        '⏱️ 33d since 500 stars',
+        '📈 +42 net recorded stars in the last 7 days',
+      ].join('\n')
+    );
+
+    // The first one: counted from the repository's creation, or not at all.
+    const first = { ...stored, milestone: 10, previous: null };
+    const created = star(10, { ...first, recentStars: { ...stored.recentStars, net: -1 } });
+    created.repository = { ...created.repository, createdAt: '2026-10-20T12:00:00.000Z' };
+    expect(getFirstEmbed(formatDiscordEmbed(created)).description).toBe(
+      [
+        'Observed after [testuser](https://github.com/testuser) starred [owner/test-repo](https://github.com/owner/test-repo) · ⭐ **10** total',
+        '⏱️ 14d since the repository was created',
+        '📈 -1 net recorded star in the last 7 days',
+      ].join('\n')
+    );
+    expect(getFirstEmbed(formatDiscordEmbed(star(10, first))).description).not.toContain('⏱️');
   });
 
   it('names the issue in the title and lists labels', () => {

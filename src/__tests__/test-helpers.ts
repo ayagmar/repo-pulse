@@ -84,14 +84,18 @@ class TestD1PreparedStatement implements D1PreparedStatementLike {
   }
 
   run(): Promise<{ success: boolean; meta: { changes: number; last_row_id?: number } }> {
+    return Promise.resolve(this.runNow());
+  }
+
+  runNow(): { success: boolean; meta: { changes: number; last_row_id?: number } } {
     const result = this.statement.run(...this.params);
-    return Promise.resolve({
+    return {
       success: true,
       meta: {
         changes: result.changes,
         last_row_id: Number(result.lastInsertRowid),
       },
-    });
+    };
   }
 }
 
@@ -125,18 +129,25 @@ export function createTestD1Database(databasePath: string): TestD1Database {
         database.prepare<Record<string, unknown>[], Record<string, unknown>>(query)
       );
     },
-    async batch(statements: readonly D1PreparedStatementLike[]): Promise<
+    batch(statements: readonly D1PreparedStatementLike[]): Promise<
       readonly {
         success: boolean;
         meta: { changes: number; last_row_id?: number };
       }[]
     > {
-      const results = [];
-      for (const statement of statements) {
-        results.push(await statement.run());
-      }
-
-      return results;
+      // A D1 batch is one transaction: a failing statement rolls back the ones before it,
+      // and no other query runs in between.
+      const runAll = database.transaction(() =>
+        statements.map((statement) => {
+          if (!(statement instanceof TestD1PreparedStatement)) {
+            throw new Error('A batch takes statements prepared on this database');
+          }
+          return statement.runNow();
+        })
+      );
+      return new Promise((resolve) => {
+        resolve(runAll());
+      });
     },
     exec(sql: string): Promise<void> {
       database.exec(sql);

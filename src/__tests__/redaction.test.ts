@@ -250,7 +250,7 @@ describe('secrets in failures', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const posted = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string;
     expect(posted).not.toMatch(/First time here|Seen before/);
-    expect(logged()).toContain('people.history_read_failed');
+    expect(logged()).toContain('event_processor.enrichment_failed');
     expectNoSentinel(logged());
   });
 

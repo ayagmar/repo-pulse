@@ -18,6 +18,8 @@ export interface GitHubRepository {
   default_branch?: string;
   /** Read only for App deliveries, which are admitted only from repositories that are not forks. */
   fork?: boolean;
+  /** ISO 8601 on star payloads; other payloads may send a Unix time. */
+  created_at?: string | number;
 }
 
 export interface GitHubUser {
@@ -115,9 +117,8 @@ export interface GitHubWebhookPayload {
   installation?: { id: number };
 
   // Event-specific fields
-  star?: {
-    starred_at: string | null;
-  };
+  /** Star events: when the star was added; null on removal. */
+  starred_at?: string | null;
   issue?: GitHubIssue;
   pull_request?: GitHubPullRequest;
   comment?: GitHubComment;
