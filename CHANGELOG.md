@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Breaking:** events come only from the GitHub App. `GITHUB_APP_ID`,
+  `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` are required, and a delivery
+  without the configured installation, repository webhooks included, is answered `200`
+  and ignored. `GITHUB_WEBHOOK_SOURCES` and `GITHUB_TOKEN` are no longer read; digests
+  and star alerts always use the App's token. `just subscribe`, `just unsubscribe` and
+  `just check-coverage`, with their scripts, are removed, as are the cutover and
+  rollback steps in `docs/operations.md`.
 - `GET /public/activity?days=28`: public activity summed per UTC day (pushes, commits,
   merges, releases and stars, in total and per repository) over the whole event history,
   zero-filled, with `since`, the first day the history has a public event for, and

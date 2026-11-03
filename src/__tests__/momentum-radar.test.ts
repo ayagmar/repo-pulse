@@ -8,7 +8,14 @@ import {
 } from '../core/models/repo-event.js';
 import { D1DeliveryLedger } from '../core/services/d1-delivery-ledger.js';
 import { D1RadarLog } from '../core/services/d1-radar-log.js';
-import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
+import {
+  createTempDatabasePath,
+  createTestEnv,
+  installationTokenResponse,
+  mintingApp,
+} from './test-helpers.js';
+
+const app = mintingApp();
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -42,6 +49,9 @@ function star(name: string, login: string, count: number): RepoEvent {
 const followers: Record<string, number> = { famous: 52_000, known: 340, newcomer: 3 };
 
 function fakeGitHub(url: string, init: RequestInit): Response {
+  if (url.endsWith('/access_tokens')) {
+    return installationTokenResponse('test-github-token');
+  }
   if (url === 'https://api.github.com/repos/myorg/cli/traffic/popular/referrers') {
     return Response.json([
       { referrer: 'news.ycombinator.com', count: 480, uniques: 410 },
@@ -153,7 +163,7 @@ describe('momentum radar', () => {
   }
 
   it('alerts once a day when a quiet repository suddenly gains stars', async () => {
-    const env = createRadarEnv({ GITHUB_TOKEN: 'test-github-token' });
+    const env = createRadarEnv(app);
     // One star a day for the two weeks before.
     for (let day = 14; day >= 1; day -= 1) {
       await record(
@@ -294,7 +304,7 @@ describe('momentum radar', () => {
           : new Response(null, { status: 204 })
       )
     );
-    const env = createRadarEnv({ GITHUB_TOKEN: 'test-expired-token' });
+    const env = createRadarEnv(app);
     const now = new Date('2026-10-15T12:05:00.000Z');
     await recordStars(env, 'cli', now, ['a', 'b', 'c', 'd', 'e'], 5);
 

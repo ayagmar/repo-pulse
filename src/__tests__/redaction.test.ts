@@ -12,6 +12,7 @@ import {
   createTempDatabasePath,
   createTestEnv,
   createTestRepoEvent,
+  installationTokenResponse,
 } from './test-helpers.js';
 
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -129,6 +130,7 @@ describe('secrets in failures', () => {
     for (const deliveryId of ['thrown', 'server-error', 'rejected']) {
       const payload = JSON.stringify({
         action: 'created',
+        installation: { id: 1 },
         repository: {
           id: 1,
           name: 'repo',
@@ -136,6 +138,7 @@ describe('secrets in failures', () => {
           owner: { login: 'myorg' },
           html_url: 'https://github.com/myorg/repo',
           private: false,
+          fork: false,
           description: null,
           stargazers_count: 1,
           forks_count: 0,
@@ -205,6 +208,7 @@ describe('secrets in failures', () => {
     };
     const payload = JSON.stringify({
       action: 'created',
+      installation: { id: 1 },
       repository: {
         id: 1,
         name: 'repo',
@@ -212,6 +216,7 @@ describe('secrets in failures', () => {
         owner: { login: 'myorg' },
         html_url: 'https://github.com/myorg/repo',
         private: false,
+        fork: false,
         description: null,
         stargazers_count: 1,
         forks_count: 0,
@@ -499,12 +504,7 @@ describe('secrets in failures', () => {
 
     it('keeps them out of the digest log when the GraphQL body is not JSON', async () => {
       vi.setSystemTime(new Date('2026-10-30T08:00:00Z'));
-      const env = createEnv({
-        GITHUB_APP_ID: '',
-        GITHUB_APP_INSTALLATION_ID: '',
-        GITHUB_APP_PRIVATE_KEY: '',
-        GITHUB_TOKEN: 'test-github-token',
-      });
+      const env = createEnv();
       const event = createTestRepoEvent();
       await new D1DeliveryLedger(env.DB).persistAcceptedDelivery({
         deliveryId: 'yesterday',
@@ -518,9 +518,11 @@ describe('secrets in failures', () => {
         'fetch',
         vi.fn((url: string) =>
           Promise.resolve(
-            url.startsWith('https://api.github.com/')
-              ? malformedBody()
-              : new Response(null, { status: 204 })
+            url.endsWith('/access_tokens')
+              ? installationTokenResponse('test-github-token')
+              : url.startsWith('https://api.github.com/')
+                ? malformedBody()
+                : new Response(null, { status: 204 })
           )
         )
       );

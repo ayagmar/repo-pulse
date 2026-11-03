@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { createConfig } from '../config/env.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
 
+const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+// Numbers through String(), which check:secrets reads as an expression, not a literal id.
+const app = {
+  GITHUB_APP_ID: String(1),
+  GITHUB_APP_INSTALLATION_ID: String(2),
+  GITHUB_APP_PRIVATE_KEY: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+};
+
 describe('createConfig', () => {
   it('rejects malformed retry values instead of truncating them', () => {
     const tempDatabase = createTempDatabasePath();
@@ -23,13 +31,14 @@ describe('createConfig', () => {
       createConfig({
         GITHUB_WEBHOOK_SECRET: 'test-secret',
         ADMIN_API_TOKEN: 'admin-token',
+        ...app,
         DELIVERY_MAX_ATTEMPTS: '9007199254740992',
       })
     ).toThrow('Invalid DELIVERY_MAX_ATTEMPTS');
   });
 
   it('rejects a digest time zone or hour that would never match, instead of never posting', () => {
-    const base = { GITHUB_WEBHOOK_SECRET: 'test-secret', ADMIN_API_TOKEN: 'admin-token' };
+    const base = { GITHUB_WEBHOOK_SECRET: 'test-secret', ADMIN_API_TOKEN: 'admin-token', ...app };
 
     expect(() => createConfig({ ...base, DIGEST_TIME_ZONE: 'Africa/Casablnca' })).toThrow(
       'Invalid DIGEST_TIME_ZONE: Africa/Casablnca'
@@ -55,46 +64,16 @@ describe('createConfig', () => {
     tempDatabase.cleanup();
   });
 
-  describe('GitHub webhook sources and App', () => {
+  describe('GitHub App', () => {
     const base = { GITHUB_WEBHOOK_SECRET: 'test-secret', ADMIN_API_TOKEN: 'admin-token' };
-    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    // Numbers through String(), which check:secrets reads as an expression, not a literal id.
-    const app = {
-      GITHUB_APP_ID: String(1),
-      GITHUB_APP_INSTALLATION_ID: String(2),
-      GITHUB_APP_PRIVATE_KEY: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
-    };
 
-    it('admits repository webhooks only when the sources are unset', () => {
-      const config = createConfig(base);
-      expect([...config.github.webhookSources]).toEqual(['repository']);
-      expect(config.github.app).toBeUndefined();
-    });
-
-    it('rejects an empty or unknown source instead of admitting a narrower set', () => {
-      for (const value of ['', ' ', 'repository,', 'repo', 'repository,apps']) {
-        expect(
-          () => createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: value }),
-          value
-        ).toThrow('Invalid GITHUB_WEBHOOK_SOURCES');
-      }
-      expect([
-        ...createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: ' repository , app ' }).github
-          .webhookSources,
-      ]).toEqual(['repository', 'app']);
-    });
-
-    it('refuses app as a source without the App configured', () => {
-      expect(() => createConfig({ ...base, GITHUB_WEBHOOK_SOURCES: 'app' })).toThrow(
-        'Invalid GITHUB_WEBHOOK_SOURCES: app needs GITHUB_APP_ID'
-      );
-    });
-
-    it('rejects a partial or malformed App config without echoing the values', () => {
+    it('requires every App value, and rejects a malformed one without echoing it', () => {
       for (const missing of Object.keys(app)) {
-        for (const blank of ['', ' ']) {
+        for (const blank of [undefined, '', ' ']) {
           const partial = { ...base, ...app, [missing]: blank };
-          expect(() => createConfig(partial), missing).toThrow('Incomplete GitHub App config');
+          expect(() => createConfig(partial), missing).toThrow(
+            `Missing required environment variable: ${missing}`
+          );
         }
       }
       expect(() => createConfig({ ...base, ...app, GITHUB_APP_ID: 'test-app' })).toThrow(
@@ -118,7 +97,7 @@ describe('createConfig', () => {
     });
 
     it('reads a complete App config', () => {
-      expect(createConfig({ ...base, ...app, GITHUB_WEBHOOK_SOURCES: 'app' }).github.app).toEqual({
+      expect(createConfig({ ...base, ...app }).github.app).toEqual({
         appId: 1,
         installationId: 2,
         privateKey: app.GITHUB_APP_PRIVATE_KEY.trim(),
@@ -127,7 +106,6 @@ describe('createConfig', () => {
   });
 
   describe('Discord actions', () => {
-    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
     // Through String() and variables, which check:secrets reads as expressions.
     const applicationId = String(100000000000000001n);
     const publicKey = 'ab'.repeat(32);
@@ -137,9 +115,7 @@ describe('createConfig', () => {
       GITHUB_WEBHOOK_SECRET: 'test-secret',
       ADMIN_API_TOKEN: 'admin-token',
       DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only',
-      GITHUB_APP_ID: String(1),
-      GITHUB_APP_INSTALLATION_ID: String(2),
-      GITHUB_APP_PRIVATE_KEY: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+      ...app,
       DISCORD_ACTIONS: 'on',
       DISCORD_APPLICATION_ID: applicationId,
       DISCORD_PUBLIC_KEY: publicKey,
@@ -170,10 +146,6 @@ describe('createConfig', () => {
     it('refuses anything partial or malformed when on, without echoing the values', () => {
       const cases: [Partial<Record<keyof typeof complete, string>>, string][] = [
         [{ DISCORD_ACTIONS: 'yes' }, 'Invalid DISCORD_ACTIONS'],
-        [
-          { GITHUB_APP_ID: '', GITHUB_APP_INSTALLATION_ID: '', GITHUB_APP_PRIVATE_KEY: '' },
-          'on needs GITHUB_APP_ID',
-        ],
         [{ DISCORD_WEBHOOK_URL: '' }, 'on needs DISCORD_WEBHOOK_URL'],
         [{ DISCORD_APPLICATION_ID: '' }, 'Invalid DISCORD_APPLICATION_ID'],
         [{ DISCORD_APPLICATION_ID: 'test-application' }, 'Invalid DISCORD_APPLICATION_ID'],

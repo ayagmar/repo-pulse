@@ -1,4 +1,3 @@
-import type { WebhookSource } from '../../config/env.js';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { normalizeRepoFullName } from '../../core/repository-identity.js';
 import { requireBoolean, requireNumber, requireObject } from './mappers/validation.js';
@@ -28,7 +27,7 @@ interface ParseGitHubWebhookInput extends GitHubWebhookHeaders {
 
 /**
  * A signed delivery. Its repository is read only once the delivery is admitted, so
- * one from an ignored source or repository is never refused for lacking it.
+ * one from an ignored installation or repository is never refused for lacking it.
  */
 type ParsedGitHubWebhook =
   | { kind: 'control'; deliveryId: string; eventType: string; payload: unknown }
@@ -36,7 +35,6 @@ type ParsedGitHubWebhook =
       kind: 'repository';
       deliveryId: string;
       eventType: string;
-      source: WebhookSource;
       payload: GitHubWebhookPayload;
     };
 
@@ -106,22 +104,15 @@ export async function parseGitHubWebhookRequest(
     kind: 'repository',
     deliveryId,
     eventType,
-    source: webhookSource(payload),
     payload: payload as GitHubWebhookPayload,
   };
 }
 
-/** App deliveries carry the installation they were sent for; repository webhooks do not. */
-function webhookSource(payload: unknown): WebhookSource {
-  return typeof payload === 'object' && payload !== null && 'installation' in payload
-    ? 'app'
-    : 'repository';
-}
-
 /**
- * Why an App delivery is not admitted, or null when it is: it must come from the
+ * Why a delivery is not admitted, or null when it is: it must come from the App's
  * configured installation and from a public repository that is not a fork. A
- * missing, null or mistyped field rejects it.
+ * missing, null or mistyped field rejects it, so a repository webhook's delivery,
+ * which carries no installation, is never admitted.
  */
 export function rejectAppDelivery(payload: unknown, installationId: number): string | null {
   try {

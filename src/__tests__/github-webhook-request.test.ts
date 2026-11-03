@@ -80,7 +80,6 @@ describe('parseGitHubWebhookRequest', () => {
 
     expect(result).toMatchObject({
       kind: 'repository',
-      source: 'repository',
       eventType: 'star',
       deliveryId: 'delivery-2',
     });

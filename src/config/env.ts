@@ -4,18 +4,11 @@ import { WEBHOOK_DEFAULTS } from './webhook-policy.js';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
-/** Where a webhook delivery comes from: a repository's own webhook, or the GitHub App. */
-const WEBHOOK_SOURCES = ['repository', 'app'] as const;
-
-export type WebhookSource = (typeof WEBHOOK_SOURCES)[number];
-
 type ConfigEnvVarName =
   | 'NODE_ENV'
   | 'LOG_LEVEL'
   | 'GITHUB_WEBHOOK_SECRET'
-  | 'GITHUB_TOKEN'
   | 'GITHUB_PUBLIC_TOKEN'
-  | 'GITHUB_WEBHOOK_SOURCES'
   | 'GITHUB_APP_ID'
   | 'GITHUB_APP_INSTALLATION_ID'
   | 'GITHUB_APP_PRIVATE_KEY'
@@ -105,28 +98,6 @@ function parseHour(value: string | undefined, defaultValue: number): number {
   return hour;
 }
 
-/**
- * The webhook sources admitted: `repository` for per-repository webhooks, `app` for
- * the GitHub App's deliveries. Unset means `repository`; an empty or unknown entry
- * is an error rather than a silently narrower set.
- */
-function parseWebhookSources(value: string | undefined): ReadonlySet<WebhookSource> {
-  if (value === undefined) {
-    return new Set(['repository']);
-  }
-
-  const sources = value.split(',').map((source) => source.trim());
-  for (const source of sources) {
-    if (!WEBHOOK_SOURCES.includes(source as WebhookSource)) {
-      throw new Error(
-        `Invalid GITHUB_WEBHOOK_SOURCES: expected a comma-separated list of ${WEBHOOK_SOURCES.join(', ')}`
-      );
-    }
-  }
-
-  return new Set(sources as WebhookSource[]);
-}
-
 /** Comma-separated GitHub logins, lowercased; blank entries are ignored. */
 function parseLoginList(value: string | undefined): ReadonlySet<string> {
   return new Set(
@@ -148,22 +119,22 @@ const PKCS8_HEADER = '-----BEGIN PRIVATE KEY-----';
 const PKCS1_HEADER = '-----BEGIN RSA PRIVATE KEY-----';
 
 /**
- * The GitHub App's credentials, or undefined when none are set. Error messages
- * name the variable, never its value.
+ * The GitHub App's credentials, all three required. Error messages name the
+ * variable, never its value.
  */
-function parseGitHubApp(env: ConfigEnv): GitHubAppConfig | undefined {
+function parseGitHubApp(env: ConfigEnv): GitHubAppConfig {
   // Blank counts as unset, so a stray space cannot pass for a value.
-  const appId = (getEnvVar(env, 'GITHUB_APP_ID') ?? '').trim();
-  const installationId = (getEnvVar(env, 'GITHUB_APP_INSTALLATION_ID') ?? '').trim();
-  const privateKey = (getEnvVar(env, 'GITHUB_APP_PRIVATE_KEY') ?? '').trim();
-  const setCount = [appId, installationId, privateKey].filter((value) => value !== '').length;
-  if (setCount === 0) {
-    return undefined;
-  }
-  if (setCount < 3) {
-    throw new Error(
-      'Incomplete GitHub App config: set GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY together'
-    );
+  const appId = getEnvVar(env, 'GITHUB_APP_ID', true).trim();
+  const installationId = getEnvVar(env, 'GITHUB_APP_INSTALLATION_ID', true).trim();
+  const privateKey = getEnvVar(env, 'GITHUB_APP_PRIVATE_KEY', true).trim();
+  for (const [name, value] of [
+    ['GITHUB_APP_ID', appId],
+    ['GITHUB_APP_INSTALLATION_ID', installationId],
+    ['GITHUB_APP_PRIVATE_KEY', privateKey],
+  ] as const) {
+    if (value === '') {
+      throw new Error(`Missing required environment variable: ${name}`);
+    }
   }
 
   if (privateKey.startsWith(PKCS1_HEADER)) {
@@ -201,7 +172,7 @@ const SNOWFLAKE = /^\d{1,20}$/;
  */
 function parseDiscordActions(
   env: ConfigEnv,
-  needs: { app: GitHubAppConfig | undefined; webhookUrl: string | undefined }
+  needs: { webhookUrl: string | undefined }
 ): DiscordActionsConfig | undefined {
   const mode = (getEnvVar(env, 'DISCORD_ACTIONS') ?? '').trim();
   if (mode === '' || mode === 'off') {
@@ -217,11 +188,6 @@ function parseDiscordActions(
     .split(',')
     .map((id) => id.trim())
     .filter((id) => id !== '');
-  if (needs.app === undefined) {
-    throw new Error(
-      'Invalid DISCORD_ACTIONS: on needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY'
-    );
-  }
   if (needs.webhookUrl === undefined || needs.webhookUrl === '') {
     throw new Error('Invalid DISCORD_ACTIONS: on needs DISCORD_WEBHOOK_URL');
   }
@@ -250,11 +216,8 @@ export function createConfig(env: ConfigEnv): {
   github: {
     webhookSecret: string;
     maxBodyBytes: number;
-    /** Read-only token for GitHub's API. Optional: without it, digests skip what it adds. */
-    apiToken: string | undefined;
-    webhookSources: ReadonlySet<WebhookSource>;
-    /** When set, its installation token replaces `apiToken`. */
-    app: GitHubAppConfig | undefined;
+    /** Sends every webhook delivery; its installation tokens read and write GitHub. */
+    app: GitHubAppConfig;
   };
   admin: {
     apiToken: string;
@@ -285,14 +248,7 @@ export function createConfig(env: ConfigEnv): {
   const isDevelopment = nodeEnv === 'development';
   const webhookSecret = getEnvVar(env, 'GITHUB_WEBHOOK_SECRET', true);
   const adminApiToken = getEnvVar(env, 'ADMIN_API_TOKEN', true);
-  const githubToken = getEnvVar(env, 'GITHUB_TOKEN');
-  const webhookSources = parseWebhookSources(getEnvVar(env, 'GITHUB_WEBHOOK_SOURCES'));
   const githubApp = parseGitHubApp(env);
-  if (webhookSources.has('app') && githubApp === undefined) {
-    throw new Error(
-      'Invalid GITHUB_WEBHOOK_SOURCES: app needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY'
-    );
-  }
   const discordWebhookUrl = getEnvVar(env, 'DISCORD_WEBHOOK_URL');
   const deliveryRetryBaseDelayMs = parsePositiveInteger(
     'DELIVERY_RETRY_BASE_DELAY_MS',
@@ -324,8 +280,6 @@ export function createConfig(env: ConfigEnv): {
         getEnvVar(env, 'WEBHOOK_MAX_BODY_BYTES'),
         WEBHOOK_DEFAULTS.maxBodyBytes
       ),
-      apiToken: githubToken === '' ? undefined : githubToken,
-      webhookSources,
       app: githubApp,
     },
 
@@ -335,7 +289,7 @@ export function createConfig(env: ConfigEnv): {
 
     discord: {
       webhookUrl: discordWebhookUrl,
-      actions: parseDiscordActions(env, { app: githubApp, webhookUrl: discordWebhookUrl }),
+      actions: parseDiscordActions(env, { webhookUrl: discordWebhookUrl }),
     },
 
     deliveryLedger: {

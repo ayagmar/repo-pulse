@@ -1,12 +1,12 @@
 # Setup Guide
 
 Deploy Repo Pulse from a clone with Wrangler. The [Deploy to Cloudflare button](README.md#deploy)
-does the same without a local checkout; the GitHub App and webhook steps below apply to both.
+does the same without a local checkout; the GitHub App steps below apply to both.
 
 ## Prerequisites
 
 - Cloudflare account with Workers and D1 enabled
-- A GitHub account that owns the repositories, to create the GitHub App; or repository admin access and the [GitHub CLI](https://cli.github.com/) for repository webhooks
+- A GitHub account that owns the repositories, to create the GitHub App
 - Discord webhook URL for the destination channel
 - Node 24 LTS recommended (`nvm use`); supported ranges are in `package.json`
 - npm 12.2.0 recommended (`npm install --global npm@12.2.0`)
@@ -60,7 +60,7 @@ binding, so `database_name` can change freely. Regenerate types after changing b
 ## Secrets and deploy
 
 Generate the webhook secret into a file first. Neither GitHub nor Cloudflare shows it
-again, and every repository webhook needs the same value:
+again, and the GitHub App needs the same value:
 
 ```bash
 mkdir -p ~/.config/repo-pulse
@@ -74,8 +74,13 @@ use `wrangler versions secret put` instead if the secret change must be staged.
 npm exec -- wrangler secret put GITHUB_WEBHOOK_SECRET < ~/.config/repo-pulse/webhook-secret
 npm exec -- wrangler secret put ADMIN_API_TOKEN
 npm exec -- wrangler secret put DISCORD_WEBHOOK_URL
-npm run deploy
 ```
+
+Then create the [GitHub App](#github-app), set its three secrets, set
+`"DISCORD_ACTIONS": "off"` in `wrangler.jsonc` unless you also do the
+[Discord actions](#discord-actions-optional) setup, and deploy with `npm run deploy`.
+The Worker refuses to start without the App's secrets, or with actions on and their
+secrets missing.
 
 `npm run deploy` applies pending D1 migrations, then deploys the Worker. Source maps and
 sampled traces are enabled in Wrangler configuration; deployment is required for those
@@ -83,11 +88,9 @@ settings to reach production.
 
 ## GitHub App
 
-The recommended way to receive events: one App, installed on all your repositories,
-covers new ones without setup, and its short-lived installation token replaces
-`GITHUB_TOKEN`. Deploy first with `GITHUB_WEBHOOK_SOURCES` set to `repository` (the
-committed value), so App deliveries are acknowledged and ignored until the App is
-checked.
+Repo Pulse receives events only from a GitHub App. One App, installed on all your
+repositories, covers new ones without setup, and its short-lived installation token
+reads what digests and alerts add.
 
 1. Open **Settings → Developer settings → GitHub Apps → New GitHub App**.
    - Webhook URL: `https://<your-worker>.workers.dev/webhook`
@@ -108,8 +111,8 @@ checked.
 3. **Install App → All repositories.** The installation ID is the number at the end
    of the installation's settings URL.
 4. Set the secrets. The key comes from the file; type the two IDs at the prompts.
-   One or two of the three is a configuration error that fails every request, so stage
-   all three as a new version and deploy it once:
+   All three are required, and a missing one fails every request, so stage them as a
+   new version and deploy it once:
 
    ```bash
    npm exec -- wrangler versions secret put GITHUB_APP_PRIVATE_KEY < ~/.config/repo-pulse/app-key.pkcs8.pem
@@ -119,38 +122,16 @@ checked.
    ```
 
    Then delete both key files. GitHub can issue a new key at any time.
-5. In the App's **Advanced → Recent Deliveries**, deliveries should answer `200` with
-   `ignored`. Open one repository event and check that `installation.id` in its payload
-   is the installation ID you set.
-6. Switch `GITHUB_WEBHOOK_SOURCES` as [docs/operations.md](docs/operations.md#moving-between-repository-webhooks-and-the-github-app)
-   describes: to `repository,app` first, and to `app` after the overlap.
+5. In the App's **Advanced → Recent Deliveries**, repository events should answer
+   `202` (or `200` with `ignored` for a private repository or a fork). A `200` that says
+   `installation.id is not GITHUB_APP_INSTALLATION_ID` means the installation ID is
+   wrong; a `401` means the webhook secret does not match.
 
 The App's token asks for Metadata, Contents and Administration read only. A leaked App
 key gives read access to every repository the App is installed on, private ones
 included; to rotate it, generate a new key in the App, convert it, `wrangler secret put
 GITHUB_APP_PRIVATE_KEY`, deploy, check a digest, then delete the old key in GitHub.
 
-## Repository webhooks
-
-The alternative to the App: one webhook per repository. With the
-[GitHub CLI](https://cli.github.com/) logged in as a repository admin, subscribe
-repositories in one command. Repositories that already send to the URL are skipped:
-
-```bash
-just subscribe https://<your-worker>.workers.dev owner/repo owner/other-repo
-```
-
-The script (`scripts/subscribe.sh`) reads the secret from
-`~/.config/repo-pulse/webhook-secret`, or from `REPO_PULSE_SECRET_FILE` when set.
-
-To add one by hand, open the repository's **Settings → Webhooks → Add webhook**:
-
-- Payload URL: `https://<your-worker>.workers.dev/webhook`
-- Content type: `application/json`
-- Secret: the value of `GITHUB_WEBHOOK_SECRET`
-- Events: Stars, Issues, Pull requests, Forks, Pushes, Releases
-
-GitHub pings each new webhook: `200` means the secret matches, `401` means it does not.
 Supported deliveries return `202` after persistence, not after Discord delivery. Duplicate
 retained delivery IDs return `200`; unsupported events are acknowledged and ignored.
 

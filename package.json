@@ -82,13 +82,22 @@
   "cloudflare": {
     "bindings": {
       "GITHUB_WEBHOOK_SECRET": {
-        "description": "Random string GitHub signs each webhook delivery with. Generate one with `openssl rand -hex 32` and save a copy: you need the same value for every repository webhook."
+        "description": "Random string GitHub signs each webhook delivery with. Generate one with `openssl rand -hex 32` and save a copy: the GitHub App needs the same value."
       },
       "ADMIN_API_TOKEN": {
         "description": "Bearer token for the `/admin` endpoints. Generate one with `openssl rand -hex 32`."
       },
       "DISCORD_WEBHOOK_URL": {
         "description": "Webhook URL of the Discord channel to post to (Server Settings → Integrations → Webhooks)."
+      },
+      "GITHUB_APP_ID": {
+        "description": "The GitHub App's ID, from its settings page."
+      },
+      "GITHUB_APP_INSTALLATION_ID": {
+        "description": "The App installation's ID: the number at the end of the installation's settings URL."
+      },
+      "GITHUB_APP_PRIVATE_KEY": {
+        "description": "The App's private key in PKCS#8 (`openssl pkcs8 -topk8 -nocrypt -in key.pem`)."
       }
     }
   },

@@ -1,6 +1,9 @@
 GITHUB_WEBHOOK_SECRET=replace-with-github-webhook-secret
 ADMIN_API_TOKEN=replace-with-admin-bearer-token
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+GITHUB_APP_ID=replace-with-github-app-id
+GITHUB_APP_INSTALLATION_ID=replace-with-github-app-installation-id
+GITHUB_APP_PRIVATE_KEY=replace-with-github-app-pkcs8-private-key
 # Only with DISCORD_ACTIONS=on in wrangler.jsonc; see docs/operations.md.
 # DISCORD_APPLICATION_ID=replace-with-discord-application-id
 # DISCORD_PUBLIC_KEY=replace-with-discord-public-key

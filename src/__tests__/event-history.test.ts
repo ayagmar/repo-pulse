@@ -20,6 +20,7 @@ const secret = 'test-secret';
 function starWebhook(deliveryId: string, login: string, senderId = 1): Request {
   const payload = JSON.stringify({
     action: 'created',
+    installation: { id: 1 },
     repository: {
       id: 1,
       name: 'repo',
@@ -27,6 +28,7 @@ function starWebhook(deliveryId: string, login: string, senderId = 1): Request {
       owner: { login: 'myorg' },
       html_url: 'https://github.com/myorg/repo',
       private: false,
+      fork: false,
       description: null,
       stargazers_count: 1,
       forks_count: 0,
