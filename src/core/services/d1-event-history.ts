@@ -102,6 +102,68 @@ const PUBLIC_EVENTS_WHERE = `event_type IN (
 const PUBLIC_ACTIVITY_WHERE = `${PUBLIC_EVENTS_WHERE}
   AND ${SQL_IS_PUBLISHABLE}`;
 
+/**
+ * Every event type about one issue or pull request. `idx_events_thread` (migration
+ * 0010) is a partial index with this WHERE clause on the repository id and
+ * `THREAD_NUMBER`; a query must repeat both expressions and this term exactly for
+ * SQLite to use it, and naming it with INDEXED BY fails if they drift apart.
+ */
+const THREAD_EVENTS_WHERE = `event_type IN (
+    'issue.opened', 'issue.closed', 'issue.reopened',
+    'pull_request.opened', 'pull_request.closed', 'pull_request.merged',
+    'pull_request.reopened', 'pull_request.ready_for_review',
+    'pull_request.converted_to_draft', 'comment.created', 'review.submitted'
+  )`;
+const THREAD_REPOSITORY_ID = `json_extract(event_json, '$.repository.id')`;
+const THREAD_NUMBER = `COALESCE(
+    json_extract(event_json, '$.thread.number'),
+    json_extract(event_json, '$.issue.number'),
+    json_extract(event_json, '$.pullRequest.number')
+  )`;
+
+/** Event types that the digest's activity summary leaves out: they feed the waiting list. */
+const CONVERSATION_EVENT_TYPES = `(
+    'comment.created', 'review.submitted',
+    'pull_request.ready_for_review', 'pull_request.converted_to_draft'
+  )`;
+
+/** The comment and review feature's activation record in `feature_activations`. */
+export const THREAD_ACTIVATION = 'thread_replies';
+
+/** The fields the waiting list and response times need from one thread event. */
+export interface ThreadEventRow {
+  deliveryId: string;
+  eventType: RepoEvent['type'];
+  receivedAt: string;
+  occurredAt: string | null;
+  repositoryId: number;
+  /** The repository's name when the event was recorded. */
+  repository: string;
+  repositoryOwner: string | null;
+  number: number;
+  kind: 'issue' | 'pull_request';
+  title: string | null;
+  url: string | null;
+  state: 'open' | 'closed' | null;
+  /** 1 or 0 when the event says whether the pull request is a draft, else null. */
+  draft: number | null;
+  /** The issue's or pull request's creation time on GitHub, when recorded. */
+  createdAt: string | null;
+  senderId: number | null;
+  senderLogin: string | null;
+  reviewState: string | null;
+  /** 1 when the comment or review has a body. */
+  hasBody: number;
+  /** How many events the thread has in all, returned or not. */
+  threadEvents: number;
+}
+
+export interface ThreadActivityMaterial {
+  /** When comments and reviews started being recorded, or null before the first one. */
+  activatedAt: string | null;
+  rows: ThreadEventRow[];
+}
+
 /** The fields a digest needs from one recorded event. */
 export interface EventActivity {
   eventType: RepoEvent['type'];
@@ -151,12 +213,122 @@ export class D1EventHistory {
            json_extract(event_json, '$.repository.owner') AS repositoryOwner
          FROM events
          WHERE received_at >= ? AND received_at < ?
+           AND event_type NOT IN ${CONVERSATION_EVENT_TYPES}
          ORDER BY received_at ASC, delivery_id ASC`
       )
       .bind(start.toISOString(), end.toISOString())
       .all<EventActivity>();
 
     return rows.results;
+  }
+
+  /**
+   * Every stored event of the `threadLimit` threads most recently active since `since`,
+   * oldest first per thread, up to `rowLimit` rows, and the activation instant. Nothing
+   * before activation. Each row carries its thread's full event count, so a thread cut
+   * by `rowLimit` can be told apart and left out. One query: candidates through the
+   * type and time index, their events through the thread index, whatever their age.
+   */
+  async readThreadActivity(
+    since: Date,
+    threadLimit: number,
+    rowLimit: number
+  ): Promise<ThreadActivityMaterial> {
+    const rows = await this.db
+      .prepare(
+        `WITH activation AS (
+           SELECT activated_at FROM feature_activations WHERE feature = ?
+         ),
+         candidates AS (
+           SELECT
+             ${THREAD_REPOSITORY_ID} AS repositoryId,
+             ${THREAD_NUMBER} AS threadNumber,
+             MAX(received_at) AS lastReceivedAt
+           FROM events INDEXED BY idx_events_type_received_at
+           WHERE ${THREAD_EVENTS_WHERE}
+             AND received_at >= ?
+             AND EXISTS (SELECT 1 FROM activation)
+           GROUP BY repositoryId, threadNumber
+           ORDER BY lastReceivedAt DESC, repositoryId ASC, threadNumber ASC
+           LIMIT ?
+         ),
+         thread_events AS (
+           SELECT
+             candidates.lastReceivedAt,
+             candidates.repositoryId,
+             candidates.threadNumber,
+             delivery_id AS deliveryId,
+             event_type AS eventType,
+             received_at AS receivedAt,
+             event_json AS eventJson
+           FROM candidates
+           JOIN events INDEXED BY idx_events_thread
+             ON ${THREAD_REPOSITORY_ID} = candidates.repositoryId
+            AND ${THREAD_NUMBER} = candidates.threadNumber
+           WHERE ${THREAD_EVENTS_WHERE}
+         )
+         SELECT
+           deliveryId,
+           eventType,
+           receivedAt,
+           CASE WHEN json_type(eventJson, '$.occurredAt') = 'text'
+             THEN json_extract(eventJson, '$.occurredAt') END AS occurredAt,
+           repositoryId,
+           json_extract(eventJson, '$.repository.fullName') AS repository,
+           json_extract(eventJson, '$.repository.owner') AS repositoryOwner,
+           threadNumber AS number,
+           CASE
+             WHEN eventType LIKE 'issue.%' THEN 'issue'
+             WHEN eventType LIKE 'pull_request.%' OR eventType = 'review.submitted'
+               THEN 'pull_request'
+             ELSE json_extract(eventJson, '$.thread.kind')
+           END AS kind,
+           COALESCE(
+             json_extract(eventJson, '$.thread.title'),
+             json_extract(eventJson, '$.issue.title'),
+             json_extract(eventJson, '$.pullRequest.title')
+           ) AS title,
+           COALESCE(
+             json_extract(eventJson, '$.thread.url'),
+             json_extract(eventJson, '$.issue.url'),
+             json_extract(eventJson, '$.pullRequest.url')
+           ) AS url,
+           COALESCE(
+             json_extract(eventJson, '$.thread.state'),
+             json_extract(eventJson, '$.issue.state'),
+             json_extract(eventJson, '$.pullRequest.state')
+           ) AS state,
+           CASE COALESCE(
+               json_type(eventJson, '$.thread.draft'),
+               json_type(eventJson, '$.pullRequest.draft')
+             )
+             WHEN 'true' THEN 1 WHEN 'false' THEN 0
+           END AS draft,
+           COALESCE(
+             json_extract(eventJson, '$.thread.createdAt'),
+             json_extract(eventJson, '$.issue.createdAt'),
+             json_extract(eventJson, '$.pullRequest.createdAt')
+           ) AS createdAt,
+           CASE WHEN json_type(eventJson, '$.sender.id') = 'integer'
+             THEN json_extract(eventJson, '$.sender.id') END AS senderId,
+           json_extract(eventJson, '$.sender.login') AS senderLogin,
+           json_extract(eventJson, '$.review.state') AS reviewState,
+           (json_type(eventJson, '$.comment.body') = 'text'
+             OR json_type(eventJson, '$.review.body') = 'text') AS hasBody,
+           COUNT(*) OVER (PARTITION BY repositoryId, threadNumber) AS threadEvents,
+           (SELECT activated_at FROM activation) AS activatedAt
+         FROM thread_events
+         ORDER BY lastReceivedAt DESC, repositoryId ASC, threadNumber ASC,
+           receivedAt ASC, deliveryId ASC
+         LIMIT ?`
+      )
+      .bind(THREAD_ACTIVATION, since.toISOString(), threadLimit, rowLimit)
+      .all<ThreadEventRow & { activatedAt: string }>();
+
+    return {
+      activatedAt: rows.results[0]?.activatedAt ?? null,
+      rows: rows.results,
+    };
   }
 
   /** When each sender's earliest recorded event was received, by sender id. */

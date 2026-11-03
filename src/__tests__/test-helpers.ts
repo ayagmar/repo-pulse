@@ -203,7 +203,8 @@ export function createTestEnv(databasePath: string, overrides: TestEnvOverrides 
 
 export function createExecutionContext(): {
   executionCtx: ExecutionContext;
-  waitForBackground: () => Promise<void>;
+  /** Waits for every background task, and says how each ended. */
+  waitForBackground: () => Promise<PromiseSettledResult<unknown>[]>;
 } {
   const backgroundTasks: Promise<unknown>[] = [];
 
@@ -224,8 +225,8 @@ export function createExecutionContext(): {
         throw new Error('Execution context aborted');
       },
     },
-    async waitForBackground(): Promise<void> {
-      await Promise.allSettled(backgroundTasks);
+    waitForBackground(): Promise<PromiseSettledResult<unknown>[]> {
+      return Promise.allSettled(backgroundTasks);
     },
   };
 }

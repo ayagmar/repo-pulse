@@ -199,7 +199,9 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
       message:
         enqueueResult.outcome === 'duplicate'
           ? 'Duplicate delivery acknowledged'
-          : 'Webhook accepted for asynchronous processing',
+          : enqueueResult.outcome === 'recorded'
+            ? 'Webhook recorded without an alert'
+            : 'Webhook accepted for asynchronous processing',
       eventType: event.type,
       repository,
     };

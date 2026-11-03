@@ -1,16 +1,20 @@
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import type { RepoEvent } from '../../core/models/repo-event.js';
 import {
+  mapCommentCreated,
   mapForkCreated,
   mapIssueClosed,
   mapIssueOpened,
   mapIssueReopened,
   mapPullRequestClosed,
+  mapPullRequestConvertedToDraft,
   mapPullRequestMerged,
   mapPullRequestOpened,
+  mapPullRequestReadyForReview,
   mapPullRequestReopened,
   mapPush,
   mapReleasePublished,
+  mapReviewSubmitted,
   mapStarCreated,
   mapStarDeleted,
 } from './mappers/index.js';
@@ -80,9 +84,33 @@ export function mapGitHubEvent(
               : mapPullRequestClosed(repository, sender, pr);
           case 'reopened':
             return mapPullRequestReopened(repository, sender, pr);
+          case 'ready_for_review':
+            return mapPullRequestReadyForReview(repository, sender, pr);
+          case 'converted_to_draft':
+            return mapPullRequestConvertedToDraft(repository, sender, pr);
           default:
             return null;
         }
+      }
+
+      case 'issue_comment': {
+        if (action !== 'created') {
+          return null;
+        }
+        if (!(payload.issue && payload.comment)) {
+          throw new EventMappingError('Missing issue or comment data');
+        }
+        return mapCommentCreated(repository, sender, payload.issue, payload.comment);
+      }
+
+      case 'pull_request_review': {
+        if (action !== 'submitted') {
+          return null;
+        }
+        if (!(payload.pull_request && payload.review)) {
+          throw new EventMappingError('Missing pull request or review data');
+        }
+        return mapReviewSubmitted(repository, sender, payload.pull_request, payload.review);
       }
 
       case 'fork': {

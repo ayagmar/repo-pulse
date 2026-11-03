@@ -39,8 +39,10 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
 - Alerts say whether the person behind them is new or returning, across all your repositories: `👋 First time here`, or `↩️ Seen before: 12 events in 3 repos since 4 Mar 2026`. Your own events, bots and the logins in `PEOPLE_IGNORED_LOGINS` get no such line.
+- Comments and reviews from outside people are announced with an excerpt and a link, and reviews say whether they approve or request changes. Your own, those of the logins in `PEOPLE_IGNORED_LOGINS`, and bots' are recorded without an alert, as are comment reviews with no text.
 - Optionally, issue alerts get **Close** and **Label…** buttons. Only the Discord users you list can use them, they act on the issue the alert was about, only while its repository is public and not a fork, and the alert is updated to show what was done. See [SETUP.md](SETUP.md#discord-actions-optional).
-- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It is skipped after a day without activity. It also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days, lists the latest merged pull requests, and under "Who's showing up" names the week's five most active outside people, with `🆕` for those seen for the first time that week.
+- Each morning, one digest message sums up the previous day per repository: stars, commits, pull requests, issues, forks, and releases. It also lists repositories with commits since their latest release. On Mondays a weekly digest covers the past seven days, lists the latest merged pull requests, and under "Who's showing up" names the week's five most active outside people, with `🆕` for those seen for the first time that week.
+- Both digests start with "⏳ Waiting on you": open issues and pull requests where an outside person spoke last and nobody on your side has answered or closed it since, oldest wait first, such as `[myorg/repo#12](…) Crash on start · @alice · 3d`. The weekly digest adds "⏱️ Response times", the median time to merge for pull requests merged that week and to a first reply for threads first answered that week. A digest is skipped only when there was no activity and nobody is waiting. Comments were not recorded before this feature, so it counts from the first recorded comment or review; see [the system design](docs/system-design.md#waiting-on-you).
 
 ## Deploy
 
@@ -87,7 +89,7 @@ token a private repository still answers `404`, and the feed also requires `"pri
 
 GitHub has no account-wide webhooks, so events come from a GitHub App installed on all your repositories: a new repository is covered without setup, and the App's short-lived token lets digests and alerts read releases, commits, stargazers and referrers.
 
-[SETUP.md](SETUP.md#github-app) has the steps: create the App with read permissions only (Metadata, Contents, Issues, Pull requests, Administration) and the Star, Fork, Issues, Pull request, Push and Release events, using the same webhook secret; install it on all repositories; and set `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` as secrets. All three are required. Deliveries from other installations, private repositories and forks are ignored, and so are repository webhooks.
+[SETUP.md](SETUP.md#github-app) has the steps: create the App with read permissions only (Metadata, Contents, Issues, Pull requests, Administration) and the Star, Fork, Issues, Issue comment, Pull request, Pull request review, Push and Release events, using the same webhook secret; install it on all repositories; and set `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` as secrets. All three are required. Deliveries from other installations, private repositories and forks are ignored, and so are repository webhooks.
 
 ## How it works
 
@@ -112,7 +114,9 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 | --- | --- |
 | Stars | `star.created`, `star.deleted` |
 | Issues | `issue.opened`, `issue.closed`, `issue.reopened` |
-| Pull requests | `pull_request.opened`, `pull_request.closed`, `pull_request.merged`, `pull_request.reopened` |
+| Pull requests | `pull_request.opened`, `pull_request.closed`, `pull_request.merged`, `pull_request.reopened`; `pull_request.ready_for_review` and `pull_request.converted_to_draft` are recorded without an alert |
+| Issue comments | `comment.created`, on issues and pull requests |
+| Pull request reviews | `review.submitted` |
 | Forks | `fork.created` |
 | Pushes | `push.default_branch` |
 | Releases | `release.published` (including pre-releases) |
@@ -251,7 +255,7 @@ These defaults are committed in `wrangler.jsonc` and `src/config/delivery-policy
 - **D1 ledger:** stores accepted deliveries, dedupe state, attempts, and retry metadata
 - **Event history:** keeps every accepted event in D1 after its delivery row is pruned
 - **Background processor:** drains due work, dispatches providers, reschedules transient failures, and prunes old succeeded rows
-- **Digests:** the cron posts one summary of the previous day, and on Mondays one of the past week, from the event history
+- **Digests:** the cron posts one summary of the previous day, and on Mondays one of the past week, from the event history, with who is waiting for an answer
 - **Star radar:** every ten minutes, the cron looks for repositories gaining stars much faster than usual and alerts once a day per repository
 - **Admin surface:** exposes status, health, delivery history, retries, OpenAPI, and Swagger UI
 

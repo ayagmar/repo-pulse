@@ -424,4 +424,139 @@ describe('mapGitHubEvent', () => {
       }
     });
   });
+
+  describe('comments, reviews and draft changes', () => {
+    // Shaped like GitHub's webhook payloads, trimmed to the fields read.
+    const issueOnPullRequest = {
+      number: 7,
+      title: 'Add a flag',
+      html_url: 'https://github.com/owner/test-repo/pull/7',
+      state: 'open',
+      body: null,
+      labels: [],
+      created_at: '2026-10-10T10:00:00Z',
+      updated_at: '2026-10-12T10:00:00Z',
+      pull_request: { url: 'https://api.github.com/repos/owner/test-repo/pulls/7' },
+    };
+    const comment = {
+      id: 42,
+      html_url: 'https://github.com/owner/test-repo/pull/7#issuecomment-42',
+      body: 'Any news?',
+      created_at: '2026-10-12T10:00:00Z',
+    };
+    const pullRequest = {
+      number: 7,
+      title: 'Add a flag',
+      html_url: 'https://github.com/owner/test-repo/pull/7',
+      state: 'open',
+      merged: false,
+      body: null,
+      draft: true,
+      head: { ref: 'feature' },
+      base: { ref: 'main' },
+      created_at: '2026-10-10T10:00:00Z',
+      updated_at: '2026-10-11T10:00:00+02:00',
+      merged_at: null,
+      closed_at: null,
+    };
+
+    function map(
+      eventType: string,
+      payload: Record<string, unknown>
+    ): ReturnType<typeof mapGitHubEvent> {
+      return mapGitHubEvent(eventType, { repository: mockRepo, sender: mockSender, ...payload });
+    }
+
+    it('maps a comment on a pull request without needing a full pull request', () => {
+      expect(
+        map('issue_comment', { action: 'created', issue: issueOnPullRequest, comment })
+      ).toMatchObject({
+        type: 'comment.created',
+        occurredAt: '2026-10-12T10:00:00.000Z',
+        thread: {
+          kind: 'pull_request',
+          number: 7,
+          url: 'https://github.com/owner/test-repo/pull/7',
+          state: 'open',
+          // A comment's payload does not say whether the pull request is a draft.
+          draft: null,
+          createdAt: '2026-10-10T10:00:00.000Z',
+        },
+        comment: { id: 42, url: comment.html_url, body: 'Any news?' },
+      });
+      const { pull_request: _pullRequest, ...plainIssue } = issueOnPullRequest;
+      expect(map('issue_comment', { action: 'created', issue: plainIssue, comment })).toMatchObject(
+        {
+          thread: { kind: 'issue', draft: null },
+        }
+      );
+      expect(map('issue_comment', { action: 'edited', issue: plainIssue, comment })).toBeNull();
+      expect(() => map('issue_comment', { action: 'created', issue: plainIssue })).toThrow(
+        EventMappingError
+      );
+    });
+
+    it('accepts empty and missing review bodies and keeps unknown states as sent', () => {
+      const review = (body: unknown, state: string, submittedAt: unknown): unknown =>
+        map('pull_request_review', {
+          action: 'submitted',
+          pull_request: pullRequest,
+          review: {
+            id: 9,
+            html_url: 'https://github.com/owner/test-repo/pull/7#pullrequestreview-9',
+            body,
+            state,
+            submitted_at: submittedAt,
+          },
+        });
+
+      expect(review('', 'commented', '2026-10-12T11:00:00Z')).toMatchObject({
+        type: 'review.submitted',
+        occurredAt: '2026-10-12T11:00:00.000Z',
+        thread: { kind: 'pull_request', draft: true },
+        review: { body: null, state: 'commented' },
+      });
+      expect(review(null, 'APPROVED', null)).not.toHaveProperty('occurredAt');
+      expect(review(' \n', 'dismissed', 'yesterday')).toMatchObject({
+        review: { body: null, state: 'dismissed' },
+      });
+      expect(() => review(3, 'commented', null)).toThrow(EventMappingError);
+    });
+
+    it('records draft changes and GitHub’s time for each pull request action', () => {
+      expect(
+        map('pull_request', {
+          action: 'ready_for_review',
+          pull_request: { ...pullRequest, draft: false },
+        })
+      ).toMatchObject({
+        type: 'pull_request.ready_for_review',
+        occurredAt: '2026-10-11T08:00:00.000Z',
+        pullRequest: { draft: false, createdAt: '2026-10-10T10:00:00.000Z' },
+      });
+      expect(
+        map('pull_request', { action: 'converted_to_draft', pull_request: pullRequest })
+      ).toMatchObject({
+        type: 'pull_request.converted_to_draft',
+        pullRequest: { draft: true },
+      });
+      expect(
+        map('pull_request', {
+          action: 'closed',
+          pull_request: {
+            ...pullRequest,
+            state: 'closed',
+            merged: true,
+            merged_at: '2026-10-13T00:00:00Z',
+          },
+        })
+      ).toMatchObject({ type: 'pull_request.merged', occurredAt: '2026-10-13T00:00:00.000Z' });
+      expect(
+        map('pull_request', {
+          action: 'opened',
+          pull_request: { ...pullRequest, created_at: 'soon' },
+        })
+      ).not.toHaveProperty('occurredAt');
+    });
+  });
 });

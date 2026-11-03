@@ -6,6 +6,7 @@ import type { ClaimedDelivery, D1DeliveryLedger } from './d1-delivery-ledger.js'
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
 import { isOutsidePerson } from './people.js';
+import { shouldAlert } from './thread-activity.js';
 
 interface EventProcessingContext {
   deliveryId: string;
@@ -13,7 +14,10 @@ interface EventProcessingContext {
   sourceEventType: string;
 }
 
-type EventProcessorEnqueueResult = { outcome: 'accepted' } | { outcome: 'duplicate' };
+type EventProcessorEnqueueResult =
+  | { outcome: 'accepted' }
+  | { outcome: 'recorded' }
+  | { outcome: 'duplicate' };
 
 interface DurableEventProcessorOptions {
   maxAttempts?: number;
@@ -91,24 +95,29 @@ export class DurableEventProcessor {
   }
 
   /**
-   * Persist an accepted event. For an outside person, the stored event also records
-   * what was seen from them before. That history is optional: if persisting with it
-   * fails, the event is persisted without it, and only that failure fails the request.
+   * Persist an accepted event. Whether it alerts is decided here, once, and stored with
+   * it: a history-only event is recorded and never queued. For an outside person, an
+   * alerting event also records what was seen from them before. That history is
+   * optional: if persisting with it fails, the event is persisted without it, and only
+   * that failure fails the request.
    */
   async enqueue(
     event: RepoEvent,
     context: EventProcessingContext
   ): Promise<EventProcessorEnqueueResult> {
+    const ignoredLogins = this.people?.ignoredLogins ?? new Set<string>();
+    const alert = shouldAlert(event, ignoredLogins);
     const input = {
       deliveryId: context.deliveryId,
       sourceEventType: context.sourceEventType,
       repository: context.repository,
-      event,
+      event: alert ? event : { ...event, alert: false as const },
       maxAttempts: this.maxAttempts,
     };
     if (
       this.people === null ||
-      !isOutsidePerson(event.sender, event.repository.owner, this.people.ignoredLogins)
+      !alert ||
+      !isOutsidePerson(event.sender, event.repository.owner, ignoredLogins)
     ) {
       return this.ledger.persistAcceptedDelivery(input);
     }

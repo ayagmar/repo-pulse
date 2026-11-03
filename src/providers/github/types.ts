@@ -35,6 +35,13 @@ export interface GitHubIssue {
   state: 'open' | 'closed';
   body: string | null;
   labels: { name: string }[];
+  created_at?: string;
+  updated_at?: string;
+  closed_at?: string | null;
+  /** Present when the issue is a pull request, as on comments on pull requests. */
+  pull_request?: object;
+  /** Sent for pull requests on some payloads; not guaranteed. */
+  draft?: boolean;
 }
 
 export interface GitHubPullRequest {
@@ -54,6 +61,25 @@ export interface GitHubPullRequest {
   additions?: number;
   deletions?: number;
   changed_files?: number;
+  created_at?: string;
+  updated_at?: string;
+  closed_at?: string | null;
+  merged_at?: string | null;
+}
+
+interface GitHubComment {
+  id: number;
+  html_url: string;
+  body: string | null;
+  created_at: string;
+}
+
+interface GitHubReview {
+  id: number;
+  html_url: string;
+  body: string | null;
+  state: string;
+  submitted_at: string | null;
 }
 
 export interface GitHubFork {
@@ -94,6 +120,8 @@ export interface GitHubWebhookPayload {
   };
   issue?: GitHubIssue;
   pull_request?: GitHubPullRequest;
+  comment?: GitHubComment;
+  review?: GitHubReview;
   forkee?: GitHubFork;
   release?: GitHubRelease;
 

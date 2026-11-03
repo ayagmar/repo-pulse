@@ -68,3 +68,28 @@ export function requireStringArrayFromObjects(
     return requireString(object[nestedField], `${field}[${String(index)}].${nestedField}`);
   });
 }
+
+const GITHUB_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * A GitHub timestamp as ISO 8601 in UTC, or undefined when it is missing or not a
+ * valid time. Times are optional facts: an event is not refused for lacking one.
+ */
+export function optionalTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !GITHUB_TIME.test(value)) {
+    return undefined;
+  }
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toISOString() : undefined;
+}
+
+/** Markdown text a person wrote, or null when it is null, empty or only whitespace. */
+export function optionalText(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    invalidField(field);
+  }
+  return value.trim() === '' ? null : value;
+}

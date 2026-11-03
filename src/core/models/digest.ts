@@ -40,6 +40,32 @@ export interface PersonActivity {
   isNew: boolean;
 }
 
+/** An open issue or pull request where an outside person waits for the owner's side. */
+export interface WaitingThread {
+  /** The repository's latest recorded name. */
+  repository: string;
+  number: number;
+  title: string;
+  url: string;
+  /** Who made the request that is waiting. */
+  login: string;
+  /** When that request happened on GitHub. */
+  since: Date;
+}
+
+/** A median duration and how many samples it was taken from. */
+interface DurationSample {
+  medianMs: number;
+  count: number;
+}
+
+export interface ResponseTimes {
+  /** Pull requests merged in the window, from creation to merge. */
+  merge: DurationSample | null;
+  /** Threads first answered in the window, from the first outside request to the answer. */
+  firstReply: DurationSample | null;
+}
+
 export interface Digest {
   period: DigestPeriod;
   /** Local date of the digest, YYYY-MM-DD. */
@@ -54,4 +80,8 @@ export interface Digest {
   unreleased: UnreleasedWork[];
   /** Weekly digests only, most active first, and only when the people read succeeded. */
   people: PersonActivity[];
+  /** Oldest wait first; empty when nobody waits or the threads could not be read. */
+  waiting: WaitingThread[];
+  /** Weekly digests only; null on daily digests and when the threads could not be read. */
+  responseTimes: ResponseTimes | null;
 }

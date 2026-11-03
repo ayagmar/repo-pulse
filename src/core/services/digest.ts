@@ -4,14 +4,17 @@ import type {
   DigestPeriod,
   PersonActivity,
   RepositoryActivity,
+  ResponseTimes,
   UnreleasedWork,
+  WaitingThread,
 } from '../models/digest.js';
 import { REPO_EVENT_TYPES } from '../models/repo-event.js';
 import type { D1DigestLog } from './d1-digest-log.js';
-import type { D1EventHistory, EventActivity } from './d1-event-history.js';
+import type { D1EventHistory, EventActivity, ThreadActivityMaterial } from './d1-event-history.js';
 import { logger } from './logger.js';
 import type { NotificationDispatcher } from './notification-dispatcher.js';
 import { isOutsidePerson } from './people.js';
+import { summarizeThreadActivity } from './thread-activity.js';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -33,6 +36,15 @@ const MONDAY = 1;
 /** The daily digest checks repositories active this recently for unreleased work. */
 const UNRELEASED_LOOKBACK_MS = 30 * DAY_MS;
 const UNRELEASED_MAX_REPOSITORIES = 20;
+
+/**
+ * The waiting list and response times read every event of the threads active this
+ * recently, at most this many threads and rows. A wait whose thread had no event in
+ * the lookback is not listed.
+ */
+const THREAD_LOOKBACK_MS = 90 * DAY_MS;
+const THREAD_LIMIT = 200;
+const THREAD_ROW_LIMIT = 2000;
 
 /** The weekly digest lists this many of the week's most active outside people. */
 const LISTED_PEOPLE = 5;
@@ -283,6 +295,12 @@ function mostActivePeople(
 const PERIODS: readonly DigestPeriod[] = ['daily', 'weekly'];
 
 export class DigestSender {
+  /**
+   * The thread read per digest end. On Mondays the daily and weekly digests end at the
+   * same instant, so they share one read.
+   */
+  private readonly threadReads = new Map<number, Promise<ThreadActivityMaterial>>();
+
   constructor(
     private readonly history: D1EventHistory,
     private readonly digestLog: D1DigestLog,
@@ -359,6 +377,40 @@ export class DigestSender {
     }
   }
 
+  /**
+   * Who is waiting on the owner's side, and on weekly digests the window's response
+   * times, or null when the threads cannot be read.
+   */
+  private async readThreads(
+    window: DigestWindow
+  ): Promise<{ waiting: WaitingThread[]; responseTimes: ResponseTimes } | null> {
+    const end = window.end.getTime();
+    let read = this.threadReads.get(end);
+    if (read === undefined) {
+      read = this.history.readThreadActivity(
+        new Date(end - THREAD_LOOKBACK_MS),
+        THREAD_LIMIT,
+        THREAD_ROW_LIMIT
+      );
+      this.threadReads.set(end, read);
+    }
+    try {
+      const material = await read;
+      const summary = summarizeThreadActivity(material, window, this.options.ignoredLogins);
+      if (summary.incompleteThreads > 0) {
+        logger.warn('thread_activity.threads_omitted', {
+          component: 'digest',
+          omittedThreads: summary.incompleteThreads,
+        });
+      }
+      return summary;
+    } catch {
+      // No exception text: D1 errors can quote bound values.
+      logger.warn('thread_activity.digest_read_failed', { component: 'digest' });
+      return null;
+    }
+  }
+
   private async sendDigest(window: DigestWindow): Promise<void> {
     const digestId = `${window.period}:${window.date}`;
     /** Provider name to the time of its claim. */
@@ -382,7 +434,12 @@ export class DigestSender {
     }
 
     const events = await this.history.listActivityBetween(window.start, window.end);
-    if (events.length === 0) {
+    const threads = await this.readThreads(window);
+    const waiting = threads?.waiting ?? [];
+    const responseTimes = window.period === 'weekly' ? (threads?.responseTimes ?? null) : null;
+    const hasResponseTimes =
+      responseTimes !== null && (responseTimes.merge !== null || responseTimes.firstReply !== null);
+    if (events.length === 0 && waiting.length === 0 && !hasResponseTimes) {
       for (const [provider, claimedAt] of claimedProviders) {
         await this.digestLog.release(digestId, provider, claimedAt);
       }
@@ -399,6 +456,8 @@ export class DigestSender {
       repositories: summarizeRepositories(events),
       unreleased: window.period === 'daily' ? await this.listUnreleasedWork(window.end) : [],
       people: window.period === 'weekly' ? await this.listPeople(events, window) : [],
+      waiting,
+      responseTimes,
     };
     const unclaimedProviders = new Set(
       this.dispatcher
@@ -426,6 +485,7 @@ export class DigestSender {
       component: 'digest',
       digestId,
       eventCount: digest.eventCount,
+      waitingCount: waiting.length,
       succeeded: results.filter((result) => result.success).map((result) => result.provider),
       failed: results.filter((result) => !result.success).map((result) => result.provider),
     });

@@ -331,7 +331,8 @@ export function createOpenApiDocument(origin: string): OpenApiDocument {
               },
             },
             '202': {
-              description: 'Supported delivery accepted and persisted for asynchronous processing.',
+              description:
+                'Supported delivery accepted and persisted: queued for asynchronous processing, or recorded without an alert (comments and reviews from the owner side or bots, empty comment reviews, draft changes).',
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/WebhookAcceptedResponse' },

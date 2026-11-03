@@ -183,6 +183,8 @@ describe('createDiscordNotifier', () => {
       repositories: [],
       unreleased: [],
       people: [],
+      waiting: [],
+      responseTimes: null,
     };
     const sender = { username: 'Repo Pulse', avatar_url: expect.any(String) as string };
 
