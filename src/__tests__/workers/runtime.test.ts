@@ -185,34 +185,100 @@ describe('Workers runtime integration', () => {
     ]);
   });
 
-  /** The digest's thread read on real D1, and the rows D1 says it read. */
-  async function readThreadsCountingRows(
-    now: number
-  ): Promise<{ material: ThreadActivityMaterial; rowsRead: number }> {
+  /** Real D1, and the rows D1 says the last statement read. */
+  function countingRowsRead(): { db: D1DatabaseLike; rowsRead: () => number } {
     let rowsRead = Number.NaN;
-    const counting = {
+    const counted = async <Result extends D1Result>(pending: Promise<Result>): Promise<Result> => {
+      const result = await pending;
+      rowsRead = result.meta.rows_read;
+      return result;
+    };
+    const db = {
       prepare: (query: string): Pick<D1PreparedStatement, 'bind'> => {
         const statement = env.DB.prepare(query);
         return {
           bind: (...values: unknown[]): D1PreparedStatement => {
             const bound = statement.bind(...values);
             return Object.assign(Object.create(bound) as D1PreparedStatement, {
-              all: async <Row>(): Promise<D1Result<Row>> => {
-                const result = await bound.all<Row>();
-                rowsRead = result.meta.rows_read;
-                return result;
-              },
+              all: <Row>(): Promise<D1Result<Row>> => counted(bound.all<Row>()),
+              run: (): Promise<D1Result> => counted(bound.run()),
             });
           },
         };
       },
     } as unknown as D1DatabaseLike;
-    const material = await new D1EventHistory(counting).readThreadActivity(
+    return { db, rowsRead: () => rowsRead };
+  }
+
+  /** The digest's thread read on real D1, and the rows D1 says it read. */
+  async function readThreadsCountingRows(
+    now: number
+  ): Promise<{ material: ThreadActivityMaterial; rowsRead: number }> {
+    const { db, rowsRead } = countingRowsRead();
+    const material = await new D1EventHistory(db).readThreadActivity(
       new Date(now - 90 * 24 * 3_600_000),
       { threads: 200, eventsPerThread: 100, rows: 2000 }
     );
-    return { material, rowsRead };
+    return { material, rowsRead: rowsRead() };
   }
+
+  it('prunes expired succeeded deliveries on real D1, reading rows by what expired, not what is kept', async () => {
+    const insertDelivery = (
+      id: string,
+      status: string,
+      finishedAt: string | null
+    ): D1PreparedStatement =>
+      env.DB.prepare(
+        `INSERT INTO deliveries (
+           delivery_id, source_event_type, normalized_event_type, repository,
+           normalized_event_json, accepted_at, status, processing_finished_at
+         ) VALUES (?, 'star', 'star.created', 'myorg/repo', '{}', ?, ?, ?)`
+      ).bind(id, finishedAt ?? '2026-01-01T00:00:00.000Z', status, finishedAt);
+    const olderThan = new Date('2026-06-01T00:00:00.000Z');
+    const expired = '2026-05-31T23:59:59.999Z';
+    // Five thousand rows still inside retention, as the cron finds the ledger every minute.
+    await env.DB.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4999)
+       INSERT INTO deliveries (
+         delivery_id, source_event_type, normalized_event_type, repository,
+         normalized_event_json, accepted_at, status, processing_finished_at
+       )
+       SELECT 'kept-' || i, 'star', 'star.created', 'myorg/repo', '{}', ?1, 'succeeded', ?1 FROM n`
+    )
+      .bind(olderThan.toISOString())
+      .run();
+    const { db, rowsRead } = countingRowsRead();
+    const counted = new D1DeliveryLedger(db);
+
+    await expect(counted.pruneSucceededDeliveries(olderThan)).resolves.toBe(0);
+    expect(rowsRead()).toBeLessThanOrEqual(1);
+
+    await env.DB.batch([
+      insertDelivery('expired-1', 'succeeded', expired),
+      insertDelivery('expired-2', 'succeeded', '2026-01-01T00:00:00.000Z'),
+      insertDelivery('old-failed', 'failed', expired),
+      insertDelivery('old-pending', 'pending', null),
+      insertDelivery('unfinished', 'succeeded', null),
+      env.DB.prepare(
+        `INSERT INTO provider_attempts (
+           delivery_id, delivery_attempt, provider_name, attempted_at, success
+         ) VALUES ('expired-1', 1, 'discord', ?1, 1), ('old-failed', 1, 'discord', ?1, 0)`
+      ).bind(expired),
+    ]);
+
+    await counted.pruneSucceededDeliveries(olderThan);
+    expect(rowsRead()).toBeLessThan(20);
+
+    const left = await env.DB.prepare(
+      `SELECT delivery_id AS id FROM deliveries WHERE delivery_id NOT LIKE 'kept-%' ORDER BY id`
+    ).all<{ id: string }>();
+    expect(left.results.map((row) => row.id)).toEqual(['old-failed', 'old-pending', 'unfinished']);
+    await expect(ledger.getStats()).resolves.toMatchObject({ total: 5003, succeeded: 5001 });
+    const attempts = await env.DB.prepare('SELECT delivery_id AS id FROM provider_attempts').all<{
+      id: string;
+    }>();
+    expect(attempts.results).toEqual([{ id: 'old-failed' }]);
+  });
 
   it('reads who is waiting on real D1, reading rows by thread rather than by history size', async () => {
     const now = Date.now();

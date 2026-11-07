@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The retention prune no longer reads every succeeded delivery each cron minute. Migration
+  `0012` adds a partial index on status and finish time, so a run with nothing to delete
+  reads one row instead of all of them (628 on production, about 820,000 rows a day). Each
+  delivery costs one more row written. Retention and the statement itself are unchanged, and
+  the previous release runs with the migration applied.
 - Clearer Discord messages. Every per-event alert shows `sender · owner/repo` above the
   title and only the timestamp below; titles use one emoji per state (`🟢` issue opened,
   `✅` closed, `🚫` closed as not planned, `🔄` reopened, `📈` star spike, `👍` approved).
