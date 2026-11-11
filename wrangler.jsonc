@@ -27,11 +27,10 @@
     "DELIVERY_PROCESSING_LEASE_MS": "300000",
     "DELIVERY_DRAIN_BATCH_SIZE": "5",
     "DIGEST_TIME_ZONE": "Africa/Casablanca",
-    "DIGEST_HOUR": "9",
-    // Close and Label buttons on issue alerts, answered at POST /discord/interactions.
-    // `on` needs the Discord application's secrets and an application-owned webhook;
-    // see docs/operations.md. `off` keeps alerts without buttons and the route at 404.
-    "DISCORD_ACTIONS": "on"
+    "DIGEST_HOUR": "9"
+    // DISCORD_ACTIONS is not set here, so a fresh deployment, the Deploy button's included,
+    // starts with the Close and Label buttons off. Turn them on with a secret once their
+    // other secrets are set: see "Discord actions" in SETUP.md.
   },
   // Best-effort limit on GET /public/feed and /public/activity together, per client IP and Cloudflare location.
   "ratelimits": [

@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createConfig } from '../config/env.js';
 import { createTempDatabasePath, createTestEnv } from './test-helpers.js';
@@ -133,6 +134,29 @@ describe('createConfig', () => {
       ]) {
         expect(createConfig(env).discord.actions).toBeUndefined();
       }
+    });
+
+    it('stays off in a deployment of the committed wrangler.jsonc with only the Deploy button secrets', () => {
+      // The Deploy to Cloudflare button deploys wrangler.jsonc as committed and asks only
+      // for the secrets package.json describes; nobody edits the vars in between.
+      const wrangler = JSON.parse(
+        readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8').replace(
+          /^\s*\/\/.*$/gm,
+          ''
+        )
+      ) as { vars: Record<string, string> };
+      const packageJson = JSON.parse(
+        readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+      ) as { cloudflare: { bindings: Record<string, unknown> } };
+      const buttonSecrets = Object.fromEntries(
+        Object.keys(packageJson.cloudflare.bindings).map((name) => [
+          name,
+          (complete as Record<string, string>)[name],
+        ])
+      );
+      expect(Object.values(buttonSecrets)).not.toContain(undefined);
+
+      expect(createConfig({ ...wrangler.vars, ...buttonSecrets }).discord.actions).toBeUndefined();
     });
 
     it('reads a complete config', () => {
