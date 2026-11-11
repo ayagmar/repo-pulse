@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A default-branch push that holds a commit with an empty message
+  (`git commit --allow-empty-message`) is accepted. The push mapper required a non-empty
+  message, so the webhook answered `400`, GitHub does not retry that, and the push never
+  reached the alert, the history or the public routes. The commit is listed with an empty
+  subject.
 - The old name of a renamed or transferred repository no longer makes `/public/activity`
   incomplete. GitHub answers that name with `301` for good, which the visibility check
   counted as no answer, so every response over a window holding the old name's events

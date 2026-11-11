@@ -449,10 +449,29 @@ describe('mapGitHubEvent', () => {
       expect(result?.type).toBe(REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH);
     });
 
+    it('maps a commit made with an empty message, which git allows', () => {
+      // `git commit --allow-empty-message -m ''` reaches GitHub as `"message": ""`.
+      const result = mapGitHubEvent(
+        'push',
+        push({ commits: [commit('a1', 'fix: first'), commit('b2', '')] })
+      );
+
+      if (result?.type !== REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH) {
+        throw new Error('Expected push event');
+      }
+      expect(result.push.commits.map((c) => [c.id, c.message])).toEqual([
+        ['a1', 'fix: first'],
+        ['b2', ''],
+      ]);
+    });
+
     it('rejects malformed push payloads', () => {
       expect(() => mapGitHubEvent('push', { ...push(), commits: 'not-a-list' } as never)).toThrow(
         EventMappingError
       );
+      expect(() =>
+        mapGitHubEvent('push', push({ commits: [{ ...commit('a1', ''), message: null }] } as never))
+      ).toThrow(EventMappingError);
     });
   });
 
