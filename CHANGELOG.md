@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- An empty issue body, pull request body, repository description or repository language
+  is stored as `null`, as an empty release name or body already was. The mappers refused
+  `""` for these fields, so the webhook answered `400`, which GitHub does not retry, and
+  the event was lost.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each
