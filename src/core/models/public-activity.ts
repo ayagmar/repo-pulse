@@ -9,6 +9,11 @@ interface PublicActivityRow {
   /** `YYYY-MM-DD`, UTC. */
   date: string;
   repository: string;
+  /**
+   * GitHub's id for the repository, as recorded with the events. Two repositories that
+   * held one name are two rows.
+   */
+  repositoryId: number;
   pushes: number;
   commits: number;
   merges: number;

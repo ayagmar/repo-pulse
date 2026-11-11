@@ -566,7 +566,7 @@ describe('Workers runtime integration', () => {
       .mockImplementation(() =>
         Promise.resolve(
           repositoryIsPublic
-            ? Response.json({ private: false })
+            ? Response.json({ id: 1, private: false })
             : Response.json({ message: 'Not Found' }, { status: 404 })
         )
       );
@@ -618,7 +618,7 @@ describe('Workers runtime integration', () => {
 
   it('sums public activity per UTC day through the partial index on real D1', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
-      Promise.resolve(Response.json({ private: false }))
+      Promise.resolve(Response.json({ id: 1, private: false }))
     );
     const today = new Date().toISOString().slice(0, 10);
     const repository = { ...event.repository, fullName: 'myorg/activity' };

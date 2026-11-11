@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `/public/feed` and `/public/activity` match repositories by GitHub's id, not only by
+  name. A name GitHub shows as public now admits only the events and star days recorded
+  under the id GitHub returns for it, so a repository renamed, transferred, deleted or
+  made private no longer shows its history under a new repository that took its name. Such
+  events are left out without making `/public/activity` incomplete or the feed answer
+  `503`. The lookups, budget and response shape are unchanged. The material caches move to
+  new keys (`/v2`): while a deploy rolls out, the previous release keeps reading and
+  writing its own entries, and this one never reads them. Every stored event carries its
+  repository id (the mapper has required it from the start), so no event drops out for
+  lacking one.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each

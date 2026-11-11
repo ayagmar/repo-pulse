@@ -1,5 +1,6 @@
 import type { RepositoryAdmission } from '../../core/models/public-feed.js';
 import { logger } from '../../core/services/logger.js';
+import { REPOSITORY_ID } from '../../core/services/public-event-rules.js';
 
 const API_URL = 'https://api.github.com';
 /** A visibility answer, admitted or not, is used for at most this long. */
@@ -14,20 +15,27 @@ const REPOSITORY_NAME_PATTERN = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
  */
 type Visibility = 'public' | 'denied' | 'unresolved';
 
+/** A lookup's answer, with the id of the repository GitHub found when it is public. */
+interface Answer {
+  visibility: Visibility;
+  /** GitHub's repository id: set exactly when `visibility` is `public`. */
+  id: number | null;
+}
+
 /** Of two answers to lookups sent in the same millisecond, the higher one is kept. */
 const PRECEDENCE: Record<Visibility, number> = { public: 0, unresolved: 1, denied: 2 };
 
-interface CachedVisibility {
-  visibility: Visibility;
+interface CachedVisibility extends Answer {
   /** Counted from when the lookup was sent, so an answer never outlives its TTL. */
   expiresAt: number;
 }
 
 /**
- * Admits a repository to a public response only while GitHub says it is public.
- * It asks GitHub without a token, or with a token that can read public
- * repositories only, so a private repository answers `404` whatever the token
- * owner can see. Only a `200` with `"private": false` admits; every other
+ * Admits a repository to a public response only while GitHub says it is public,
+ * and says which repository that is: its id, which outlives a rename and is never
+ * given to another repository. It asks GitHub without a token, or with a token
+ * that can read public repositories only, so a private repository answers `404`
+ * whatever the token owner can see. Only a `200` with `"private": false` admits; every other
  * answer, or no answer, leaves it out. Recorded webhook events never admit
  * a repository.
  */
@@ -37,12 +45,13 @@ export class RepositoryVisibilityGate {
   private readonly cache = new Map<string, CachedVisibility>();
 
   /**
-   * The given repositories GitHub currently shows as public. Those without a fresh
-   * answer are looked up, at most `lookupBudget` of them; the rest are left out.
-   * The answers are read once every lookup has settled, so one that expired while
-   * the others were pending does not admit its repository, and a repository needs
-   * both this request's own answer and the cached one to say public. Build the
-   * response without waiting on anything else after this resolves.
+   * The given repositories GitHub currently shows as public, each with GitHub's id
+   * for it, so a caller admits only what was recorded under that id. Those without a
+   * fresh answer are looked up, at most `lookupBudget` of them; the rest are left
+   * out. The answers are read once every lookup has settled, so one that expired
+   * while the others were pending does not admit its repository, and a repository
+   * needs both this request's own answer and the cached one to say public, with the
+   * same id. Build the response without waiting on anything else after this resolves.
    *
    * `unresolved` lists the repositories left out without a definitive denial: a
    * failed lookup, a cached failure, no lookup within the budget, or an answer
@@ -72,14 +81,18 @@ export class RepositoryVisibilityGate {
     if (skipped > 0) {
       logger.warn('visibility.lookup_budget_exhausted', { component: 'github', omitted: skipped });
     }
-    const admitted = new Set<string>();
+    const admitted = new Map<string, number>();
     const unresolved = new Set<string>();
     for (const repository of candidates) {
       const own = ownAnswers.get(repository);
       const fresh = this.freshAnswer(repository);
-      if ((own === undefined || own === 'public') && fresh === 'public') {
-        admitted.add(repository);
-      } else if (own !== 'denied' && fresh !== 'denied') {
+      if (
+        fresh?.visibility === 'public' &&
+        fresh.id !== null &&
+        (own === undefined || (own.visibility === 'public' && own.id === fresh.id))
+      ) {
+        admitted.set(repository, fresh.id);
+      } else if (own?.visibility !== 'denied' && fresh?.visibility !== 'denied') {
         unresolved.add(repository);
       }
     }
@@ -87,25 +100,28 @@ export class RepositoryVisibilityGate {
   }
 
   /** The cached answer for a repository, or undefined once it is 60 seconds old. */
-  private freshAnswer(repository: string): Visibility | undefined {
+  private freshAnswer(repository: string): Answer | undefined {
     const cached = this.cache.get(repository);
-    return cached && Date.now() < cached.expiresAt ? cached.visibility : undefined;
+    return cached && Date.now() < cached.expiresAt
+      ? { visibility: cached.visibility, id: cached.id }
+      : undefined;
   }
 
-  private async lookUp(repository: string, publicToken: string | undefined): Promise<Visibility> {
+  private async lookUp(repository: string, publicToken: string | undefined): Promise<Answer> {
     const expiresAt = Date.now() + VISIBILITY_TTL_MS;
-    const visibility = await this.fetchVisibility(repository, publicToken);
+    const answer = await this.fetchVisibility(repository, publicToken);
     // A slower lookup must not replace a newer answer from a concurrent request.
     // Lookups sent in the same millisecond keep the least public answer.
     const cached = this.cache.get(repository);
     if (
       !cached ||
       cached.expiresAt < expiresAt ||
-      (cached.expiresAt === expiresAt && PRECEDENCE[visibility] > PRECEDENCE[cached.visibility])
+      (cached.expiresAt === expiresAt &&
+        PRECEDENCE[answer.visibility] > PRECEDENCE[cached.visibility])
     ) {
-      this.cache.set(repository, { visibility, expiresAt });
+      this.cache.set(repository, { ...answer, expiresAt });
     }
-    return visibility;
+    return answer;
   }
 
   /**
@@ -132,22 +148,22 @@ export class RepositoryVisibilityGate {
   private async fetchVisibility(
     repository: string,
     publicToken: string | undefined
-  ): Promise<Visibility> {
+  ): Promise<Answer> {
     const found = await this.fetchRepository(repository, publicToken);
     if (found === 'not_found') {
-      return 'denied';
+      return { visibility: 'denied', id: null };
     }
     if (found === 'unavailable') {
-      return 'unresolved';
+      return { visibility: 'unresolved', id: null };
     }
-    if (found.private === false) {
-      return 'public';
+    if (found.private === false && REPOSITORY_ID.test(found.id)) {
+      return { visibility: 'public', id: found.id };
     }
     if (found.private === true) {
-      return 'denied';
+      return { visibility: 'denied', id: null };
     }
     logger.warn('visibility.lookup_unreadable', { component: 'github', repository });
-    return 'unresolved';
+    return { visibility: 'unresolved', id: null };
   }
 
   /**

@@ -411,8 +411,9 @@ export class D1EventHistory {
    * What the public feed is built from, before any visibility check: the newest
    * `limit` events of the published types received since `since`, and each
    * repository's star count at the end of every UTC day since then that had a
-   * star change. Only events recorded as public are read, and only the fields the
-   * feed publishes.
+   * star change, kept apart by repository id, so two repositories that held one
+   * name are never mixed. Only events recorded as public are read, and only the
+   * fields the feed publishes, plus the repository id the visibility check matches.
    */
   async readPublicFeedMaterial(limit: number, since: Date): Promise<PublicFeedMaterial> {
     // Each field is read only when stored with its JSON type, because SQLite
@@ -427,6 +428,8 @@ export class D1EventHistory {
           `SELECT
              event_type AS type,
              repository,
+             CASE WHEN json_type(event_json, '$.repository.id') = 'integer'
+               THEN json_extract(event_json, '$.repository.id') END AS repositoryId,
              received_at AS at,
              CASE WHEN json_type(event_json, '$.release.tagName') = 'text'
                THEN json_extract(event_json, '$.release.tagName') END AS releaseTag,
@@ -454,15 +457,18 @@ export class D1EventHistory {
         .all<PublicFeedMaterial['events'][number]>(),
       this.db
         .prepare(
-          `SELECT repository, date, stars
+          `SELECT repository, repositoryId, date, stars
            FROM (
              SELECT
                repository,
+               CASE WHEN json_type(event_json, '$.repository.id') = 'integer'
+                 THEN json_extract(event_json, '$.repository.id') END AS repositoryId,
                substr(received_at, 1, 10) AS date,
                CASE WHEN json_type(event_json, '$.star.count') = 'integer'
                  THEN json_extract(event_json, '$.star.count') END AS stars,
                ROW_NUMBER() OVER (
-                 PARTITION BY repository, substr(received_at, 1, 10)
+                 PARTITION BY repository, json_extract(event_json, '$.repository.id'),
+                   substr(received_at, 1, 10)
                  ORDER BY received_at DESC, delivery_id DESC
                ) AS position
              FROM events
@@ -471,7 +477,7 @@ export class D1EventHistory {
                AND json_type(event_json, '$.repository.private') = 'false'
            )
            WHERE position = 1
-           ORDER BY repository ASC, date ASC`
+           ORDER BY repository ASC, repositoryId ASC, date ASC`
         )
         .bind(since.toISOString())
         .all<PublicFeedMaterial['starDays'][number]>(),
@@ -501,6 +507,7 @@ export class D1EventHistory {
           `SELECT
              substr(received_at, 1, 10) AS date,
              repository,
+             json_extract(event_json, '$.repository.id') AS repositoryId,
              SUM(event_type = 'push.default_branch') AS pushes,
              COALESCE(SUM(CASE WHEN event_type = 'push.default_branch'
                THEN json_array_length(event_json, '$.push.commits') END), 0) AS commits,
@@ -511,8 +518,8 @@ export class D1EventHistory {
            FROM events INDEXED BY idx_events_public_received_at
            WHERE ${PUBLIC_ACTIVITY_WHERE}
              AND received_at >= ?
-           GROUP BY date, repository
-           ORDER BY lastAt DESC, repository ASC`
+           GROUP BY date, repository, repositoryId
+           ORDER BY lastAt DESC, repository ASC, repositoryId ASC`
         )
         .bind(since.toISOString())
         .all<PublicActivityMaterial['rows'][number]>(),
