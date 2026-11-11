@@ -382,6 +382,24 @@ describe('digests', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('retries the next minute when reading the events fails after the claim', async () => {
+    const env = createDigestEnv();
+    await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
+    vi.spyOn(D1EventHistory.prototype, 'listActivityBetween').mockRejectedValueOnce(
+      new Error('D1 unavailable')
+    );
+
+    // Claims are stamped with the clock, so the clock runs with the cron.
+    vi.setSystemTime(new Date('2026-10-15T09:00:00.000Z'));
+    await expect(sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'))).rejects.toThrow(
+      'D1 unavailable'
+    );
+    vi.setSystemTime(new Date('2026-10-15T09:01:00.000Z'));
+    await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
+
+    expect(postedEmbeds()).toHaveLength(1);
+  });
+
   it('posts once when two cron runs overlap', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
