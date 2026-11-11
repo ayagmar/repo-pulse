@@ -20,8 +20,8 @@ export default defineConfig({
           GITHUB_APP_PRIVATE_KEY: ['-----BEGIN PRIVATE KEY-----', '-----END PRIVATE KEY-----'].join(
             '\n'
           ),
-          // wrangler.jsonc turns Discord actions on, which needs credentials these tests do
-          // not have; the Ed25519 test turns them on with its own.
+          // Keeps Discord actions off for these tests; the Ed25519 test turns them on with
+          // its own credentials.
           DISCORD_ACTIONS: 'off',
         },
       },

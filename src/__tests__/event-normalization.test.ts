@@ -41,6 +41,81 @@ describe('mapGitHubEvent', () => {
     expect(result).toBeNull();
   });
 
+  describe('free text GitHub sends as an empty string', () => {
+    const issue = {
+      number: 1,
+      title: 'Crash on start',
+      html_url: 'https://github.com/owner/test-repo/issues/1',
+      state: 'open',
+      body: 'text',
+      labels: [],
+    };
+    const pullRequest = {
+      number: 2,
+      title: 'Fix crash',
+      html_url: 'https://github.com/owner/test-repo/pull/2',
+      state: 'open',
+      merged: false,
+      body: 'text',
+      draft: false,
+      head: { ref: 'fix' },
+      base: { ref: 'main' },
+    };
+    const release = {
+      tag_name: 'v1.0.0',
+      name: 'v1.0.0',
+      html_url: 'https://github.com/owner/test-repo/releases/tag/v1.0.0',
+      body: 'notes',
+      prerelease: false,
+    };
+
+    it.each([
+      [
+        'repository.description',
+        'star',
+        { action: 'created', repository: { ...mockRepo, description: '' } },
+        { repository: { description: null } },
+      ],
+      [
+        'repository.language',
+        'star',
+        { action: 'created', repository: { ...mockRepo, language: '' } },
+        { repository: { language: null } },
+      ],
+      [
+        'issue.body',
+        'issues',
+        { action: 'opened', repository: mockRepo, issue: { ...issue, body: '' } },
+        { issue: { body: null } },
+      ],
+      [
+        'pull_request.body',
+        'pull_request',
+        { action: 'opened', repository: mockRepo, pull_request: { ...pullRequest, body: '' } },
+        { pullRequest: { body: null } },
+      ],
+      [
+        'release.name',
+        'release',
+        { action: 'published', repository: mockRepo, release: { ...release, name: '' } },
+        { release: { name: null } },
+      ],
+      [
+        'release.body',
+        'release',
+        { action: 'published', repository: mockRepo, release: { ...release, body: '' } },
+        { release: { body: null } },
+      ],
+    ])('maps an empty %s to null', (_field, event, payload, expected) => {
+      const result = mapGitHubEvent(event, {
+        sender: mockSender,
+        ...payload,
+      } as unknown as GitHubWebhookPayload);
+
+      expect(result).toMatchObject(expected);
+    });
+  });
+
   describe('star events', () => {
     it('maps star.created to a normalized event', () => {
       const result = mapGitHubEvent('star', {
@@ -449,10 +524,29 @@ describe('mapGitHubEvent', () => {
       expect(result?.type).toBe(REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH);
     });
 
+    it('maps a commit made with an empty message, which git allows', () => {
+      // `git commit --allow-empty-message -m ''` reaches GitHub as `"message": ""`.
+      const result = mapGitHubEvent(
+        'push',
+        push({ commits: [commit('a1', 'fix: first'), commit('b2', '')] })
+      );
+
+      if (result?.type !== REPO_EVENT_TYPES.PUSH_DEFAULT_BRANCH) {
+        throw new Error('Expected push event');
+      }
+      expect(result.push.commits.map((c) => [c.id, c.message])).toEqual([
+        ['a1', 'fix: first'],
+        ['b2', ''],
+      ]);
+    });
+
     it('rejects malformed push payloads', () => {
       expect(() => mapGitHubEvent('push', { ...push(), commits: 'not-a-list' } as never)).toThrow(
         EventMappingError
       );
+      expect(() =>
+        mapGitHubEvent('push', push({ commits: [{ ...commit('a1', ''), message: null }] } as never))
+      ).toThrow(EventMappingError);
     });
   });
 

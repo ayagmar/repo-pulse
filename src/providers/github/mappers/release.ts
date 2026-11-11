@@ -20,10 +20,7 @@ export function mapReleasePublished(
   release: GitHubRelease
 ): ReleaseEvent {
   const releaseData = requireObject(release, 'release');
-  const name = requireNullableString(
-    releaseData.name === '' ? null : releaseData.name,
-    'release.name'
-  );
+  const name = requireNullableString(releaseData.name, 'release.name');
 
   const assets = Array.isArray(releaseData.assets) ? (releaseData.assets as unknown[]) : [];
   const assetBytes = assets.reduce<number>((total, asset) => {
@@ -39,10 +36,7 @@ export function mapReleasePublished(
       tagName: requireString(releaseData.tag_name, 'release.tag_name'),
       name,
       url: requireString(releaseData.html_url, 'release.html_url'),
-      body: requireNullableString(
-        releaseData.body === '' ? null : releaseData.body,
-        'release.body'
-      ),
+      body: requireNullableString(releaseData.body, 'release.body'),
       prerelease: requireBoolean(releaseData.prerelease, 'release.prerelease'),
       ...(assets.length > 0 ? { assetCount: assets.length, assetBytes } : {}),
     },

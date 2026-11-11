@@ -70,7 +70,7 @@ The button creates the D1 database in your Cloudflare account and asks for these
 | `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` | the App's ID and its installation's ID |
 | `GITHUB_APP_PRIVATE_KEY` | the App's private key, converted to PKCS#8 as [SETUP.md](SETUP.md#github-app) shows |
 
-The committed `wrangler.jsonc` turns Discord actions on, which needs more secrets: in your copy, set `"DISCORD_ACTIONS": "off"` until you [set them up](SETUP.md#discord-actions-optional), or the Worker answers every request with a configuration error. It then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
+Discord actions start off; [SETUP.md](SETUP.md#discord-actions-optional) turns them on. The button then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
 
 ### Optional: a public-only GitHub token for the feed
 
@@ -188,7 +188,8 @@ a window with more active repositories than that leaves the least recently activ
 until a request within the next 60 seconds looks them up. `complete` is `false` whenever a
 repository in the window was left out that way, or because GitHub did not answer, so the
 counts may be short; ask again before keeping them. Repositories GitHub says are not
-public do not make an answer incomplete. `since` is the first UTC
+public, and the old name of a renamed or transferred repository, do not make an answer
+incomplete. `since` is the first UTC
 day the history has a public event for, or `null`: days before it are zeros because
 nothing was recorded yet. It has the feed's visibility check, errors, `no-store` header
 and rate limit; the two routes share one budget of 10 requests a minute per client.
