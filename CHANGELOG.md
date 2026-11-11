@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- An empty issue body, pull request body, repository description or repository language
+  is stored as `null`, as an empty release name or body already was. The mappers refused
+  `""` for these fields, so the webhook answered `400`, which GitHub does not retry, and
+  the event was lost.
 - A digest whose events read fails is retried the next minute. The run kept its claim
   for the five-minute lease, so one failed D1 read from the fifth minute of the window
   on left no run to post it before the window closed, and the digest was skipped. If
