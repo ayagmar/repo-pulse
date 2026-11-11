@@ -20,7 +20,11 @@ function mapCommit(value: unknown, index: number): Commit {
 
   return {
     id: requireString(commit.id, `${field}.id`),
-    message: requireString(commit.message, `${field}.message`).split('\n', 1)[0] ?? '',
+    // Git allows an empty message (`--allow-empty-message`), and GitHub sends it as "".
+    message:
+      commit.message === ''
+        ? ''
+        : (requireString(commit.message, `${field}.message`).split('\n', 1)[0] ?? ''),
     url: requireString(commit.url, `${field}.url`),
     author:
       typeof username === 'string' && username !== ''

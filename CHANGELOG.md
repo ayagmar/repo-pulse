@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A default-branch push that holds a commit with an empty message
+  (`git commit --allow-empty-message`) is accepted. The push mapper required a non-empty
+  message, so the webhook answered `400`, GitHub does not retry that, and the push never
+  reached the alert, the history or the public routes. The commit is listed with an empty
+  subject.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each
