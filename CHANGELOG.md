@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The old name of a renamed or transferred repository no longer makes `/public/activity`
+  incomplete. GitHub answers that name with `301` for good, which the visibility check
+  counted as no answer, so every response over a window holding the old name's events
+  said `complete: false`, and signals stored nothing. A `301` now counts as a denial, like
+  a `404`: the old name stays out of both routes, and the feed answers an empty list
+  rather than `503` when it is all that is left. Shape, cache and rate limit unchanged.
 - **Upgrade step:** `DISCORD_ACTIONS` moves from `wrangler.jsonc` to a secret, so the
   Deploy to Cloudflare button deploys a Worker that starts. With it committed as `on`, a
   fresh deployment had no Discord action secrets and answered every request with `500`
