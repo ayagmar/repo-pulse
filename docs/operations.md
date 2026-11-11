@@ -78,7 +78,7 @@ Credentials and owner identifiers are never committed. `npm run check:secrets`, 
 ## Operational Behavior
 
 - Accepted supported deliveries are persisted before `POST /webhook` returns `202`.
-- Duplicate retained delivery IDs return `200` without enqueueing new work.
+- A delivery ID already in the event history returns `200` without enqueueing new work, also after its delivery row was pruned.
 - A retry resends only to the providers that have not accepted the delivery yet.
 - Provider sends remain at-least-once: interruption between sending and persisting success can repeat a send.
 - The daily digest is posted by the every-minute cron during the first ten minutes after `DIGEST_HOUR`. A failed digest is retried each minute in that window. One that is still failing when it closes is skipped, and the next day's digest does not include its events.

@@ -12,6 +12,15 @@
   writing its own entries, and this one never reads them. Every stored event carries its
   repository id (the mapper has required it from the start), so no event drops out for
   lacking one.
+- A GitHub redelivery is a duplicate for good. A delivery id already in the event history
+  is answered `200` and never queued again, also after its delivery row was pruned:
+  before, a redelivery more than 14 days later (`DELIVERY_SUCCEEDED_RETENTION_DAYS`) was
+  posted a second time. The first recorded event is kept whatever the redelivered payload
+  says. The delivery row is now inserted only when the history has no row for its id, and
+  the stored event is copied into it in the same batch when the history adds
+  `senderHistory` or a star milestone, which costs one more row written for those
+  deliveries. No migration; the previous release runs on the same data and goes back to
+  queuing redeliveries after the prune.
 - An empty issue body, pull request body, repository description or repository language
   is stored as `null`, as an empty release name or body already was. The mappers refused
   `""` for these fields, so the webhook answered `400`, which GitHub does not retry, and

@@ -405,14 +405,20 @@ describe('waiting on you', () => {
     const outside = commentOn({ number: 3 }, people.alice, '2026-10-12T13:00:00Z');
     await deliver(outside, '2026-10-12T13:00:01Z', { deliveryId: 'alice-1' });
     await changed.DB.prepare('DELETE FROM deliveries').run();
-    // After pruning, a redelivery is queued again only if it alerted the first time.
-    await deliver(reply, '2026-10-20T12:00:00Z', { deliveryId: 'collab-1', env: changed });
-    await deliver(outside, '2026-10-20T12:00:01Z', { deliveryId: 'alice-1', env: changed });
+    // After pruning, a redelivery is a duplicate, alerting or not.
+    for (const [event, receivedAt, deliveryId] of [
+      [reply, '2026-10-20T12:00:00Z', 'collab-1'],
+      [outside, '2026-10-20T12:00:01Z', 'alice-1'],
+    ] as const) {
+      await expect(deliver(event, receivedAt, { deliveryId, env: changed })).resolves.toMatchObject(
+        {
+          status: 200,
+          body: { duplicate: true },
+        }
+      );
+    }
 
-    expect(alerts().map((alert) => alert.title)).toEqual([
-      '💬 Comment on issue #3: Thread 3',
-      '💬 Comment on issue #3: Thread 3',
-    ]);
+    expect(alerts().map((alert) => alert.title)).toEqual(['💬 Comment on issue #3: Thread 3']);
   });
 
   it('starts counting at the first recorded comment or review, and never moves that instant', async () => {

@@ -8,10 +8,14 @@ import type {
 import { DELIVERY_STATUSES } from '../models/delivery-ledger.js';
 import type { FailureClassification } from '../models/failure-classification.js';
 import type { RepoEvent } from '../models/repo-event.js';
-import { deserializeRepoEvent, REPO_EVENT_TYPES } from '../models/repo-event.js';
+import {
+  deserializeRepoEvent,
+  REPO_EVENT_TYPES,
+  serializeRepoEvent,
+} from '../models/repo-event.js';
 import { prepareEventHistoryInsert, THREAD_ACTIVATION } from './d1-event-history.js';
 import { prepareStarMilestoneStatements } from './d1-star-milestones.js';
-import type { D1DatabaseLike } from './d1-types.js';
+import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
 
 interface PersistDeliveryInput {
   deliveryId: string;
@@ -134,51 +138,63 @@ export class D1DeliveryLedger {
   constructor(private readonly db: D1DatabaseLike) {}
 
   /**
-   * Record an accepted event and, unless its stored event is history-only, queue its
-   * delivery, in one D1 batch. The delivery copies the event as recorded in `events`:
-   * this one, or the one first accepted under this delivery id if its delivery row was
-   * pruned since, so a history-only event is never queued, redelivered or not. The first
-   * recorded comment or review also sets the activation instant, which never moves. With
-   * `recordStarMilestone`, a star event's milestone is decided in the same batch, before
-   * the delivery copies the event (see `prepareStarMilestoneStatements`).
+   * Record an accepted event and, unless it is history-only, queue its delivery, in one
+   * D1 batch. A delivery id already in `events`, the permanent history, is never queued
+   * again: a GitHub redelivery is a duplicate even after its delivery row was pruned,
+   * whatever its payload says now, and its first recorded event is kept. The batch is one
+   * transaction, so a run stopped mid-write leaves both rows or neither, and the next
+   * delivery of that id finds them both or starts over.
+   *
+   * The delivery row is inserted first, while the history can still say whether the id
+   * is new, then given the event exactly as stored, after the statements that add to it
+   * (`senderHistory`, `starMilestone`). The first recorded comment or review also sets the
+   * activation instant, which never moves. With `recordStarMilestone`, a star event's
+   * milestone is decided in the same batch (see `prepareStarMilestoneStatements`).
    */
   async persistAcceptedDelivery(input: PersistDeliveryInput): Promise<PersistDeliveryResult> {
     const acceptedAt = new Date().toISOString();
-    const insertDelivery = this.db
-      .prepare(
-        `INSERT OR IGNORE INTO deliveries (
-          delivery_id,
-          source_event_type,
-          normalized_event_type,
-          repository,
-          normalized_event_json,
-          accepted_at,
-          status,
-          next_attempt_at,
-          processing_attempts,
-          max_attempts,
-          processing_started_at,
-          processing_finished_at,
-          lease_expires_at,
-          last_error,
-          last_failure_classification
-        )
-        SELECT ?, ?, event_type, ?, event_json, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL
-        FROM events
-        WHERE delivery_id = ?
-          AND json_type(event_json, '$.alert') IS NOT 'false'`
-      )
-      .bind(
-        input.deliveryId,
-        input.sourceEventType,
-        input.repository,
-        acceptedAt,
-        DELIVERY_STATUSES.PENDING,
-        acceptedAt,
-        input.maxAttempts,
-        input.deliveryId
-      );
     const { event } = input;
+    const statements: D1PreparedStatementLike[] = [];
+    // A history-only event is recorded and never queued.
+    const deliveryIndex =
+      event.alert === false
+        ? null
+        : statements.push(
+            this.db
+              .prepare(
+                `INSERT OR IGNORE INTO deliveries (
+                  delivery_id,
+                  source_event_type,
+                  normalized_event_type,
+                  repository,
+                  normalized_event_json,
+                  accepted_at,
+                  status,
+                  next_attempt_at,
+                  processing_attempts,
+                  max_attempts,
+                  processing_started_at,
+                  processing_finished_at,
+                  lease_expires_at,
+                  last_error,
+                  last_failure_classification
+                )
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL
+                WHERE NOT EXISTS (SELECT 1 FROM events WHERE delivery_id = ?)`
+              )
+              .bind(
+                input.deliveryId,
+                input.sourceEventType,
+                event.type,
+                input.repository,
+                serializeRepoEvent(event),
+                acceptedAt,
+                DELIVERY_STATUSES.PENDING,
+                acceptedAt,
+                input.maxAttempts,
+                input.deliveryId
+              )
+          ) - 1;
     const milestone =
       input.recordStarMilestone === true &&
       (event.type === REPO_EVENT_TYPES.STAR_CREATED || event.type === REPO_EVENT_TYPES.STAR_DELETED)
@@ -188,13 +204,13 @@ export class D1DeliveryLedger {
             acceptedAt,
           })
         : null;
-    const statements = [...(milestone?.beforeHistory ?? [])];
+    statements.push(...(milestone?.beforeHistory ?? []));
     const historyIndex =
       statements.push(
         prepareEventHistoryInsert(this.db, {
           deliveryId: input.deliveryId,
           repository: input.repository,
-          event: input.event,
+          event,
           receivedAt: acceptedAt,
           ...(input.rememberSenderId !== undefined
             ? { rememberSenderId: input.rememberSenderId }
@@ -202,11 +218,24 @@ export class D1DeliveryLedger {
         })
       ) - 1;
     statements.push(...(milestone?.afterHistory ?? []));
-    const deliveryIndex = statements.push(insertDelivery) - 1;
+    // Without these additions the history stores exactly the JSON the row was inserted
+    // with. With them, only a row this batch inserted can differ from the stored event:
+    // nothing rewrites a stored event after its acceptance.
+    if (deliveryIndex !== null && (input.rememberSenderId !== undefined || milestone !== null)) {
+      statements.push(
+        this.db
+          .prepare(
+            `UPDATE deliveries
+             SET normalized_event_json = (SELECT event_json FROM events WHERE delivery_id = ?)
+             WHERE delivery_id = ? AND accepted_at = ?`
+          )
+          .bind(input.deliveryId, input.deliveryId, acceptedAt)
+      );
+    }
     const isConversation =
-      input.event.type === REPO_EVENT_TYPES.COMMENT_CREATED ||
-      input.event.type === REPO_EVENT_TYPES.REVIEW_SUBMITTED;
-    if (isConversation && input.event.occurredAt !== undefined) {
+      event.type === REPO_EVENT_TYPES.COMMENT_CREATED ||
+      event.type === REPO_EVENT_TYPES.REVIEW_SUBMITTED;
+    if (isConversation && event.occurredAt !== undefined) {
       statements.push(
         this.db
           .prepare(
@@ -215,12 +244,12 @@ export class D1DeliveryLedger {
              FROM events
              WHERE delivery_id = ? AND event_type IN ('comment.created', 'review.submitted')`
           )
-          .bind(THREAD_ACTIVATION, input.event.occurredAt, input.deliveryId)
+          .bind(THREAD_ACTIVATION, event.occurredAt, input.deliveryId)
       );
     }
     const results = await this.db.batch(statements);
 
-    if ((results[deliveryIndex]?.meta.changes ?? 0) > 0) {
+    if (deliveryIndex !== null && (results[deliveryIndex]?.meta.changes ?? 0) > 0) {
       return { outcome: 'accepted' };
     }
     return (results[historyIndex]?.meta.changes ?? 0) > 0

@@ -478,7 +478,7 @@ describe('Workers runtime integration', () => {
       },
     ]);
 
-    // A batch that commits but whose answer is lost, then redelivered after pruning.
+    // A batch that commits but whose answer is lost, then redelivered before and after pruning.
     const losing: D1DatabaseLike = {
       prepare: (query) => env.DB.prepare(query),
       batch: async (statements) => {
@@ -490,11 +490,13 @@ describe('Workers runtime integration', () => {
     await expect(accept(250, 'lost', losing)).rejects.toThrow('Network connection lost');
     const celebrated = await storedMilestone('lost');
     expect(celebrated).toMatchObject({ milestone: 250, previous: { milestone: 100 } });
-    await env.DB.prepare("DELETE FROM deliveries WHERE delivery_id = 'lost'").run();
-    await expect(accept(260, 'lost')).resolves.toEqual({ outcome: 'accepted' });
+    await expect(accept(260, 'lost')).resolves.toEqual({ outcome: 'duplicate' });
     await expect(ledger.getDelivery('lost')).resolves.toMatchObject({
       event: { star: { count: 250 }, starMilestone: celebrated },
     });
+    await env.DB.prepare("DELETE FROM deliveries WHERE delivery_id = 'lost'").run();
+    await expect(accept(270, 'lost')).resolves.toEqual({ outcome: 'duplicate' });
+    await expect(ledger.getDelivery('lost')).resolves.toBeNull();
     await expect(milestones()).resolves.toEqual([
       { kind: 'baseline', count: 95, deliveryId: 'seen' },
       {
