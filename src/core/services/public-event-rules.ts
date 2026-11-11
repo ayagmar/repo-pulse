@@ -76,6 +76,8 @@ export const RELEASE_TAG = text(200);
 export const PULL_REQUEST_TITLE = text(300);
 export const PULL_REQUEST_NUMBER = count(1);
 export const STAR_COUNT = count(0);
+/** GitHub's id for the repository: it survives a rename or transfer and is never reused. */
+export const REPOSITORY_ID = count(1);
 /** On the number of commits; in SQL, on the array at `path`. */
 export const COMMIT_COUNT: Rule<number> = {
   test: count(0, 10_000).test,
@@ -124,8 +126,13 @@ const PUBLISHED_FIELDS: Record<string, [string, Rule<unknown>][]> = {
   ],
 };
 
-/** An SQL condition true for the events of the published types that the feed would publish. */
+/**
+ * An SQL condition true for the events of the published types that the feed would
+ * publish. Besides its type's fields, every one needs the repository's id, which the
+ * visibility check matches against GitHub's.
+ */
 export const SQL_IS_PUBLISHABLE = `(${SQL_RECEIVED_AT_IS_TIMESTAMP}
+  AND ${REPOSITORY_ID.sql('$.repository.id')}
   AND CASE event_type
     ${Object.entries(PUBLISHED_FIELDS)
       .map(

@@ -11,7 +11,8 @@ const DAY_MS = 24 * 60 * 60_000;
 /** The most days a response may ask for: material is read once for this many. */
 export const PUBLIC_ACTIVITY_MAX_DAYS = 400;
 const MAX_REPOSITORIES_PER_DAY = 50;
-const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-activity/material';
+/** Versioned with the material's shape, as the feed's is: see `public-feed.ts`. */
+const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-activity/material/v2';
 
 type ActivityRow = PublicActivityMaterial['rows'][number];
 
@@ -119,7 +120,10 @@ export async function buildPublicActivity(
   // Built without waiting on anything after the visibility check.
   const builtAt = new Date();
   const window = rowsInWindow(material.rows, days, builtAt);
-  const counted = window.filter((row) => admitted.has(row.repository));
+  // Rows recorded under another id than GitHub's for their name now are from a
+  // repository renamed, transferred, deleted or made private since: left out, and
+  // not incomplete, since GitHub did answer for the name.
+  const counted = window.filter((row) => admitted.get(row.repository) === row.repositoryId);
   // Past UTC midnight, the window can hold a repository that was never looked up:
   // it is left out, and that is no denial.
   const checked = new Set(candidates.map((row) => row.repository));

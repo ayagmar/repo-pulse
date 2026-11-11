@@ -12,6 +12,7 @@ import {
   PULL_REQUEST_NUMBER,
   PULL_REQUEST_TITLE,
   RELEASE_TAG,
+  REPOSITORY_ID,
   STAR_COUNT,
   toIsoString,
 } from './public-event-rules.js';
@@ -28,7 +29,12 @@ const STAR_HISTORY_MAX_REPOSITORIES = 50;
 export const VISIBILITY_LOOKUP_BUDGET = 40;
 /** The largest `limit` a response may ask for: material is read once at this size. */
 export const PUBLIC_FEED_MAX_LIMIT = 100;
-const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-feed/material';
+/**
+ * Versioned with the material's shape. During a deploy the previous release and this
+ * one run side by side and share the Cache API: each reads and writes only its own
+ * version, so neither reads material it does not understand.
+ */
+const MATERIAL_CACHE_URL = 'https://repo-pulse.internal/public-feed/material/v2';
 
 interface PublicFeedSources extends MaterialSources<PublicFeedMaterial> {
   readMaterial(limit: number, since: Date): Promise<PublicFeedMaterial>;
@@ -95,13 +101,31 @@ function toFeedEvent(candidate: PublicFeedMaterial['events'][number]): PublicFee
   }
 }
 
+/** A contract event and the repository id it was recorded under. */
+interface FeedCandidate {
+  event: PublicFeedEvent;
+  repositoryId: number;
+}
+
+/** A candidate, or null without a repository id the visibility check could match. */
+function toCandidate(candidate: PublicFeedMaterial['events'][number]): FeedCandidate | null {
+  if (!REPOSITORY_ID.test(candidate.repositoryId)) {
+    return null;
+  }
+  const event = toFeedEvent(candidate);
+  return event === null ? null : { event, repositoryId: candidate.repositoryId };
+}
+
 /**
  * Star history as of `now`: the days of the last 90, so cached material read
  * before UTC midnight drops its oldest day after it. Most recently starred first.
+ * With `admitted`, only the days recorded under the id GitHub gives each name now;
+ * without it, every candidate's days, for the visibility check.
  */
 function toStarHistory(
   starDays: PublicFeedMaterial['starDays'],
-  now: Date
+  now: Date,
+  admitted: ReadonlyMap<string, number> | null
 ): PublicFeedStarHistory[] {
   const firstDay = starHistoryStart(now).toISOString().slice(0, 10);
   const today = now.toISOString().slice(0, 10);
@@ -111,7 +135,9 @@ function toStarHistory(
       !isDate(day.date) ||
       day.date < firstDay ||
       day.date > today ||
-      !STAR_COUNT.test(day.stars)
+      !STAR_COUNT.test(day.stars) ||
+      !REPOSITORY_ID.test(day.repositoryId) ||
+      (admitted !== null && admitted.get(day.repository) !== day.repositoryId)
     ) {
       continue;
     }
@@ -165,38 +191,46 @@ export async function buildPublicFeed(
   limit: number
 ): Promise<PublicFeed | 'visibility_unavailable'> {
   const material = await loadFeedMaterial(sources, new Date());
-  const events = material.events
+  const candidates = material.events
     .slice(0, limit)
-    .map(toFeedEvent)
-    .filter((event) => event !== null);
+    .map(toCandidate)
+    .filter((candidate) => candidate !== null);
 
   // Recent activity is checked first, so a lookup budget that runs out leaves out
   // the repositories with the oldest stars.
   const { admitted, unresolved } = await sources.admit(
     [
-      ...events.map((event) => event.repo),
-      ...toStarHistory(material.starDays, new Date()).map((entry) => entry.repo),
+      ...candidates.map(({ event }) => event.repo),
+      ...toStarHistory(material.starDays, new Date(), null).map((entry) => entry.repo),
     ],
     VISIBILITY_LOOKUP_BUDGET
   );
 
-  // Built without waiting on anything after the visibility check.
+  // Built without waiting on anything after the visibility check. An event recorded
+  // under another id than GitHub's for its name now is from a repository that was
+  // renamed, transferred, deleted or made private since: left out, and no reason to
+  // answer 503, since GitHub did answer for the name.
   const builtAt = new Date();
-  const starHistory = toStarHistory(material.starDays, builtAt);
   const feed: PublicFeed = {
     version: 1,
     generatedAt: builtAt.toISOString(),
-    events: events.filter((event) => admitted.has(event.repo)),
-    starHistory: starHistory
-      .filter((entry) => admitted.has(entry.repo))
-      .slice(0, STAR_HISTORY_MAX_REPOSITORIES),
+    events: candidates
+      .filter(({ event, repositoryId }) => admitted.get(event.repo) === repositoryId)
+      .map(({ event }) => event),
+    starHistory: toStarHistory(material.starDays, builtAt, admitted).slice(
+      0,
+      STAR_HISTORY_MAX_REPOSITORIES
+    ),
   };
   // Decided on the candidates at `builtAt`: past UTC midnight a repository's only
   // star day may have left the window, admitted or not.
   if (
     feed.events.length === 0 &&
     feed.starHistory.length === 0 &&
-    [...events, ...starHistory].some((item) => unresolved.has(item.repo))
+    [
+      ...candidates.map(({ event }) => event.repo),
+      ...toStarHistory(material.starDays, builtAt, null).map((entry) => entry.repo),
+    ].some((repo) => unresolved.has(repo))
   ) {
     return 'visibility_unavailable';
   }

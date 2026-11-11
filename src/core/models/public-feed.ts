@@ -8,6 +8,8 @@
 interface PublicFeedCandidate {
   type: string;
   repository: string;
+  /** GitHub's id for the repository, as recorded with the event. */
+  repositoryId: unknown;
   /** When repo-pulse received the event, as an ISO timestamp. */
   at: string;
   releaseTag: unknown;
@@ -23,6 +25,8 @@ interface PublicFeedCandidate {
 /** A repository's star count at the end of one UTC day. */
 interface PublicFeedStarDay {
   repository: string;
+  /** GitHub's id for the repository, as recorded with its star events. */
+  repositoryId: unknown;
   /** `YYYY-MM-DD`, UTC. */
   date: string;
   stars: unknown;
@@ -32,7 +36,7 @@ interface PublicFeedStarDay {
 export interface PublicFeedMaterial {
   /** Newest first. */
   events: PublicFeedCandidate[];
-  /** By repository, then oldest day first. */
+  /** By repository and id, then oldest day first. */
   starDays: PublicFeedStarDay[];
 }
 
@@ -67,8 +71,13 @@ export interface PublicFeed {
 
 /** The outcome of a response's visibility check. */
 export interface RepositoryAdmission {
-  /** The repositories GitHub shows as public right now. */
-  admitted: Set<string>;
+  /**
+   * The repositories GitHub shows as public right now, each with GitHub's id for it.
+   * Only what was recorded under that id is theirs: an event recorded under the same
+   * name with another id belongs to a repository that was renamed, transferred,
+   * deleted or made private since, and is left out.
+   */
+  admitted: Map<string, number>;
   /** Repositories left out without a definitive denial (`404` or `"private": true`). */
   unresolved: Set<string>;
 }

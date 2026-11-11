@@ -17,6 +17,7 @@ type Visibility =
   | 'private'
   | 'not_found'
   | 'moved'
+  | 'replaced'
   | 'rate_limited'
   | 'server_error'
   | 'timeout'
@@ -55,6 +56,11 @@ function repository(fullName: string, isPrivate: boolean): RepoEvent['repository
     forks: 0,
     language: 'TypeScript',
   };
+}
+
+/** The same event, recorded under another GitHub repository id. */
+function withId(event: RepoEvent, id: number): RepoEvent {
+  return { ...event, repository: { ...event.repository, id } };
 }
 
 const sender = {
@@ -165,6 +171,8 @@ function fork(fullName: string): RepoEvent {
 describe('public feed', () => {
   const cleanups: (() => void)[] = [];
   let visibility: Map<string, Visibility>;
+  /** GitHub's id for each name, where it is not the 1 every recorded event has by default. */
+  let repositoryIds: Map<string, number>;
   let githubLookups: string[];
   let githubAuthorizations: (string | null)[];
   let beforeAnswer: () => Promise<void> | undefined;
@@ -179,7 +187,11 @@ describe('public feed', () => {
       case 'public':
       case 'private':
         return Promise.resolve(
-          Response.json({ full_name: fullName, private: answer === 'private' })
+          Response.json({
+            id: repositoryIds.get(fullName) ?? 1,
+            full_name: fullName,
+            private: answer === 'private',
+          })
         );
       case 'no_private_flag':
         return Promise.resolve(Response.json({ full_name: fullName }));
@@ -187,6 +199,9 @@ describe('public feed', () => {
         return Promise.resolve(new Response('<html>', { status: 200 }));
       case 'not_found':
         return Promise.resolve(Response.json({ message: 'Not Found' }, { status: 404 }));
+      case 'replaced':
+        // Public, but another repository than the one recorded: its id is new.
+        return Promise.resolve(Response.json({ id: 999, full_name: fullName, private: false }));
       case 'moved':
         return Promise.resolve(
           new Response(null, {
@@ -254,6 +269,7 @@ describe('public feed', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-26T08:45:00.000Z'));
     visibility = new Map();
+    repositoryIds = new Map();
     githubLookups = [];
     githubAuthorizations = [];
     beforeAnswer = (): undefined => undefined;
@@ -482,6 +498,7 @@ describe('public feed', () => {
     const answers: Visibility[] = [
       'private',
       'moved',
+      'replaced',
       'rate_limited',
       'server_error',
       'timeout',
@@ -495,6 +512,126 @@ describe('public feed', () => {
 
     await expect(feedRepositories()).resolves.toEqual(['ayagmar/runnerd']);
     expect(githubLookups).toHaveLength(answers.length + 1);
+  });
+
+  it('shows each name only with what the repository GitHub has under it now recorded', async () => {
+    // o/x (id 1) had a release, then was renamed o/y and made private; a new public
+    // repository (id 2) took the name o/x.
+    await record(withId(release('ayagmar/x', 'v9-old-roadmap'), 1), '2026-10-20T10:00:00.000Z');
+    await record(withId(star('ayagmar/x', 40), 1), '2026-10-20T11:00:00.000Z');
+    await record(withId(push('ayagmar/y'), 1), '2026-10-21T10:00:00.000Z');
+    await record(withId(release('ayagmar/x', 'v0.1.0'), 2), '2026-10-24T10:00:00.000Z');
+    await record(withId(star('ayagmar/x', 1), 2), '2026-10-24T11:00:00.000Z');
+    // ayagmar/z (id 3) was deleted, and a new ayagmar/z (id 4) has no events yet.
+    await record(withId(push('ayagmar/z'), 3), '2026-10-22T10:00:00.000Z');
+    // alice/t (id 5) was transferred to ayagmar/t.
+    await record(withId(push('alice/t'), 5), '2026-10-22T11:00:00.000Z');
+    await record(withId(push('ayagmar/t'), 5), '2026-10-23T11:00:00.000Z');
+    visibility.set('ayagmar/x', 'public');
+    repositoryIds.set('ayagmar/x', 2);
+    visibility.set('ayagmar/y', 'not_found');
+    visibility.set('ayagmar/z', 'public');
+    repositoryIds.set('ayagmar/z', 4);
+    visibility.set('alice/t', 'moved');
+    visibility.set('ayagmar/t', 'public');
+    repositoryIds.set('ayagmar/t', 5);
+
+    const { response, text } = await getFeed();
+
+    expect(response.status, text).toBe(200);
+    expect(text).not.toContain('v9-old-roadmap');
+    const feed = JSON.parse(text) as {
+      events: { type: string; repo: string; release?: { tag: string } }[];
+      starHistory: { repo: string; points: { date: string; stars: number }[] }[];
+    };
+    expect(feed.events.map((event) => [event.type, event.repo, event.release?.tag])).toEqual([
+      ['star.created', 'ayagmar/x', undefined],
+      ['release.published', 'ayagmar/x', 'v0.1.0'],
+      ['push.default_branch', 'ayagmar/t', undefined],
+    ]);
+    expect(feed.starHistory).toEqual([
+      { repo: 'ayagmar/x', points: [{ date: '2026-10-24', stars: 1 }] },
+    ]);
+  });
+
+  it('answers an empty feed, not 503, when every name now belongs to another repository', async () => {
+    await record(withId(push('ayagmar/z'), 3), '2026-10-22T10:00:00.000Z');
+    visibility.set('ayagmar/z', 'replaced');
+
+    const { response, text } = await getFeed();
+
+    expect(response.status, text).toBe(200);
+    expect(JSON.parse(text)).toMatchObject({ events: [], starHistory: [] });
+  });
+
+  it('never reads the previous release’s cached material, and leaves it to that release', async () => {
+    await record(withId(release('ayagmar/x', 'v0.1.0'), 2), '2026-10-24T10:00:00.000Z');
+    visibility.set('ayagmar/x', 'public');
+    repositoryIds.set('ayagmar/x', 2);
+    // What the previous release cached, without repository ids: a release of the
+    // repository that held ayagmar/x before.
+    const previousFeed = JSON.stringify({
+      events: [
+        {
+          type: 'release.published',
+          repository: 'ayagmar/x',
+          at: '2026-10-20T10:00:00.000Z',
+          releaseTag: 'v9-old-roadmap',
+          releaseUrl: 'https://github.com/ayagmar/x/releases/tag/v9-old-roadmap',
+          starCount: null,
+          compareUrl: null,
+          commitCount: null,
+          pullRequestNumber: null,
+          pullRequestTitle: null,
+          pullRequestUrl: null,
+        },
+      ],
+      starDays: [{ repository: 'ayagmar/x', date: '2026-10-20', stars: 40 }],
+    });
+    const previousActivity = JSON.stringify({
+      since: '2026-10-20',
+      rows: [
+        {
+          date: '2026-10-20',
+          repository: 'ayagmar/x',
+          pushes: 0,
+          commits: 0,
+          merges: 0,
+          releases: 1,
+          stars: 0,
+          lastAt: '2026-10-20T10:00:00.000Z',
+        },
+      ],
+    });
+    const previousKeys = {
+      'https://repo-pulse.internal/public-feed/material': previousFeed,
+      'https://repo-pulse.internal/public-activity/material': previousActivity,
+    };
+    for (const [key, body] of Object.entries(previousKeys)) {
+      cacheEntries.set(key, body);
+    }
+
+    const { response, text } = await getFeed();
+    const activity = await getPublic('activity');
+
+    expect(response.status, text).toBe(200);
+    expect(text).not.toContain('v9-old-roadmap');
+    expect(JSON.parse(text)).toMatchObject({
+      events: [{ type: 'release.published', release: { tag: 'v0.1.0' } }],
+    });
+    expect(activity.response.status, activity.text).toBe(200);
+    expect(JSON.parse(activity.text)).toMatchObject({ since: '2026-10-24' });
+    // The previous release still finds its own entries as it left them, and nothing
+    // in a shape it does not know.
+    for (const [key, body] of Object.entries(previousKeys)) {
+      expect(cacheEntries.get(key)).toBe(body);
+    }
+    expect([...cacheEntries.keys()].sort()).toEqual([
+      'https://repo-pulse.internal/public-activity/material',
+      'https://repo-pulse.internal/public-activity/material/v2',
+      'https://repo-pulse.internal/public-feed/material',
+      'https://repo-pulse.internal/public-feed/material/v2',
+    ]);
   });
 
   it('answers 503, never an empty feed, when no repository is admitted and a lookup failed', async () => {
@@ -597,6 +734,7 @@ describe('public feed', () => {
       'private',
       'not_found',
       'moved',
+      'replaced',
       'rate_limited',
       'server_error',
       'timeout',
@@ -606,7 +744,7 @@ describe('public feed', () => {
     const outcome = (kind: Visibility): 'public' | 'denied' | 'unresolved' =>
       kind === 'public'
         ? 'public'
-        : kind === 'private' || kind === 'not_found' || kind === 'moved'
+        : kind === 'private' || kind === 'not_found' || kind === 'replaced' || kind === 'moved'
           ? 'denied'
           : 'unresolved';
     for (const fullName of repositories) {
@@ -1421,6 +1559,32 @@ describe('public feed', () => {
       expect(partial.status).toBe(200);
       expect(partial.body.complete).toBe(false);
       expect(partial.body.days.at(-2)?.repos.map((repo) => repo.repo)).toEqual(['ayagmar/ccdesk']);
+    });
+
+    it('counts under each name only what the repository GitHub has under it now did, and is complete', async () => {
+      // The old ayagmar/x (id 1) was renamed and made private; a new one (id 2) took the name.
+      await record(withId(push('ayagmar/x'), 1), '2026-10-24T10:00:00.000Z');
+      await record(withId(release('ayagmar/x', 'v9-old-roadmap'), 1), '2026-10-25T09:00:00.000Z');
+      await record(withId(release('ayagmar/x', 'v0.1.0'), 2), '2026-10-25T10:00:00.000Z');
+      // A deleted repository whose name was taken again.
+      await record(withId(push('ayagmar/z'), 3), '2026-10-25T11:00:00.000Z');
+      visibility.set('ayagmar/x', 'public');
+      repositoryIds.set('ayagmar/x', 2);
+      visibility.set('ayagmar/z', 'replaced');
+
+      const { status, body } = await getActivity('?days=3');
+
+      expect(status).toBe(200);
+      expect(body.complete).toBe(true);
+      expect(body.days).toEqual([
+        zero('2026-10-24'),
+        {
+          ...zero('2026-10-25'),
+          releases: 1,
+          repos: [{ repo: 'ayagmar/x', ...none, releases: 1 }],
+        },
+        zero('2026-10-26'),
+      ]);
     });
 
     it('treats a renamed repository as denied, so its old name never makes an answer incomplete', async () => {

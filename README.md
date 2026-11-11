@@ -148,7 +148,9 @@ pull requests from the last 90 days, newest first (`limit` from 1 to 100, defaul
 each repository's daily star count over the same 90 days. Each client may ask 10 times a
 minute. A repository appears only while GitHub's
 API says it is public, checked at most 60 seconds before the response,
-and only its events that were recorded as public. No sender, body, label, commit
+and only its events that were recorded as public under the repository id GitHub
+returns for that name now, so a new repository never inherits what an older one under
+the same name recorded. No sender, body, label, commit
 message or delivery state is published. When no repository is admitted and GitHub
 did not answer for at least one of them, the feed answers
 `503 {"error":"visibility_unavailable"}` instead of an empty list. The contract is
