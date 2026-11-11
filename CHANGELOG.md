@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Upgrade step:** `DISCORD_ACTIONS` moves from `wrangler.jsonc` to a secret, so the
+  Deploy to Cloudflare button deploys a Worker that starts. With it committed as `on`, a
+  fresh deployment had no Discord action secrets and answered every request with `500`
+  (`Invalid DISCORD_APPLICATION_ID`). A deployment that uses the buttons loses them on
+  its next deploy until it sets the secret: deploy, then run
+  `printf on | npm exec -- wrangler secret put DISCORD_ACTIONS`. Later deploys keep it.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each
