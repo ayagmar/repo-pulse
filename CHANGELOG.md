@@ -7,6 +7,35 @@
   on left no run to post it before the window closed, and the digest was skipped. If
   giving a claim up fails as well, the run logs `digest.release_failed`, still gives up
   the other providers' claims, and reports the read error.
+- A default-branch push that holds a commit with an empty message
+  (`git commit --allow-empty-message`) is accepted. The push mapper required a non-empty
+  message, so the webhook answered `400`, GitHub does not retry that, and the push never
+  reached the alert, the history or the public routes. The commit is listed with an empty
+  subject.
+- The old name of a renamed or transferred repository no longer makes `/public/activity`
+  incomplete. GitHub answers that name with `301` for good, which the visibility check
+  counted as no answer, so every response over a window holding the old name's events
+  said `complete: false`, and signals stored nothing. A `301` now counts as a denial, like
+  a `404`: the old name stays out of both routes, and the feed answers an empty list
+  rather than `503` when it is all that is left. Shape, cache and rate limit unchanged.
+- **Upgrade step:** `DISCORD_ACTIONS` moves from `wrangler.jsonc` to a secret, so the
+  Deploy to Cloudflare button deploys a Worker that starts. With it committed as `on`, a
+  fresh deployment had no Discord action secrets and answered every request with `500`
+  (`Invalid DISCORD_APPLICATION_ID`). A deployment that uses the buttons should stage the
+  secret with the new code and deploy both at once, so alerts never go out without
+  buttons:
+
+  ```bash
+  npm run db:migrate:remote
+  npm exec -- wrangler versions upload
+  printf on | npm exec -- wrangler versions secret put DISCORD_ACTIONS
+  npm exec -- wrangler versions deploy
+  ```
+
+  `npm run deploy` followed at once by
+  `printf on | npm exec -- wrangler secret put DISCORD_ACTIONS` also works, but alerts
+  posted between the two commands have no buttons and `/discord/interactions` answers
+  `404` until the second one finishes. Later deploys keep the secret.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each
