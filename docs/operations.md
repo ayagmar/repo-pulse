@@ -61,7 +61,6 @@ Values configured in [`wrangler.jsonc`](../wrangler.jsonc):
 - `DELIVERY_DRAIN_BATCH_SIZE`: deliveries sent per drain pass. On the Workers Free plan an invocation may make 50 subrequests, D1 queries included, and a delivery takes about five, so keep it at 5 or below there.
 - `DIGEST_TIME_ZONE`: IANA time zone for the daily digest, such as `Europe/Paris`. Defaults to `UTC`.
 - `DIGEST_HOUR`: local hour, 0 to 23, when the daily digest, and on Mondays the weekly one, is posted. Defaults to `9`.
-- `DISCORD_ACTIONS`: `on` puts Close and Label buttons on issue alerts and opens `POST /discord/interactions`; `off` or unset leaves alerts as they were and the route at `404`. `on` needs the three `DISCORD_*` secrets below and `DISCORD_WEBHOOK_URL`; anything missing or malformed is a configuration error. The committed `wrangler.jsonc` has it `on` for the maintainer's deployment; set it to `off` in your own copy until you have done the [Discord actions](#discord-actions) setup. See [Discord actions](#discord-actions).
 
 Secrets configured in `.dev.vars` or via `wrangler secret put`:
 
@@ -70,6 +69,7 @@ Secrets configured in `.dev.vars` or via `wrangler secret put`:
 - `DISCORD_WEBHOOK_URL`
 - `GITHUB_PUBLIC_TOKEN` (optional): a fine-grained token with access to public repositories only and no permissions. `/public/feed` sends it with its visibility lookups to get GitHub's authenticated rate limit. It must not be able to read private repositories.
 - `PEOPLE_IGNORED_LOGINS` (optional): comma-separated GitHub logins, compared case-insensitively, that alerts never describe as new or returning and the weekly digest never lists, such as your other accounts or a collaborator. Repository owners and `[bot]` logins are always left out. Set it at the prompt with `npm exec -- wrangler secret put PEOPLE_IGNORED_LOGINS`, entering something like `<your-other-login>,<collaborator-login>`.
+- `DISCORD_ACTIONS` (optional): `on` puts Close and Label buttons on issue alerts and opens `POST /discord/interactions`; `off` or unset leaves alerts as they were and the route at `404`. `on` needs the three `DISCORD_*` secrets below and `DISCORD_WEBHOOK_URL`; anything missing or malformed is a configuration error. It is a secret, not a `wrangler.jsonc` variable, so a fresh deployment, the Deploy button's included, starts with it unset, and `wrangler deploy` keeps it once set. Set it with `printf on | npm exec -- wrangler secret put DISCORD_ACTIONS` after the [Discord actions](#discord-actions) setup.
 - `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_ALLOWED_USER_IDS` (only with `DISCORD_ACTIONS=on`): the Discord application's id, its Ed25519 public key (64 hex characters, from the Developer Portal), and the comma-separated Discord user ids allowed to use the buttons. Set them at the prompt. They are read only when `DISCORD_ACTIONS` is `on`, so they can be set before it is.
 - `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` (required): the GitHub App. The key is the App's private key converted to PKCS#8 (`openssl pkcs8 -topk8 -nocrypt`); a PKCS#1 key is a configuration error. Set the key from its file and the IDs at the prompt, never as command-line arguments. A missing one fails every request, so stage them with `wrangler versions secret put` and deploy once.
 
@@ -139,7 +139,7 @@ With `DISCORD_ACTIONS=on`, issue-opened alerts carry **Close** and **Label…** 
 - The alert is then edited to list who did what, with Close disabled once the issue is closed. The edit is best effort: a failed edit, or two actions editing at once, is logged as `discord_action.edit_failed` and not retried. The next action on that alert rebuilds the message from every stored outcome.
 - If the Worker stops after acknowledging a click, there is no receipt and the message is unchanged; click again.
 - Logs: `discord_action.not_eligible`, `discord_action.github_failed`, `discord_action.receipt_failed`, `discord_action.edit_failed`, `discord_action.outcome_not_recorded`, `discord_action.failed` (D1 before the GitHub call) and `discord_action.replayed`. Interaction tokens, the webhook URL and installation tokens never appear in them, in receipts or in `discord_actions`.
-- Rolling back: set `DISCORD_ACTIONS` to `off` in `wrangler.jsonc` and deploy. Alerts go out without buttons, buttons on earlier alerts stop working, and the route answers `404`. Migration `0008` stays; the previous release ignores its tables.
+- Rolling back: `printf off | npm exec -- wrangler secret put DISCORD_ACTIONS`. Alerts go out without buttons, buttons on earlier alerts stop working, and the route answers `404`. Migration `0008` stays; the previous release ignores its tables.
 
 ## Admin Endpoints
 

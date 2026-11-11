@@ -9,8 +9,9 @@ const LOOKUP_TIMEOUT_MS = 3_000;
 const REPOSITORY_NAME_PATTERN = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
 
 /**
- * `denied` is GitHub's definitive answer that a repository is not public (a `404`
- * or `"private": true`); `unresolved` is a lookup that gave no answer.
+ * `denied` is GitHub's definitive answer that a repository is not public under this
+ * name (a `404`, a `301` for a renamed or transferred repository, or `"private": true`);
+ * `unresolved` is a lookup that gave no answer.
  */
 type Visibility = 'public' | 'denied' | 'unresolved';
 
@@ -151,8 +152,9 @@ export class RepositoryVisibilityGate {
   }
 
   /**
-   * GitHub's answer about a repository: its fields as found, `not_found` for a `404`,
-   * or `unavailable` for any other answer or none. `publicToken` only raises the rate
+   * GitHub's answer about a repository: its fields as found, `not_found` for a `404`
+   * or for the `301` GitHub keeps answering for the old name of a renamed or transferred
+   * repository, or `unavailable` for any other answer or none. `publicToken` only raises the rate
    * limit from 60 to 5,000 lookups an hour. Never pass a token that can read private
    * repositories.
    */
@@ -183,7 +185,7 @@ export class RepositoryVisibilityGate {
           repository,
           status: response.status,
         });
-        return response.status === 404 ? 'not_found' : 'unavailable';
+        return response.status === 404 || response.status === 301 ? 'not_found' : 'unavailable';
       }
       const body: unknown = await response.json();
       const fields = (typeof body === 'object' && body !== null ? body : {}) as Record<

@@ -417,6 +417,22 @@ export class DigestSender {
     }
   }
 
+  private async releaseClaims(
+    digestId: string,
+    claimedProviders: ReadonlyMap<string, string>
+  ): Promise<void> {
+    for (const [provider, claimedAt] of claimedProviders) {
+      try {
+        await this.digestLog.release(digestId, provider, claimedAt);
+      } catch {
+        // The claim stays held until its lease ends. Carry on with the other providers,
+        // and keep the caller's own error. No exception text: D1 errors can quote bound
+        // values.
+        logger.warn('digest.release_failed', { component: 'digest', digestId, provider });
+      }
+    }
+  }
+
   private async sendDigest(window: DigestWindow): Promise<void> {
     const digestId = `${window.period}:${window.date}`;
     /** Provider name to the time of its claim. */
@@ -439,16 +455,22 @@ export class DigestSender {
       return;
     }
 
-    const events = await this.history.listActivityBetween(window.start, window.end);
+    let events: EventActivity[];
+    try {
+      events = await this.history.listActivityBetween(window.start, window.end);
+    } catch (error) {
+      // Nothing was posted: give the claims up so the next minute retries, instead of
+      // holding them for the lease while the digest window runs out.
+      await this.releaseClaims(digestId, claimedProviders);
+      throw error;
+    }
     const threads = await this.readThreads(window);
     const waiting = threads?.waiting ?? [];
     const responseTimes = window.period === 'weekly' ? (threads?.responseTimes ?? null) : null;
     const hasResponseTimes =
       responseTimes !== null && (responseTimes.merge !== null || responseTimes.firstReply !== null);
     if (events.length === 0 && waiting.length === 0 && !hasResponseTimes) {
-      for (const [provider, claimedAt] of claimedProviders) {
-        await this.digestLog.release(digestId, provider, claimedAt);
-      }
+      await this.releaseClaims(digestId, claimedProviders);
       return;
     }
 

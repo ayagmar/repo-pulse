@@ -18,8 +18,9 @@ export function requireString(value: unknown, field: string): string {
   return value;
 }
 
+/** A string, or null when it is null or empty: GitHub sends `""` for cleared text. */
 export function requireNullableString(value: unknown, field: string): string | null {
-  if (value === null) {
+  if (value === null || value === '') {
     return null;
   }
 

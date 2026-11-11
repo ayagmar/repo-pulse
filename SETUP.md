@@ -76,11 +76,10 @@ npm exec -- wrangler secret put ADMIN_API_TOKEN
 npm exec -- wrangler secret put DISCORD_WEBHOOK_URL
 ```
 
-Then create the [GitHub App](#github-app), set its three secrets, set
-`"DISCORD_ACTIONS": "off"` in `wrangler.jsonc` unless you also do the
-[Discord actions](#discord-actions-optional) setup, and deploy with `npm run deploy`.
-The Worker refuses to start without the App's secrets, or with actions on and their
-secrets missing.
+Then create the [GitHub App](#github-app), set its three secrets, and deploy with
+`npm run deploy`. Discord actions stay off until you do the
+[Discord actions](#discord-actions-optional) setup. The Worker refuses to start without
+the App's secrets, or with actions on and their secrets missing.
 
 `npm run deploy` applies pending D1 migrations, then deploys the Worker. Source maps and
 sampled traces are enabled in Wrangler configuration; deployment is required for those
@@ -179,7 +178,7 @@ step's check before the next.
 
    Then reset the bot token in the Developer Portal, which revokes the old one, and
    delete both bot files.
-4. Set the secrets with `DISCORD_ACTIONS` still `off`, and deploy. Type the application
+4. Set the secrets with `DISCORD_ACTIONS` still unset, and deploy. Type the application
    ID, the public key and your user ID (several are comma-separated) at the prompts:
 
    ```bash
@@ -192,15 +191,21 @@ step's check before the next.
 
    Check that alerts still post, now through the new webhook. Delete the old webhook
    once you are sure.
-5. Set `"DISCORD_ACTIONS": "on"` in `wrangler.jsonc` and run `npm run deploy`. Then, in
-   the Developer Portal, set **Interactions Endpoint URL** to
+5. Turn the buttons on. `DISCORD_ACTIONS` is a secret rather than a `wrangler.jsonc`
+   variable, so later deploys keep it; setting it deploys a new version:
+
+   ```bash
+   printf on | npm exec -- wrangler secret put DISCORD_ACTIONS
+   ```
+
+   Then, in the Developer Portal, set **Interactions Endpoint URL** to
    `https://<your-worker>.workers.dev/discord/interactions` and save. Discord saves it
    only after the Worker answers its signed test requests.
 6. On a test issue, use **Label…**, then **Close**. Each should answer with a receipt only
    you see, and the alert should list both actions with Close greyed out.
 
-To turn the buttons off, set `DISCORD_ACTIONS` back to `off` and deploy. Alerts keep
-posting through the application's webhook, without buttons.
+To turn the buttons off, run `printf off | npm exec -- wrangler secret put DISCORD_ACTIONS`.
+Alerts keep posting through the application's webhook, without buttons.
 
 ## Verify
 
