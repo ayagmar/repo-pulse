@@ -18,9 +18,11 @@ interface EventHistoryRow {
 }
 
 /**
- * Prepare the history insert for an accepted delivery. The ledger batches it before
- * the delivery insert, which copies the stored event, so an event is never queued
- * without being recorded, and a delivery id seen before keeps its first event.
+ * Prepare the history insert for an accepted delivery. The ledger batches it after the
+ * delivery insert, which runs only for a delivery id not yet in `events`, so a delivery
+ * id seen before keeps its first event and is not queued again. Both are in one batch, so
+ * an event is never queued without being recorded. When this insert adds `senderHistory`
+ * or a milestone, the ledger then copies the stored event into the delivery row.
  *
  * With `rememberSenderId`, the stored event gets `senderHistory`: what was recorded
  * from that sender before. The same statement counts and inserts, so two deliveries

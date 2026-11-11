@@ -37,7 +37,7 @@ Repo Pulse is for when you want to choose what gets announced and keep a record 
 - Alerts are written to be read at a glance on a phone. The line above the title says who acted and in which repository (`razakiau · myorg/runnerd`), and the timestamp is the only thing below. Your own events, bots' and those of the logins in `PEOPLE_IGNORED_LOGINS` are posted silently (Discord's `SUPPRESS_NOTIFICATIONS` flag: the message lands in the channel, with no push). Outside people's events, force-pushes, star milestones, digests and the star-spike alert make a sound. "Your own" means the repository owner's login, so on a repository owned by an organisation, add your login to `PEOPLE_IGNORED_LOGINS` to make your events there silent. Which alerts are silent is decided once, when the event is accepted, so a retry never changes it.
 - Pull request alerts carry one line of facts instead of fields: `by razakiau · +41 −41 in 22 files · 3 commits · merged 2h after opening · closes #190`. Release alerts show the number and size of their assets and what changed, not the download table. Excerpts of what people wrote are cut at a sentence, drop tables, HTML, images and link targets, never leave a code block open, and are left out for bots.
 - Failed Discord sends are retried with backoff, following Discord's rate-limit headers, up to 5 attempts.
-- If GitHub redelivers an event, it is not posted a second time (while the delivery is kept, 14 days by default).
+- If GitHub redelivers an event, it is not posted a second time, however long after.
 - Every delivery and send attempt is stored in D1, and an authenticated admin API lists, inspects, and retries them.
 - Every accepted event is also kept in a permanent event history, which is never pruned.
 - Alerts say whether the person behind them is new or returning, across all your repositories: `👋 First event recorded from them`, or `↩️ Seen before: 12 events in 3 repos since 4 Mar 2026`. Your own events, bots and the logins in `PEOPLE_IGNORED_LOGINS` get no such line.
@@ -317,7 +317,7 @@ leaks only; an unlabelled random string still needs a reviewer.
 ## Guarantees
 
 - supported deliveries are persisted before `POST /webhook` returns `202 Accepted`
-- duplicate delivery IDs return `200` and do not enqueue a second delivery while the ledger row is retained
+- a delivery ID already in the event history returns `200` and does not enqueue a second delivery, also after its ledger row was pruned
 - notification dispatch is asynchronous and recoverable; provider sends are at-least-once when an invocation is interrupted
 - retries and stale-processing recovery are driven from D1 state plus cron
 - admin routes stay protected by bearer auth

@@ -331,11 +331,11 @@ describe('star milestones', () => {
     });
     await database.prepare("DELETE FROM deliveries WHERE delivery_id = 'crossing'").run();
     await expect(accept(star({ count: 250 }), 'crossing')).resolves.toEqual({
-      outcome: 'accepted',
+      outcome: 'duplicate',
     });
-    await expect(new D1DeliveryLedger(database).getDelivery('crossing')).resolves.toMatchObject({
-      event: first?.event,
-    });
+    await expect(new D1DeliveryLedger(database).getDelivery('crossing')).resolves.toBeNull();
+    const recorded = await new D1EventHistory(database).listRecentEvents(200);
+    expect(recorded.find((entry) => entry.deliveryId === 'crossing')?.event).toEqual(first?.event);
 
     // A delivery recorded before milestones existed is not decided again either.
     await new D1DeliveryLedger(database).persistAcceptedDelivery({
@@ -345,9 +345,11 @@ describe('star milestones', () => {
       event: star({ count: 260 }),
       maxAttempts: 5,
     });
+    vi.setSystemTime(START + 45 * DAY_MS);
     await database.prepare("DELETE FROM deliveries WHERE delivery_id = 'before'").run();
-    await accept(star({ count: 260 }), 'before');
-    await expect(queuedTitle('before')).resolves.toBe(plain);
+    await expect(accept(star({ count: 260 }), 'before')).resolves.toEqual({
+      outcome: 'duplicate',
+    });
     await expect(celebrated()).resolves.toEqual([{ repositoryId: 1, milestone: 100 }]);
   });
 

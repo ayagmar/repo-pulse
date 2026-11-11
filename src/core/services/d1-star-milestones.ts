@@ -17,7 +17,10 @@ const NEW_DELIVERY = 'NOT EXISTS (SELECT 1 FROM events WHERE delivery_id = ?)';
 interface StarMilestoneStatements {
   /** Run before the history insert, which they check for this delivery id. */
   beforeHistory: D1PreparedStatementLike[];
-  /** Run after the history insert and before the delivery insert, which copies the event. */
+  /**
+   * Run after the history insert, which they update. The ledger then copies the stored
+   * event into the delivery row.
+   */
   afterHistory: D1PreparedStatementLike[];
 }
 
