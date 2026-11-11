@@ -50,6 +50,125 @@ describe('D1DeliveryLedger', () => {
     ).resolves.toEqual({ outcome: 'duplicate' });
   });
 
+  it('queues each delivery id at most once, with its first event, across prunes and crashes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    cleanups.push(() => {
+      vi.useRealTimers();
+    });
+    for (let seed = 1; seed <= 8; seed += 1) {
+      const tempDatabase = createTempDatabasePath();
+      cleanups.push(tempDatabase.cleanup);
+      const database = createTestD1Database(tempDatabase.databasePath);
+      cleanups.push(() => {
+        database.close();
+      });
+      // Every delivery row ever created, whatever pruned it since.
+      await database.exec(`
+        CREATE TABLE queued_log (delivery_id TEXT NOT NULL);
+        CREATE TRIGGER log_queued AFTER INSERT ON deliveries
+        BEGIN INSERT INTO queued_log VALUES (NEW.delivery_id); END;
+      `);
+      let crash: 'none' | 'before_commit' | 'after_commit' = 'none';
+      const crashing: D1DatabaseLike = {
+        prepare: (query) => database.prepare(query),
+        exec: (sql) => database.exec(sql),
+        batch: async (statements) => {
+          if (crash === 'before_commit') {
+            // The Worker stops inside the batch: D1 rolls the whole batch back.
+            return database.batch([
+              ...statements,
+              database.prepare('INSERT INTO deliveries (delivery_id) VALUES (NULL)'),
+            ]);
+          }
+          const results = await database.batch(statements);
+          if (crash === 'after_commit') {
+            // The batch committed, but the Worker stopped before it could answer.
+            throw new Error('Network connection lost');
+          }
+          return results;
+        },
+      };
+      const ledger = new D1DeliveryLedger(crashing);
+
+      let state = seed;
+      const random = (bound: number): number => {
+        state = (state * 48_271) % 2_147_483_647;
+        return state % bound;
+      };
+      /** The star count of the event first committed under each delivery id. */
+      const firstCommitted = new Map<string, number>();
+      vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'));
+
+      for (let step = 0; step < 80; step += 1) {
+        vi.setSystemTime(new Date(Date.now() + 1000));
+        const action = random(10);
+        if (action < 6) {
+          // A delivery, or GitHub redelivering one, maybe normalized differently now.
+          const deliveryId = `delivery-${String(random(4))}`;
+          const count = random(1000);
+          const event = { ...createTestRepoEvent(), star: { count } };
+          const roll = random(6);
+          crash = roll === 0 ? 'before_commit' : roll === 1 ? 'after_commit' : 'none';
+          const isNew = !firstCommitted.has(deliveryId);
+          const result = await ledger
+            .persistAcceptedDelivery({
+              deliveryId,
+              sourceEventType: 'star',
+              repository: event.repository.fullName,
+              event,
+              maxAttempts: 5,
+            })
+            .catch(() => 'crashed' as const);
+          const crashed = crash;
+          crash = 'none';
+          if (isNew && crashed !== 'before_commit') {
+            firstCommitted.set(deliveryId, count);
+          }
+          if (result !== 'crashed') {
+            expect(result, `seed ${String(seed)}, step ${String(step)}`).toEqual({
+              outcome: isNew ? 'accepted' : 'duplicate',
+            });
+          }
+        } else if (action < 8) {
+          // Cron sends whatever is due.
+          for (;;) {
+            const claimed = await ledger.claimNextPendingDelivery(new Date(), 300_000);
+            if (!claimed) {
+              break;
+            }
+            await ledger.markDeliverySucceeded(
+              claimed.deliveryId,
+              new Date(),
+              claimed.processingAttempt
+            );
+          }
+        } else {
+          // Retention prunes every succeeded delivery.
+          await ledger.pruneSucceededDeliveries(new Date(Date.now() + 1));
+        }
+
+        const queued = await database
+          .prepare(
+            'SELECT delivery_id AS id, COUNT(*) AS times FROM queued_log GROUP BY delivery_id'
+          )
+          .all<{ id: string; times: number }>();
+        expect(
+          queued.results.filter((row) => row.times > 1),
+          `seed ${String(seed)}, step ${String(step)}`
+        ).toEqual([]);
+        expect(queued.results.map((row) => row.id).sort()).toEqual(
+          [...firstCommitted.keys()].sort()
+        );
+        const stored = await database
+          .prepare(
+            "SELECT delivery_id AS id, json_extract(event_json, '$.star.count') AS count FROM events"
+          )
+          .all<{ id: string; count: number }>();
+        expect(new Map(stored.results.map((row) => [row.id, row.count]))).toEqual(firstCommitted);
+      }
+    }
+  });
+
   it('returns delivery details including persisted provider attempts', async () => {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);

@@ -133,8 +133,8 @@ key gives read access to every repository the App is installed on, private ones
 included; to rotate it, generate a new key in the App, convert it, `wrangler secret put
 GITHUB_APP_PRIVATE_KEY`, deploy, check a digest, then delete the old key in GitHub.
 
-Supported deliveries return `202` after persistence, not after Discord delivery. Duplicate
-retained delivery IDs return `200`; unsupported events are acknowledged and ignored.
+Supported deliveries return `202` after persistence, not after Discord delivery. A delivery
+ID seen before returns `200`; unsupported events are acknowledged and ignored.
 
 ## Discord actions (optional)
 

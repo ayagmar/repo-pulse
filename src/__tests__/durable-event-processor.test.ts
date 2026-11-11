@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { NotificationResult, Notifier } from '../core/interfaces/notifier.js';
 import { FAILURE_CLASSIFICATIONS } from '../core/models/failure-classification.js';
 import type { RepoEvent } from '../core/models/repo-event.js';
@@ -492,26 +492,31 @@ describe('DurableEventProcessor sender history', () => {
     }
   });
 
-  it('requeues a pruned delivery with its first event, whoever is excluded now', async () => {
+  it('does not queue a pruned delivery again, whoever is excluded now', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(new Date('2026-10-01T10:00:00.000Z'));
     const database = createDatabase();
-    const firstAlice = starBy('alice');
-    const firstBot = starBy('renovate[bot]', 5);
-    await enqueue(createProcessor(database), 'alice', firstAlice);
-    await enqueue(createProcessor(database), 'bot', firstBot);
+    await enqueue(createProcessor(database), 'alice', starBy('alice'));
+    await enqueue(createProcessor(database), 'bot', starBy('renovate[bot]', 5));
+    // Retention prunes a delivery at least a day after it was accepted.
+    vi.setSystemTime(new Date('2026-10-15T10:00:00.000Z'));
     await database.prepare('DELETE FROM deliveries').run();
 
     // Alice is ignored now, and both are redelivered as newly normalized events.
     const later = createProcessor(database, ['alice']);
-    await enqueue(later, 'alice', { ...starBy('alice'), timestamp: new Date('2027-01-01') });
-    await enqueue(later, 'bot', {
-      ...starBy('renovate[bot]', 5),
-      timestamp: new Date('2027-01-01'),
-    });
+    await expect(
+      enqueue(later, 'alice', { ...starBy('alice'), timestamp: new Date('2027-01-01') })
+    ).resolves.toEqual({ outcome: 'duplicate' });
+    await expect(
+      enqueue(later, 'bot', { ...starBy('renovate[bot]', 5), timestamp: new Date('2027-01-01') })
+    ).resolves.toEqual({ outcome: 'duplicate' });
 
-    await expect(queuedEvent(database, 'alice')).resolves.toEqual({
-      ...firstAlice,
-      senderHistory: firstTime,
-    });
-    await expect(queuedEvent(database, 'bot')).resolves.toEqual({ ...firstBot, silent: true });
+    await expect(queuedEvent(database, 'alice')).resolves.toBeUndefined();
+    await expect(queuedEvent(database, 'bot')).resolves.toBeUndefined();
+    // The history keeps what was first recorded.
+    await expect(storedHistory(database)).resolves.toEqual({ alice: firstTime, bot: undefined });
   });
 });

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A GitHub redelivery is a duplicate for good. A delivery id already in the event history
+  is answered `200` and never queued again, also after its delivery row was pruned:
+  before, a redelivery more than 14 days later (`DELIVERY_SUCCEEDED_RETENTION_DAYS`) was
+  posted a second time. The first recorded event is kept whatever the redelivered payload
+  says. The delivery row is now inserted only when the history has no row for its id, and
+  the stored event is copied into it in the same batch when the history adds
+  `senderHistory` or a star milestone, which costs one more row written for those
+  deliveries. No migration; the previous release runs on the same data and goes back to
+  queuing redeliveries after the prune.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each

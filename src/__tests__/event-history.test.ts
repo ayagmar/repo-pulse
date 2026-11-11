@@ -139,26 +139,20 @@ describe('event history', () => {
     );
     await expect(deliveries.json()).resolves.toEqual({ deliveries: [] });
 
-    // Manual redeliveries after pruning are queued again, but recorded only once, and
-    // posted with the text they were first accepted with.
+    // Manual redeliveries after pruning are duplicates: acknowledged, never posted again.
     const posts = vi.mocked(fetch);
     posts.mockClear();
     for (const deliveryId of ['delivery-first', 'delivery-old']) {
-      await app.fetch(starWebhook(deliveryId, 'alice'), env, createExecutionContext().executionCtx);
+      const redelivered = await app.fetch(
+        starWebhook(deliveryId, 'alice'),
+        env,
+        createExecutionContext().executionCtx
+      );
+      expect(redelivered.status).toBe(200);
+      await expect(redelivered.json()).resolves.toMatchObject({ duplicate: true });
     }
     await drainDueDeliveries(env);
-    const descriptions = posts.mock.calls.map(
-      ([, init]) =>
-        (JSON.parse(init?.body as string) as { embeds: [{ description: string }] }).embeds[0]
-          .description
-    );
-    expect(descriptions).toHaveLength(2);
-    expect(descriptions).toContainEqual(
-      expect.stringMatching(/\[alice\].*\n\n👋 First event recorded from them$/s)
-    );
-    expect(descriptions).toContainEqual(
-      '[carol](https://github.com/carol) starred this repository'
-    );
+    expect(posts).not.toHaveBeenCalled();
 
     const history = await app.fetch(
       adminGet('/events'),
@@ -356,12 +350,10 @@ describe('sender history', () => {
       priorRepositories: 2,
       priorInRepository: 1,
     });
-    // A delivery id already recorded keeps its event, and the delivery copies it.
-    await expect(persist('delivery-3', 8, 'myorg/web')).resolves.toEqual({ outcome: 'accepted' });
+    // A delivery id already recorded keeps its event and is not queued again.
+    await expect(persist('delivery-3', 8, 'myorg/web')).resolves.toEqual({ outcome: 'duplicate' });
     await expect(stored('delivery-3')).resolves.toBeUndefined();
-    await expect(ledger.getDelivery('delivery-3')).resolves.toMatchObject({
-      event: { sender: { login: 'user8' }, timestamp: new Date('2026-10-03T10:00:00.000Z') },
-    });
+    await expect(ledger.getDelivery('delivery-3')).resolves.toBeNull();
 
     const insert = queries.find((query) => query.includes('$.senderHistory')) ?? '';
     const plan = raw
