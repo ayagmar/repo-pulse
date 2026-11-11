@@ -70,7 +70,7 @@ The button creates the D1 database in your Cloudflare account and asks for these
 | `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` | the App's ID and its installation's ID |
 | `GITHUB_APP_PRIVATE_KEY` | the App's private key, converted to PKCS#8 as [SETUP.md](SETUP.md#github-app) shows |
 
-The committed `wrangler.jsonc` turns Discord actions on, which needs more secrets: in your copy, set `"DISCORD_ACTIONS": "off"` until you [set them up](SETUP.md#discord-actions-optional), or the Worker answers every request with a configuration error. It then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
+Discord actions start off; [SETUP.md](SETUP.md#discord-actions-optional) turns them on. The button then runs `npm run deploy`, which applies the D1 migrations and deploys the Worker. To deploy from a clone with Wrangler instead, follow [SETUP.md](SETUP.md).
 
 ### Optional: a public-only GitHub token for the feed
 
