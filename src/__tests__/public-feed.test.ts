@@ -606,7 +606,7 @@ describe('public feed', () => {
     const outcome = (kind: Visibility): 'public' | 'denied' | 'unresolved' =>
       kind === 'public'
         ? 'public'
-        : kind === 'private' || kind === 'not_found'
+        : kind === 'private' || kind === 'not_found' || kind === 'moved'
           ? 'denied'
           : 'unresolved';
     for (const fullName of repositories) {
@@ -1421,6 +1421,29 @@ describe('public feed', () => {
       expect(partial.status).toBe(200);
       expect(partial.body.complete).toBe(false);
       expect(partial.body.days.at(-2)?.repos.map((repo) => repo.repo)).toEqual(['ayagmar/ccdesk']);
+    });
+
+    it('treats a renamed repository as denied, so its old name never makes an answer incomplete', async () => {
+      // GitHub answers a renamed or transferred repository's old name with 301, forever.
+      visibility.set('ayagmar/old-name', 'moved');
+      visibility.set('ayagmar/new-name', 'public');
+      await record(push('ayagmar/old-name'), '2026-10-24T21:14:00.000Z');
+      await record(push('ayagmar/new-name'), '2026-10-25T21:14:00.000Z');
+
+      const { status, body } = await getActivity();
+
+      expect(status).toBe(200);
+      expect(body.complete).toBe(true);
+      expect(body.days.flatMap((day) => day.repos.map((repo) => repo.repo))).toEqual([
+        'ayagmar/new-name',
+      ]);
+
+      // With only the old name left, the feed is empty rather than unavailable.
+      visibility.set('ayagmar/new-name', 'not_found');
+      vi.setSystemTime(new Date('2026-10-26T08:46:00.000Z'));
+      const { response, text } = await getFeed();
+      expect(response.status, text).toBe(200);
+      expect(JSON.parse(text)).toMatchObject({ events: [], starHistory: [] });
     });
   });
 });

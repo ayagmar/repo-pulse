@@ -186,7 +186,8 @@ a window with more active repositories than that leaves the least recently activ
 until a request within the next 60 seconds looks them up. `complete` is `false` whenever a
 repository in the window was left out that way, or because GitHub did not answer, so the
 counts may be short; ask again before keeping them. Repositories GitHub says are not
-public do not make an answer incomplete. `since` is the first UTC
+public, and the old name of a renamed or transferred repository, do not make an answer
+incomplete. `since` is the first UTC
 day the history has a public event for, or `null`: days before it are zeros because
 nothing was recorded yet. It has the feed's visibility check, errors, `no-store` header
 and rate limit; the two routes share one budget of 10 requests a minute per client.

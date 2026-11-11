@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The old name of a renamed or transferred repository no longer makes `/public/activity`
+  incomplete. GitHub answers that name with `301` for good, which the visibility check
+  counted as no answer, so every response over a window holding the old name's events
+  said `complete: false`, and signals stored nothing. A `301` now counts as a denial, like
+  a `404`: the old name stays out of both routes, and the feed answers an empty list
+  rather than `503` when it is all that is left. Shape, cache and rate limit unchanged.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each
