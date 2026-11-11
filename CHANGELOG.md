@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A digest whose events read fails is retried the next minute. The run kept its claim
+  for the five-minute lease, so one failed D1 read from the fifth minute of the window
+  on left no run to post it before the window closed, and the digest was skipped. If
+  giving a claim up fails as well, the run logs `digest.release_failed`, still gives up
+  the other providers' claims, and reports the read error.
 - A default-branch push that holds a commit with an empty message
   (`git commit --allow-empty-message`) is accepted. The push mapper required a non-empty
   message, so the webhook answered `400`, GitHub does not retry that, and the push never
