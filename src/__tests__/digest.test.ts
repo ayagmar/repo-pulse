@@ -400,6 +400,27 @@ describe('digests', () => {
     expect(postedEmbeds()).toHaveLength(1);
   });
 
+  it('reports the read error, not the release error, when both fail', async () => {
+    const env = createDigestEnv({ LOG_LEVEL: 'warn' });
+    await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
+    vi.spyOn(D1EventHistory.prototype, 'listActivityBetween').mockRejectedValueOnce(
+      new Error('D1 unavailable')
+    );
+    vi.spyOn(D1DigestLog.prototype, 'release').mockRejectedValueOnce(
+      new Error('D1 refused: DELETE ... daily:2026-10-15')
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    vi.setSystemTime(new Date('2026-10-15T09:00:00.000Z'));
+    await expect(sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'))).rejects.toThrow(
+      'D1 unavailable'
+    );
+
+    const warnings = warn.mock.calls.map(([line]) => String(line)).join('\n');
+    expect(warnings).toContain('digest.release_failed');
+    expect(warnings).not.toContain('D1 refused');
+  });
+
   it('posts once when two cron runs overlap', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);

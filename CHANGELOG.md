@@ -4,7 +4,9 @@
 
 - A digest whose events read fails is retried the next minute. The run kept its claim
   for the five-minute lease, so one failed D1 read from the fifth minute of the window
-  on left no run to post it before the window closed, and the digest was skipped.
+  on left no run to post it before the window closed, and the digest was skipped. If
+  giving a claim up fails as well, the run logs `digest.release_failed`, still gives up
+  the other providers' claims, and reports the read error.
 - The retention prune no longer reads every succeeded delivery each cron minute. Migration
   `0012` adds a partial index on status and finish time, so a run with nothing to delete
   reads one row instead of all of them (628 on production, about 820,000 rows a day). Each

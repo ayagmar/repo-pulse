@@ -422,7 +422,14 @@ export class DigestSender {
     claimedProviders: ReadonlyMap<string, string>
   ): Promise<void> {
     for (const [provider, claimedAt] of claimedProviders) {
-      await this.digestLog.release(digestId, provider, claimedAt);
+      try {
+        await this.digestLog.release(digestId, provider, claimedAt);
+      } catch {
+        // The claim stays held until its lease ends. Carry on with the other providers,
+        // and keep the caller's own error. No exception text: D1 errors can quote bound
+        // values.
+        logger.warn('digest.release_failed', { component: 'digest', digestId, provider });
+      }
     }
   }
 
