@@ -38,27 +38,27 @@
     "verify:ci": "run-s check:secrets typegen typecheck lint check:ci test:coverage test:workers knip build"
   },
   "dependencies": {
-    "hono": "^4.13.13"
+    "hono": "^4.13.18"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
-    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@biomejs/biome": "2.6.7",
+    "@cloudflare/vitest-plugin": "^1.8.1",
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^9.6.0",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.0",
     "ajv": "^8.20.0",
-    "better-sqlite3": "^13.0.3",
-    "eslint": "^10.13.0",
-    "globals": "^17.13.0",
+    "better-sqlite3": "^13.1.1",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
     "husky": "^9.1.7",
-    "knip": "^6.43.0",
+    "knip": "^6.45.1",
     "lint-staged": "^17.6.0",
     "npm-run-all2": "^9.0.4",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.72.0",
-    "vite": "^8.3.5",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
     "vitest": "^5.0.5",
     "wrangler": "^4.152.0"
   },
