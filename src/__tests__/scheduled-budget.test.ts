@@ -302,7 +302,7 @@ describe('one scheduled invocation', () => {
    * acceptance, a daily and a weekly digest
    * (which read the week's threads and when each of the week's stargazers was first
    * seen), a star alert, and no cached App token. `discordFailure` makes Discord answer
-   * 503 to the comment and review alerts; `outcomeWriteFailure` makes D1 fail to record
+   * 500 to the comment and review alerts; `outcomeWriteFailure` makes D1 fail to record
    * the first provider attempt. `rerunAt` runs the cron again at each of those times.
    */
   async function runWorstCase(
@@ -435,7 +435,7 @@ describe('one scheduled invocation', () => {
         url.startsWith('https://api.github.com/')
           ? fakeGitHub(url, init, options.failMint === true)
           : options.discordFailure === true && isConversationAlert(init)
-            ? new Response(null, { status: 503 })
+            ? new Response(null, { status: 500 })
             : Response.json({ id: '123' })
       );
     });

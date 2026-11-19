@@ -70,7 +70,7 @@ describe('createDiscordNotifier', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response('server error', { status: 503 }))
+      vi.fn().mockResolvedValue(new Response('server error', { status: 500 }))
     );
 
     const result = await notifier.notify(createTestRepoEvent());
@@ -78,7 +78,7 @@ describe('createDiscordNotifier', () => {
     expect(result).toEqual({
       success: false,
       provider: 'discord',
-      error: 'Discord request failed with 503',
+      error: 'Discord request failed with 500',
       failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
     });
   });

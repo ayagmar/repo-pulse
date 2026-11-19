@@ -146,6 +146,8 @@ class DiscordNotifier implements Notifier {
         provider: this.name,
         error,
         failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+        // A gateway can fail after Discord saved the message but before it returned the ID.
+        ...([502, 503, 504].includes(response.status) ? { acceptanceUnknown: true as const } : {}),
         ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       };
     }

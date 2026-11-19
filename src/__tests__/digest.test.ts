@@ -448,28 +448,32 @@ describe('digests', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  // A Discord post accepted just before a lost reply used to repeat on the next minute.
-  it('holds an accepted but timed-out digest for the entire send lease', async () => {
-    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
-    await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
-    const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
-    let acceptedPosts = 0;
-    fetchMock.mockImplementation(() => {
-      acceptedPosts += 1;
-      return acceptedPosts === 1
-        ? Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'))
-        : Promise.resolve(Response.json({ id: '123' }));
-    });
-    for (const at of ['09:00', '09:01', '09:09', '09:59']) {
-      await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
+  // An accepted Discord post used to repeat on the next tick after a transport or gateway timeout.
+  it.each(['transport timeout', '504'])(
+    'holds an accepted digest for the lease after %s',
+    async (failure) => {
+      const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+      await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+      const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
+      let acceptedPosts = 0;
+      fetchMock.mockImplementation(() => {
+        acceptedPosts += 1;
+        if (acceptedPosts > 1) return Promise.resolve(Response.json({ id: '123' }));
+        return failure === '504'
+          ? Promise.resolve(new Response(null, { status: 504 }))
+          : Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'));
+      });
+      for (const at of ['09:00', '09:01', '09:09', '09:59']) {
+        await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
+      }
+      expect(acceptedPosts).toBe(1);
+      expect(read).toHaveBeenCalledTimes(1);
+      await sendDueDigests(env, new Date('2026-10-15T10:00:00Z'));
+      await sendDueDigests(env, new Date('2026-10-15T10:20:00Z'));
+      expect(acceptedPosts).toBe(2);
+      expect(read).toHaveBeenCalledTimes(2);
     }
-    expect(acceptedPosts).toBe(1);
-    expect(read).toHaveBeenCalledTimes(1);
-    await sendDueDigests(env, new Date('2026-10-15T10:00:00Z'));
-    await sendDueDigests(env, new Date('2026-10-15T10:20:00Z'));
-    expect(acceptedPosts).toBe(2);
-    expect(read).toHaveBeenCalledTimes(2);
-  });
+  );
 
   // A short Discord throttle in the last hour used to block the digest until after midnight.
   it.each([

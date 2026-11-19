@@ -325,6 +325,36 @@ describe('scheduled webhook recovery', () => {
     expect(posts).toEqual(Array.from({ length: 6 }, () => `${LIST}/1/attempts`));
   });
 
+  // A gateway timeout can arrive after Discord has already posted an event alert.
+  it('keeps an event delivery leased when Discord may have saved it before a 504', async () => {
+    const posts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        expect(url).toContain('https://discord.com/');
+        posts.push(url);
+        return Promise.resolve(
+          posts.length === 1 ? new Response(null, { status: 504 }) : Response.json({ id: '123' })
+        );
+      })
+    );
+    vi.setSystemTime(new Date('2026-11-20T00:01:00Z'));
+    expect(await webhook('gateway-timeout', star(100))).toBe(202);
+    const ledger = new D1DeliveryLedger(env.DB);
+    await expect(ledger.getDelivery('gateway-timeout')).resolves.toMatchObject({
+      status: 'processing',
+      processingAttempts: 1,
+    });
+    await cron('2026-11-20T00:02:00Z');
+    expect(posts).toHaveLength(1);
+    await cron('2026-11-20T00:06:00Z');
+    expect(posts).toHaveLength(2);
+    await expect(ledger.getDelivery('gateway-timeout')).resolves.toMatchObject({
+      status: 'succeeded',
+      processingAttempts: 2,
+    });
+  });
+
   // A late digest used to seal its window before a successful replay POST's callback arrived.
   it('holds a catch-up until a scan checkpoints and asynchronous callbacks have had time to arrive', async () => {
     const digests: string[] = [];
