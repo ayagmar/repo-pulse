@@ -139,7 +139,7 @@ export class MomentumRadar {
         } catch {
           await this.radarLog.markSent(alertId, sentAt);
         }
-      } else {
+      } else if (results.every((result) => !result.success && result.acceptanceUnknown !== true)) {
         await this.radarLog.release(alertId, claimedAt);
       }
       logger.info('radar.star_spike', {

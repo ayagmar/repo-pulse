@@ -17,6 +17,8 @@ export interface NotificationFailureResult {
   error: string;
   failureClassification: FailureClassification;
   retryAfterMs?: number;
+  /** The provider may have posted the message, but we did not get a response. */
+  acceptanceUnknown?: true;
 }
 
 export type NotificationResult = NotificationSuccessResult | NotificationFailureResult;

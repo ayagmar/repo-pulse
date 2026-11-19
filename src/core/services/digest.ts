@@ -525,7 +525,11 @@ export class DigestSender {
           } catch {
             await this.digestLog.markSent(digestId, result.provider, sentAt);
           }
-        } else {
+        } else if (
+          result.acceptanceUnknown !== true &&
+          clock().getTime() - window.end.getTime() < ON_TIME_MS
+        ) {
+          // Only a definite rejection in the first ten minutes is worth retrying next tick.
           await this.releaseClaims(digestId, new Map([[result.provider, claimedAt]]));
         }
       } catch (error) {

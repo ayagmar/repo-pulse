@@ -448,6 +448,46 @@ describe('digests', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  // A Discord post accepted just before a lost reply used to repeat on the next minute.
+  it('holds an accepted but timed-out digest for the entire send lease', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+    await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+    const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
+    let acceptedPosts = 0;
+    fetchMock.mockImplementation(() => {
+      acceptedPosts += 1;
+      return acceptedPosts === 1
+        ? Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'))
+        : Promise.resolve(new Response(null, { status: 204 }));
+    });
+    for (const at of ['09:00', '09:01', '09:09', '09:59']) {
+      await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
+    }
+    expect(acceptedPosts).toBe(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    await sendDueDigests(env, new Date('2026-10-15T10:00:00Z'));
+    await sendDueDigests(env, new Date('2026-10-15T10:20:00Z'));
+    expect(acceptedPosts).toBe(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // A revoked webhook used to trigger a full history read every minute until midnight.
+  it('does not rebuild a rejected catch-up on each tick', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+    await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+    const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
+    fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+    for (const at of ['21:40', '22:00', '22:01', '22:10', '22:59']) {
+      await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    await sendDueDigests(env, new Date('2026-10-15T23:00:00Z'));
+    await sendDueDigests(env, new Date('2026-10-15T23:01:00Z'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   // A quota outage left a legacy daily claim and prevented the weekly claim entirely.
   it('catches up the same local day without moving either window or repeating either post', async () => {
     const env = createDigestEnv({ DIGEST_TIME_ZONE: 'America/New_York' });

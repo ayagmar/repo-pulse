@@ -347,6 +347,26 @@ describe('momentum radar', () => {
     expect(postedEmbeds()).toHaveLength(1);
   });
 
+  // A radar post delivered before the Discord reply timed out used to repeat at the next check.
+  it('lets the lease expire before retrying a radar post with an unknown outcome', async () => {
+    const env = createRadarEnv();
+    await recordStars(env, 'cli', new Date('2026-10-15T12:05:00Z'), ['a', 'b', 'c', 'd', 'e'], 5);
+    let acceptedPosts = 0;
+    fetchMock.mockImplementation(() => {
+      acceptedPosts += 1;
+      return acceptedPosts === 1
+        ? Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'))
+        : Promise.resolve(new Response(null, { status: 204 }));
+    });
+    for (const minutes of ['05', '15', '25', '35', '45', '55']) {
+      await check(env, `2026-10-15T12:${minutes}:00Z`);
+    }
+    expect(acceptedPosts).toBe(1);
+    await check(env, '2026-10-15T13:05:00Z');
+    await check(env, '2026-10-15T13:15:00Z');
+    expect(acceptedPosts).toBe(2);
+  });
+
   // An accepted post with no sent marker used to be repeated at every radar check.
   it('holds an ambiguous post across checks and only retries after the long lease', async () => {
     const env = createRadarEnv();

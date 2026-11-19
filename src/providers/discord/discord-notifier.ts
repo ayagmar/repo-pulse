@@ -122,6 +122,7 @@ class DiscordNotifier implements Notifier {
         provider: this.name,
         error: transportFailure('Discord request', error),
         failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+        acceptanceUnknown: true,
       };
     }
 
