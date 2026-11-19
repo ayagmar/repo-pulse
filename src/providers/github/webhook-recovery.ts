@@ -119,7 +119,9 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
     const scan = await db
       .prepare(`INSERT INTO webhook_recovery_scan (singleton, next_scan_at, walk_started_at) VALUES (1, ?, ?)
        ON CONFLICT (singleton) DO UPDATE SET next_scan_at = excluded.next_scan_at,
-         walk_started_at = COALESCE(webhook_recovery_scan.walk_started_at, excluded.walk_started_at)
+         walk_started_at = CASE WHEN webhook_recovery_scan.cursor IS NULL
+           THEN COALESCE(webhook_recovery_scan.walk_started_at, excluded.walk_started_at)
+           ELSE webhook_recovery_scan.walk_started_at END
        WHERE webhook_recovery_scan.next_scan_at <= ?
        RETURNING cursor`)
       .bind(lease, now, now)
@@ -249,8 +251,17 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         const limitedUntil = await rateLimitedUntil(response);
         if (limitedUntil !== null) {
           // GitHub did not queue a replay. Undo only this reservation, and commit
-          // the refund with the backoff so a restart cannot separate them.
+          // the refund with the backoff so a restart cannot separate them. The scan
+          // still moves to the next page: staying here while GitHub keeps refusing
+          // this page's requests would let older deliveries on later pages expire.
+          // The refunded GUID is seen again when the walk returns to the head. A walk
+          // that skipped a page has no start time, so it never counts as complete.
           await db.batch([
+            db
+              .prepare(
+                'UPDATE webhook_recovery_scan SET cursor = ?, walk_started_at = NULL WHERE singleton = 1 AND next_scan_at = ?'
+              )
+              .bind(next, lease),
             db
               .prepare(`UPDATE webhook_recovery_attempts
               SET request_count = request_count - 1, last_requested_at = previous_requested_at,
@@ -295,7 +306,7 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         : next === null
           ? db
               .prepare(`UPDATE webhook_recovery_scan SET cursor = NULL,
-              completed_walk_started_at = walk_started_at, walk_started_at = NULL
+              completed_walk_started_at = COALESCE(walk_started_at, completed_walk_started_at), walk_started_at = NULL
               WHERE singleton = 1 AND next_scan_at = ?`)
               .bind(lease)
           : db

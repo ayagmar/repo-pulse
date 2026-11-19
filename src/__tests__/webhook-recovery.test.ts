@@ -189,6 +189,49 @@ describe('scheduled webhook recovery', () => {
     expect(posts).toEqual(['/app/hook/deliveries/6/attempts', '/app/hook/deliveries/8/attempts']);
   });
 
+  // A page whose redeliveries GitHub kept throttling held the scan there, so an older
+  // delivery on the next page expired before the scan reached it.
+  it('moves to the next page after a throttled redelivery and recovers what is there', async () => {
+    const lists: (string | null)[] = [];
+    const posts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((address: string, init: RequestInit) => {
+        if (!address.startsWith(LIST)) throw new Error('Unexpected external request');
+        const url = new URL(address);
+        if (init.method === 'GET') {
+          const cursor = url.searchParams.get('cursor');
+          lists.push(cursor);
+          return Promise.resolve(
+            cursor === null
+              ? Response.json([delivery(9, 'recent')], {
+                  headers: { Link: `<${LIST}?per_page=100&cursor=p2>; rel="next"` },
+                })
+              : Response.json([delivery(4, 'expiring', { delivered_at: '2026-11-17T00:25:00Z' })])
+          );
+        }
+        posts.push(url.pathname);
+        return Promise.resolve(
+          url.pathname.includes('/9/')
+            ? new Response(null, { status: 429, headers: { 'Retry-After': '60' } })
+            : new Response(null, { status: 202 })
+        );
+      })
+    );
+    await cron('2026-11-20T00:00:00Z');
+    await cron('2026-11-20T00:10:00Z');
+    expect(lists).toEqual([null, 'p2']);
+    expect(posts).toEqual(['/app/hook/deliveries/9/attempts', '/app/hook/deliveries/4/attempts']);
+    // The throttled one is asked for again from the head, and no refusal was charged.
+    await cron('2026-11-20T00:20:00Z');
+    expect(lists).toEqual([null, 'p2', null]);
+    expect(posts).toHaveLength(3);
+    const state = await env.DB.prepare(
+      "SELECT request_count AS n FROM webhook_recovery_attempts WHERE guid = 'recent'"
+    ).first<{ n: number }>();
+    expect(state?.n).toBe(0);
+  });
+
   // Charging a definite throttle kept this GUID blocked until after GitHub expired it.
   it('recovers an original about to expire on the next tick after a GitHub throttle', async () => {
     let lists = 0;
