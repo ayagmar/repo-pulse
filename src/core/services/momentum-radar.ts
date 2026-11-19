@@ -29,8 +29,8 @@ const MIN_SPIKE_STARS = 5;
 const SPIKE_FACTOR = 4;
 /** An alert is sent at most once in this long per repository. */
 const ALERT_COOLDOWN_MS = DAY_MS;
-/** A claimed alert never marked sent or released, after a crash, can be retried after this. */
-const ALERT_CLAIM_LEASE_MS = 5 * 60_000;
+/** Space out replays of an ambiguous send, even across Worker restarts. */
+const ALERT_CLAIM_LEASE_MS = HOUR_MS;
 const ALERT_LIMITS = { cooldownMs: ALERT_COOLDOWN_MS, leaseMs: ALERT_CLAIM_LEASE_MS };
 const ALERT_PREFIX = 'stars:';
 
@@ -111,23 +111,38 @@ export class MomentumRadar {
       limits: ALERT_LIMITS,
     });
 
-    for (const spike of findStarSpikes(counts)) {
+    // Try only the strongest candidate. If another run wins its claim, a new check
+    // will consider the remaining candidates without an unbounded series of writes.
+    const [spike] = findStarSpikes(counts);
+    if (spike !== undefined) {
       const alertId = `${ALERT_PREFIX}${spike.repository}`;
       // Claim with the current time, not the cron's scheduled time, so a late check
       // does not shorten its own lease.
       const claimedAt = await this.radarLog.claim(alertId, new Date(), ALERT_LIMITS);
       if (claimedAt === null) {
-        continue;
+        return;
       }
 
-      // If this check fails before marking the alert sent or releasing it, the claim's
-      // lease runs out before the next check, which retries the alert.
-      const alert = await this.buildAlert(spike, now, recentStart);
+      let alert: MomentumAlert;
+      try {
+        alert = await this.buildAlert(spike, now, recentStart);
+      } catch (error) {
+        // No post was attempted, so the next check can retry without waiting an hour.
+        await this.radarLog.release(alertId, claimedAt).catch(() => {
+          logger.warn('radar.release_failed', { component: 'radar', alertId });
+        });
+        throw error;
+      }
       const results = await this.dispatcher.dispatchAlert(alert);
       const sent = results.some((result) => result.success);
       if (sent) {
-        await this.radarLog.markSent(alertId, new Date());
-      } else {
+        const sentAt = new Date();
+        try {
+          await this.radarLog.markSent(alertId, sentAt);
+        } catch {
+          await this.radarLog.markSent(alertId, sentAt);
+        }
+      } else if (results.every((result) => !result.success && result.acceptanceUnknown !== true)) {
         await this.radarLog.release(alertId, claimedAt);
       }
       logger.info('radar.star_spike', {
@@ -137,9 +152,7 @@ export class MomentumRadar {
         expectedStars: spike.expectedStars,
         sent,
       });
-      // One alert per check keeps the run within the Workers Free plan's 50
-      // subrequests. Other spikes are sent by the next checks.
-      return;
+      // Other spikes are eligible at the next check.
     }
   }
 

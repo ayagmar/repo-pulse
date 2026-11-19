@@ -35,7 +35,8 @@ interface PeopleOptions {
 }
 
 interface DrainDueDeliveriesOptions {
-  pruneSucceededDeliveries?: boolean;
+  runMaintenance?: boolean;
+  batchLimit?: number;
 }
 
 function summarizeFailures(failures: readonly NotificationFailureResult[]): string {
@@ -127,7 +128,9 @@ export class DurableEventProcessor {
       alert &&
       isOutsidePerson(event.sender, event.repository.owner, ignoredLogins);
     const starMilestone =
-      event.type === REPO_EVENT_TYPES.STAR_CREATED || event.type === REPO_EVENT_TYPES.STAR_DELETED;
+      event.activityAt === undefined &&
+      (event.type === REPO_EVENT_TYPES.STAR_CREATED ||
+        event.type === REPO_EVENT_TYPES.STAR_DELETED);
     if (!(senderHistory || starMilestone)) {
       return this.ledger.persistAcceptedDelivery(input);
     }
@@ -160,19 +163,23 @@ export class DurableEventProcessor {
       return;
     }
 
-    const recoveredCount = await this.ledger.requeueExpiredProcessingDeliveries(new Date());
-    if (recoveredCount > 0) {
-      logger.warn('event_processor.interrupted_deliveries_recovered', {
-        component: 'event_processor',
-        recoveredCount,
-      });
-    }
-
-    if (options.pruneSucceededDeliveries === true) {
+    const providers = this.dispatcher.getNotifiers().map((notifier) => notifier.name);
+    if (options.runMaintenance === true) {
+      const recoveredCount = await this.ledger.requeueExpiredProcessingDeliveries(
+        new Date(),
+        providers
+      );
+      if (recoveredCount > 0) {
+        logger.warn('event_processor.interrupted_deliveries_recovered', {
+          component: 'event_processor',
+          recoveredCount,
+        });
+      }
       await this.pruneSucceededDeliveries();
     }
 
-    for (let index = 0; index < this.drainBatchSize; index += 1) {
+    const batchSize = Math.min(this.drainBatchSize, options.batchLimit ?? this.drainBatchSize);
+    for (let index = 0; index < batchSize; index += 1) {
       const delivery = await this.ledger.claimNextPendingDelivery(
         new Date(),
         this.processingLeaseMs
@@ -181,82 +188,75 @@ export class DurableEventProcessor {
         return;
       }
 
-      await this.processDelivery(delivery);
+      if (await this.processDelivery(delivery, providers)) {
+        // Bound the extra write to one per drain and leave other work for the next run.
+        return;
+      }
     }
   }
 
-  private async processDelivery(delivery: ClaimedDelivery): Promise<void> {
+  /** Returns true when an outcome write needed a retry. */
+  private async processDelivery(
+    delivery: ClaimedDelivery,
+    providers: readonly string[]
+  ): Promise<boolean> {
     try {
       // A retry resends only to the providers that have not accepted this delivery yet.
-      const deliveredProviders = await this.ledger.listSucceededProviders(delivery.deliveryId);
+      const deliveredProviders = await this.ledger.listSucceededProviders(
+        delivery.deliveryId,
+        providers
+      );
       const attemptedAt = new Date();
       const results = await this.dispatcher.dispatch(delivery.event, {
         deliveryId: delivery.deliveryId,
         skipProviders: deliveredProviders,
       });
 
-      await this.ledger.recordProviderAttempts(
-        delivery.deliveryId,
-        delivery.processingAttempt,
-        results.map((result) =>
-          result.success
-            ? {
-                provider: result.provider,
-                success: true,
-                attemptedAt,
-              }
-            : {
-                provider: result.provider,
-                success: false,
-                error: result.error,
-                attemptedAt,
-              }
-        )
-      );
-
+      const attempts = results.map((result) => ({
+        provider: result.provider,
+        success: result.success,
+        attemptedAt,
+        ...(!result.success ? { error: result.error } : {}),
+      }));
       const failures = results.filter((result) => !result.success);
-      if (failures.length === 0) {
-        await this.ledger.markDeliverySucceeded(
-          delivery.deliveryId,
-          new Date(),
-          delivery.processingAttempt
-        );
-        return;
-      }
-
-      const lastError = summarizeFailures(failures);
-      const allFailuresTransient = failures.every(
+      const transient = failures.every(
         (failure) => failure.failureClassification === FAILURE_CLASSIFICATIONS.TRANSIENT
       );
-
-      if (allFailuresTransient && delivery.processingAttempt < delivery.maxAttempts) {
-        const delayMs = calculateRetryDelayMs(
-          delivery.processingAttempt,
-          failures,
-          this.retryBaseDelayMs,
-          this.retryMaxDelayMs
-        );
-        const nextAttemptAt = new Date(Date.now() + delayMs);
-
-        await this.ledger.rescheduleDelivery(
-          delivery.deliveryId,
-          nextAttemptAt,
-          lastError,
-          FAILURE_CLASSIFICATIONS.TRANSIENT,
-          delivery.processingAttempt
-        );
-        return;
+      const holdLease = transient && failures.some((failure) => failure.acceptanceUnknown === true);
+      const retry = transient && delivery.processingAttempt < delivery.maxAttempts;
+      const outcome =
+        failures.length === 0
+          ? { status: 'succeeded' as const, at: new Date() }
+          : {
+              status: holdLease
+                ? ('processing' as const)
+                : retry
+                  ? ('pending' as const)
+                  : ('failed' as const),
+              at:
+                retry || holdLease
+                  ? new Date(
+                      Date.now() +
+                        calculateRetryDelayMs(
+                          delivery.processingAttempt,
+                          failures,
+                          this.retryBaseDelayMs,
+                          this.retryMaxDelayMs
+                        )
+                    )
+                  : new Date(),
+              error: summarizeFailures(failures),
+              classification: transient
+                ? FAILURE_CLASSIFICATIONS.TRANSIENT
+                : FAILURE_CLASSIFICATIONS.PERMANENT,
+            };
+      try {
+        await this.ledger.recordDeliveryOutcome(delivery, attempts, outcome);
+        return false;
+      } catch {
+        await this.ledger.recordDeliveryOutcome(delivery, attempts, outcome);
+        return true;
       }
-
-      await this.ledger.markDeliveryFailed(
-        delivery.deliveryId,
-        new Date(),
-        lastError,
-        allFailuresTransient
-          ? FAILURE_CLASSIFICATIONS.TRANSIENT
-          : FAILURE_CLASSIFICATIONS.PERMANENT,
-        delivery.processingAttempt
-      );
     } catch (error) {
       // Keep the lease recoverable when persisting an outcome fails. A D1 outage
       // is not a permanent provider failure; cron will recover this attempt.

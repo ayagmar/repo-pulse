@@ -17,6 +17,21 @@ import { prepareEventHistoryInsert, THREAD_ACTIVATION } from './d1-event-history
 import { prepareStarMilestoneStatements } from './d1-star-milestones.js';
 import type { D1DatabaseLike, D1PreparedStatementLike } from './d1-types.js';
 
+const SWEEP_LIMIT = 4;
+const PRUNE_DELIVERY_LIMIT = 4;
+const PRUNE_RECEIPT_LIMIT = 8;
+
+const ATTEMPTED_PENDING = `status = 'pending' AND processing_attempts > 0 AND processing_attempts < max_attempts`;
+const EXPIRED_SUCCEEDED = `SELECT delivery_id FROM deliveries INDEXED BY idx_deliveries_status_processing_finished_at
+  WHERE status = 'succeeded' AND processing_finished_at IS NOT NULL AND processing_finished_at < ?
+  ORDER BY processing_finished_at LIMIT ?`;
+
+const HAS_ALL_RECEIPTS = `json_array_length(providers) > 0 AND NOT EXISTS (
+  SELECT 1 FROM json_each(providers) AS provider
+  WHERE NOT EXISTS (SELECT 1 FROM provider_attempts AS attempt
+    WHERE attempt.delivery_id = candidates.delivery_id AND attempt.provider_name = provider.value AND attempt.success = 1)
+)`;
+
 interface PersistDeliveryInput {
   deliveryId: string;
   sourceEventType: string;
@@ -57,6 +72,22 @@ interface DeliveryRow {
 interface DeliveryDetailRow extends DeliveryRow {
   eventJson: string;
 }
+
+interface ProviderAttempt {
+  provider: string;
+  success: boolean;
+  error?: string;
+  attemptedAt: Date;
+}
+
+type DeliveryOutcome =
+  | { status: 'succeeded'; at: Date }
+  | {
+      status: 'pending' | 'failed' | 'processing';
+      at: Date;
+      error: string;
+      classification: FailureClassification;
+    };
 
 interface ProviderAttemptRow {
   id: number;
@@ -211,7 +242,7 @@ export class D1DeliveryLedger {
           deliveryId: input.deliveryId,
           repository: input.repository,
           event,
-          receivedAt: acceptedAt,
+          receivedAt: event.activityAt ?? acceptedAt,
           ...(input.rememberSenderId !== undefined
             ? { rememberSenderId: input.rememberSenderId }
             : {}),
@@ -269,8 +300,8 @@ export class D1DeliveryLedger {
       .prepare(
         `WITH next_delivery AS (
            SELECT delivery_id
-           FROM deliveries
-           WHERE status = ?
+           FROM deliveries INDEXED BY idx_deliveries_due
+           WHERE status = 'pending'
              AND next_attempt_at IS NOT NULL
              AND next_attempt_at <= ?
              AND processing_attempts < max_attempts
@@ -296,7 +327,6 @@ export class D1DeliveryLedger {
            max_attempts AS maxAttempts`
       )
       .bind(
-        DELIVERY_STATUSES.PENDING,
         availableAt,
         DELIVERY_STATUSES.PROCESSING,
         startedAt,
@@ -328,18 +358,20 @@ export class D1DeliveryLedger {
   async recordProviderAttempts(
     deliveryId: string,
     deliveryAttempt: number,
-    attempts: readonly {
-      provider: string;
-      success: boolean;
-      error?: string;
-      attemptedAt: Date;
-    }[]
+    attempts: readonly ProviderAttempt[]
   ): Promise<void> {
-    if (attempts.length === 0) {
-      return;
+    if (attempts.length !== 0) {
+      await this.db.batch(this.providerAttemptStatements(deliveryId, deliveryAttempt, attempts));
     }
+  }
 
-    const statements = attempts.map((attempt) =>
+  private providerAttemptStatements(
+    deliveryId: string,
+    deliveryAttempt: number,
+    attempts: readonly ProviderAttempt[],
+    fenced = false
+  ): D1PreparedStatementLike[] {
+    return attempts.map((attempt) =>
       this.db
         .prepare(
           `INSERT INTO provider_attempts (
@@ -349,7 +381,15 @@ export class D1DeliveryLedger {
              attempted_at,
              success,
              error_message
-           ) VALUES (?, ?, ?, ?, ?, ?)`
+           ) SELECT ?, ?, ?, ?, ?, ?${
+             fenced
+               ? `
+           WHERE EXISTS (SELECT 1 FROM deliveries
+             WHERE delivery_id = ? AND status = 'processing' AND processing_attempts = ?)
+           AND NOT EXISTS (SELECT 1 FROM provider_attempts
+             WHERE delivery_id = ? AND provider_name = ? AND success = ? AND delivery_attempt = ?)`
+               : ''
+           }`
         )
         .bind(
           deliveryId,
@@ -357,21 +397,45 @@ export class D1DeliveryLedger {
           attempt.provider,
           attempt.attemptedAt.toISOString(),
           attempt.success ? 1 : 0,
-          attempt.error ?? null
+          attempt.error ?? null,
+          ...(fenced
+            ? [
+                deliveryId,
+                deliveryAttempt,
+                deliveryId,
+                attempt.provider,
+                attempt.success ? 1 : 0,
+                deliveryAttempt,
+              ]
+            : [])
         )
     );
-
-    await this.db.batch(statements);
   }
 
-  async listSucceededProviders(deliveryId: string): Promise<Set<string>> {
+  /** Commit the evidence and outcome together. A retry after a lost D1 reply is a no-op. */
+  async recordDeliveryOutcome(
+    delivery: ClaimedDelivery,
+    attempts: readonly ProviderAttempt[],
+    outcome: DeliveryOutcome
+  ): Promise<void> {
+    const { deliveryId, processingAttempt } = delivery;
+    await this.db.batch([
+      ...this.providerAttemptStatements(deliveryId, processingAttempt, attempts, true),
+      this.deliveryOutcomeStatement(deliveryId, processingAttempt, outcome),
+    ]);
+  }
+
+  async listSucceededProviders(
+    deliveryId: string,
+    providers: readonly string[]
+  ): Promise<Set<string>> {
     const rows = await this.db
       .prepare(
-        `SELECT DISTINCT provider_name AS provider
-         FROM provider_attempts
-         WHERE delivery_id = ? AND success = 1`
+        `SELECT provider.value AS provider FROM json_each(?) AS provider
+         WHERE EXISTS (SELECT 1 FROM provider_attempts
+           WHERE delivery_id = ? AND provider_name = provider.value AND success = 1)`
       )
-      .bind(deliveryId)
+      .bind(JSON.stringify(providers), deliveryId)
       .all<{ provider: string }>();
 
     return new Set(rows.results.map((row) => row.provider));
@@ -382,25 +446,10 @@ export class D1DeliveryLedger {
     finishedAt: Date,
     processingAttempt: number
   ): Promise<void> {
-    await this.db
-      .prepare(
-        `UPDATE deliveries
-         SET status = ?,
-             next_attempt_at = NULL,
-             processing_finished_at = ?,
-             lease_expires_at = NULL,
-             last_error = NULL,
-             last_failure_classification = NULL
-         WHERE delivery_id = ? AND status = ? AND processing_attempts = ?`
-      )
-      .bind(
-        DELIVERY_STATUSES.SUCCEEDED,
-        finishedAt.toISOString(),
-        deliveryId,
-        DELIVERY_STATUSES.PROCESSING,
-        processingAttempt
-      )
-      .run();
+    await this.deliveryOutcomeStatement(deliveryId, processingAttempt, {
+      status: 'succeeded',
+      at: finishedAt,
+    }).run();
   }
 
   async markDeliveryFailed(
@@ -410,27 +459,12 @@ export class D1DeliveryLedger {
     failureClassification: FailureClassification,
     processingAttempt: number
   ): Promise<void> {
-    await this.db
-      .prepare(
-        `UPDATE deliveries
-         SET status = ?,
-             next_attempt_at = NULL,
-             processing_finished_at = ?,
-             lease_expires_at = NULL,
-             last_error = ?,
-             last_failure_classification = ?
-         WHERE delivery_id = ? AND status = ? AND processing_attempts = ?`
-      )
-      .bind(
-        DELIVERY_STATUSES.FAILED,
-        finishedAt.toISOString(),
-        lastError,
-        failureClassification,
-        deliveryId,
-        DELIVERY_STATUSES.PROCESSING,
-        processingAttempt
-      )
-      .run();
+    await this.deliveryOutcomeStatement(deliveryId, processingAttempt, {
+      status: 'failed',
+      at: finishedAt,
+      error: lastError,
+      classification: failureClassification,
+    }).run();
   }
 
   async rescheduleDelivery(
@@ -440,58 +474,108 @@ export class D1DeliveryLedger {
     failureClassification: FailureClassification,
     processingAttempt: number
   ): Promise<void> {
-    await this.db
+    await this.deliveryOutcomeStatement(deliveryId, processingAttempt, {
+      status: 'pending',
+      at: nextAttemptAt,
+      error: lastError,
+      classification: failureClassification,
+    }).run();
+  }
+
+  private deliveryOutcomeStatement(
+    deliveryId: string,
+    processingAttempt: number,
+    outcome: DeliveryOutcome
+  ): D1PreparedStatementLike {
+    return this.db
       .prepare(
         `UPDATE deliveries
          SET status = ?,
              next_attempt_at = ?,
-             processing_started_at = NULL,
-             processing_finished_at = NULL,
-             lease_expires_at = NULL,
+             processing_started_at = CASE WHEN ? = 'pending' THEN NULL ELSE processing_started_at END,
+             processing_finished_at = ?,
+             lease_expires_at = CASE WHEN ? = 'processing' THEN MAX(lease_expires_at, ?) END,
              last_error = ?,
              last_failure_classification = ?
-         WHERE delivery_id = ? AND status = ? AND processing_attempts = ?`
+         WHERE delivery_id = ? AND status = 'processing' AND processing_attempts = ?`
       )
       .bind(
-        DELIVERY_STATUSES.PENDING,
-        nextAttemptAt.toISOString(),
-        lastError,
-        failureClassification,
+        outcome.status,
+        outcome.status === 'pending' ? outcome.at.toISOString() : null,
+        outcome.status,
+        outcome.status === 'pending' || outcome.status === 'processing'
+          ? null
+          : outcome.at.toISOString(),
+        outcome.status,
+        outcome.at.toISOString(),
+        outcome.status === 'succeeded' ? null : outcome.error,
+        outcome.status === 'succeeded' ? null : outcome.classification,
         deliveryId,
-        DELIVERY_STATUSES.PROCESSING,
         processingAttempt
-      )
-      .run();
+      );
   }
 
-  async requeueExpiredProcessingDeliveries(now: Date): Promise<number> {
+  async requeueExpiredProcessingDeliveries(
+    now: Date,
+    providers: readonly string[] = []
+  ): Promise<number> {
     const nextAttemptAt = now.toISOString();
-    const result = await this.db
-      .prepare(
-        `UPDATE deliveries
-         SET status = CASE WHEN processing_attempts >= max_attempts THEN ? ELSE ? END,
-             next_attempt_at = CASE WHEN processing_attempts >= max_attempts THEN NULL ELSE ? END,
-             processing_started_at = NULL,
-             processing_finished_at = CASE WHEN processing_attempts >= max_attempts THEN ? ELSE NULL END,
-             lease_expires_at = NULL,
-             last_error = COALESCE(last_error, ?),
-             last_failure_classification = 'transient'
-         WHERE (status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
-            OR (status = ? AND processing_attempts >= max_attempts)`
-      )
-      .bind(
-        DELIVERY_STATUSES.FAILED,
-        DELIVERY_STATUSES.PENDING,
-        nextAttemptAt,
-        nextAttemptAt,
-        'Processing interrupted before completion',
-        DELIVERY_STATUSES.PROCESSING,
-        nextAttemptAt,
-        DELIVERY_STATUSES.PENDING
-      )
-      .run();
-
-    return result.meta.changes;
+    const [, result] = await this.db.batch([
+      // Move over pages even if none of the legacy rows has complete receipts.
+      this.db
+        .prepare(`UPDATE delivery_maintenance SET
+        started_after = COALESCE(scanned_through, ''),
+        scanned_through = (SELECT MAX(delivery_id) FROM (
+          SELECT delivery_id FROM deliveries INDEXED BY idx_deliveries_attempted_pending
+          WHERE ${ATTEMPTED_PENDING} AND delivery_id > COALESCE(delivery_maintenance.scanned_through, '')
+          ORDER BY delivery_id LIMIT ?))
+        WHERE singleton = 1 AND (scanned_through IS NOT NULL OR EXISTS (
+          SELECT 1 FROM deliveries INDEXED BY idx_deliveries_attempted_pending
+          WHERE ${ATTEMPTED_PENDING} AND delivery_id > ''))`)
+        .bind(SWEEP_LIMIT),
+      this.db
+        .prepare(`WITH
+        args(providers, now, cap, interruption) AS (VALUES (?, ?, ?, ?)),
+        expired AS MATERIALIZED (
+          SELECT delivery_id, processing_attempts >= max_attempts AS exhausted, 0 AS legacy
+          FROM deliveries INDEXED BY idx_deliveries_status_lease_expires_at
+          WHERE status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= (SELECT now FROM args)
+          ORDER BY lease_expires_at LIMIT (SELECT cap FROM args)
+        ), exhausted AS MATERIALIZED (
+          SELECT delivery_id, 1 AS exhausted, 0 AS legacy FROM deliveries INDEXED BY idx_deliveries_exhausted_pending
+          WHERE status = 'pending' AND processing_attempts >= max_attempts AND delivery_id >= ''
+          ORDER BY delivery_id LIMIT (SELECT cap FROM args)
+        ), legacy AS MATERIALIZED (
+          SELECT delivery_id, 0 AS exhausted, 1 AS legacy FROM deliveries INDEXED BY idx_deliveries_attempted_pending
+          WHERE ${ATTEMPTED_PENDING} AND delivery_id > (SELECT started_after FROM delivery_maintenance WHERE singleton = 1)
+          ORDER BY delivery_id LIMIT (SELECT cap FROM args)
+        ), candidates AS (
+          SELECT * FROM expired UNION ALL SELECT * FROM exhausted UNION ALL SELECT * FROM legacy
+        ), interrupted AS MATERIALIZED (
+          SELECT delivery_id, CASE
+            WHEN ${HAS_ALL_RECEIPTS} THEN 'succeeded'
+            WHEN exhausted THEN 'failed'
+            WHEN NOT legacy THEN 'pending'
+          END AS outcome FROM candidates CROSS JOIN args
+        )
+        UPDATE deliveries
+        SET (status, next_attempt_at, processing_started_at, processing_finished_at, lease_expires_at,
+          last_error, last_failure_classification) = (
+          SELECT outcome, CASE WHEN outcome = 'pending' THEN now END,
+            NULL, CASE WHEN outcome != 'pending' THEN now END, NULL,
+            CASE WHEN outcome != 'succeeded' THEN COALESCE(deliveries.last_error, interruption) END,
+            CASE WHEN outcome != 'succeeded' THEN 'transient' END
+          FROM interrupted CROSS JOIN args WHERE interrupted.delivery_id = deliveries.delivery_id
+        )
+        WHERE delivery_id IN (SELECT delivery_id FROM interrupted WHERE outcome IS NOT NULL)`)
+        .bind(
+          JSON.stringify(providers),
+          nextAttemptAt,
+          SWEEP_LIMIT,
+          'Processing interrupted before completion'
+        ),
+    ]);
+    return result?.meta.changes ?? 0;
   }
 
   async listDeliveries(
@@ -628,17 +712,25 @@ export class D1DeliveryLedger {
   }
 
   async pruneSucceededDeliveries(olderThan: Date): Promise<number> {
-    const result = await this.db
-      .prepare(
-        `DELETE FROM deliveries
-         WHERE status = ?
-           AND processing_finished_at IS NOT NULL
-           AND processing_finished_at < ?`
-      )
-      .bind(DELIVERY_STATUSES.SUCCEEDED, olderThan.toISOString())
-      .run();
-
-    return result.meta.changes;
+    const cutoff = olderThan.toISOString();
+    // Admin retries can leave arbitrarily many child rows on one delivery. Delete a
+    // bounded set first; only childless rows can be deleted from the parent table.
+    const [, result] = await this.db.batch([
+      this.db
+        .prepare(`WITH expired AS MATERIALIZED (${EXPIRED_SUCCEEDED})
+        DELETE FROM provider_attempts WHERE id IN (
+          SELECT attempt.id FROM expired CROSS JOIN provider_attempts AS attempt
+          ON attempt.delivery_id = expired.delivery_id LIMIT ?)`)
+        .bind(cutoff, PRUNE_DELIVERY_LIMIT, PRUNE_RECEIPT_LIMIT),
+      this.db
+        .prepare(`WITH expired AS MATERIALIZED (${EXPIRED_SUCCEEDED})
+        DELETE FROM deliveries WHERE delivery_id IN (
+          SELECT expired.delivery_id FROM expired WHERE NOT EXISTS (
+            SELECT 1 FROM provider_attempts AS attempt WHERE attempt.delivery_id = expired.delivery_id
+          ))`)
+        .bind(cutoff, PRUNE_DELIVERY_LIMIT),
+    ]);
+    return result?.meta.changes ?? 0;
   }
 
   async getStats(): Promise<DeliveryStats> {

@@ -42,14 +42,7 @@ describe('webhook route', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(null, {
-          status: 204,
-        })
-      )
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ id: '123' })));
   });
 
   afterEach(() => {
@@ -190,11 +183,7 @@ describe('webhook route', () => {
         () =>
           new Promise<Response>((resolve) => {
             resolveFetch = (): void => {
-              resolve(
-                new Response(null, {
-                  status: 204,
-                })
-              );
+              resolve(Response.json({ id: '123' }));
             };
           })
       )
@@ -336,7 +325,10 @@ describe('webhook admission', () => {
   });
 
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })))
+    );
     database = createTempDatabasePath();
     env = createTestEnv(database.databasePath, {
       LOG_LEVEL: 'info',
@@ -484,7 +476,10 @@ describe('webhook gates before the body', () => {
   let bodyReads: number;
 
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })))
+    );
     database = createTempDatabasePath();
     env = createTestEnv(database.databasePath);
     bodyReads = 0;

@@ -152,7 +152,7 @@ describe('digest schedule', () => {
       time += 30 * 60_000
     ) {
       const window = dueDigestWindow(new Date(time), timeZone, hour, period);
-      if (window) {
+      if (window?.end.getTime() === time) {
         windows.push(window);
       }
     }
@@ -209,6 +209,72 @@ describe('digest schedule', () => {
     }
   );
 
+  // Sampling only scheduled instants missed wrong IDs and moving bounds during the catch-up hours.
+  it('keeps the same window across repeated, skipped and spilling hours until the cutoff', () => {
+    const assertWindow = (
+      zone: string,
+      hour: number,
+      ticks: string[],
+      date: string,
+      start: string,
+      end: string
+    ): void => {
+      for (const tick of ticks) {
+        expect(dueDigestWindow(new Date(tick), zone, hour)).toEqual({
+          period: 'daily',
+          date,
+          start: new Date(start),
+          end: new Date(end),
+        });
+      }
+    };
+    const ny = 'America/New_York';
+    assertWindow(
+      ny,
+      1,
+      [
+        '2026-11-01T05:00Z',
+        '2026-11-01T05:59Z',
+        '2026-11-01T06:00Z',
+        '2026-11-01T06:59Z',
+        '2026-11-02T04:59Z',
+      ],
+      '2026-11-01',
+      '2026-10-31T05:00Z',
+      '2026-11-01T05:00Z'
+    );
+    expect(dueDigestWindow(new Date('2026-11-02T05:00Z'), ny, 1)).toBeNull();
+    expect(dueDigestWindow(new Date('2026-03-08T06:59Z'), ny, 2)).toBeNull();
+    assertWindow(
+      ny,
+      2,
+      ['2026-03-08T07:00Z', '2026-03-08T07:59Z', '2026-03-09T03:59Z'],
+      '2026-03-08',
+      '2026-03-07T07:00Z',
+      '2026-03-08T07:00Z'
+    );
+    expect(dueDigestWindow(new Date('2026-03-09T04:00Z'), ny, 2)).toBeNull();
+    const nuuk = 'America/Nuuk';
+    expect(dueDigestWindow(new Date('2026-03-29T00:59Z'), nuuk, 23)).toBeNull();
+    assertWindow(
+      nuuk,
+      23,
+      ['2026-03-29T01:00Z', '2026-03-29T01:59Z', '2026-03-29T23:59Z'],
+      '2026-03-28',
+      '2026-03-28T01:00Z',
+      '2026-03-29T01:00Z'
+    );
+    assertWindow(
+      nuuk,
+      23,
+      ['2026-03-30T00:00Z'],
+      '2026-03-29',
+      '2026-03-29T01:00Z',
+      '2026-03-30T00:00Z'
+    );
+    expect(dueDigestWindow(new Date('2026-03-30T01:00Z'), nuuk, 23)).toBeNull();
+  });
+
   it.each([
     ['Africa/Casablanca', 1],
     ['Africa/Casablanca', 2],
@@ -231,7 +297,7 @@ describe('digests', () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
-    fetchMock.mockReset().mockResolvedValue(new Response(null, { status: 204 }));
+    fetchMock.mockReset().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })));
     vi.stubGlobal('fetch', fetchMock);
     vi.useFakeTimers({ toFake: ['Date'] });
   });
@@ -373,13 +439,137 @@ describe('digests', () => {
   it('retries a failed digest the next minute, then stops once it is posted', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
-    fetchMock.mockResolvedValueOnce(new Response('upstream error', { status: 500 }));
+    fetchMock.mockResolvedValueOnce(new Response('rate limited', { status: 429 }));
 
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
     await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
     await sendDueDigests(env, new Date('2026-10-15T09:02:00.000Z'));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // An accepted Discord post used to repeat on the next tick after a transport or gateway
+  // timeout, and a 500 sent after the message was saved was retried within a minute.
+  it.each(['transport timeout', '504', '500'])(
+    'holds an accepted digest for the lease after %s',
+    async (failure) => {
+      const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+      await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+      const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
+      let acceptedPosts = 0;
+      fetchMock.mockImplementation(() => {
+        acceptedPosts += 1;
+        if (acceptedPosts > 1) return Promise.resolve(Response.json({ id: '123' }));
+        return failure !== 'transport timeout'
+          ? Promise.resolve(new Response(null, { status: Number(failure) }))
+          : Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'));
+      });
+      for (const at of ['09:00', '09:01', '09:09', '09:59']) {
+        await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
+      }
+      expect(acceptedPosts).toBe(1);
+      expect(read).toHaveBeenCalledTimes(1);
+      await sendDueDigests(env, new Date('2026-10-15T10:00:00Z'));
+      await sendDueDigests(env, new Date('2026-10-15T11:00:00Z'));
+      expect(acceptedPosts).toBe(2);
+      expect(read).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  // A short Discord throttle in the last hour used to block the digest until after midnight.
+  it.each([
+    ['23:05', '5', '23:05:04', '23:06'],
+    ['23:05', '3600', '23:14', '23:15'],
+    ['09:00', '180', '09:02', '09:03'],
+  ])(
+    'retries a 429 at %s after its bounded Retry-After (%s seconds)',
+    async (first, retryAfter, early, due) => {
+      const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+      await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+      fetchMock.mockResolvedValueOnce(
+        new Response(null, { status: 429, headers: { 'Retry-After': retryAfter } })
+      );
+      const at = (time: string): Date =>
+        new Date(`2026-10-15T${time.length === 5 ? `${time}:00` : time}Z`);
+      await sendDueDigests(env, at(first));
+      await sendDueDigests(env, at(early));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await sendDueDigests(env, at(due));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const sent = await env.DB.prepare('SELECT sent_at FROM digest_sends').first<{
+        sent_at: string | null;
+      }>();
+      expect(sent?.sent_at).toBeTruthy();
+    }
+  );
+
+  // A revoked webhook used to trigger a full history read every minute until midnight.
+  it('does not rebuild a rejected catch-up on each tick', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+    await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+    const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
+    fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+    for (const at of ['21:00', '22:00', '22:01', '22:10', '22:59']) {
+      await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    await sendDueDigests(env, new Date('2026-10-15T23:00:00Z'));
+    await sendDueDigests(env, new Date('2026-10-15T23:01:00Z'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // A quota outage left a legacy daily claim and prevented the weekly claim entirely.
+  it('catches up the same local day without moving either window or repeating either post', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'America/New_York' });
+    await record(env, '2026-11-01T20:00:00Z', [star('before')]);
+    await record(env, '2026-11-02T14:01:00Z', [star('after')]);
+    const log = new D1DigestLog(env.DB);
+    await log.claim('daily:2026-11-02', 'discord', new Date('2026-11-02T14:05:00Z'), 300_000);
+    const run = async (at: string): Promise<void> => {
+      vi.setSystemTime(new Date(at));
+      await sendDueDigests(env, new Date());
+    };
+    await run('2026-11-02T22:00:00Z');
+    await run('2026-11-02T22:59:00Z');
+    // The scan is unavailable: the one-hour fallback still allows both sends.
+    expect(postedEmbeds()).toHaveLength(0);
+    await run('2026-11-02T23:00:00Z');
+    await run('2026-11-02T23:01:00Z');
+    expect(postedEmbeds()).toMatchObject([
+      {
+        title: '📊 Daily pulse · Mon 2 Nov',
+        footer: { text: '1 Nov, 09:00 to 2 Nov, 09:00 · America/New_York' },
+      },
+      { title: '📦 Weekly pulse · Mon 26 Oct to Sun 1 Nov' },
+    ]);
+    expect(
+      postedEmbeds().every(
+        ({ description }) => description.includes('/before') && !description.includes('/after')
+      )
+    ).toBe(true);
+    // Another missed day is no longer due at the first minute of the following local day.
+    await run('2026-11-04T05:00:00Z');
+    expect(postedEmbeds()).toHaveLength(2);
+  });
+
+  // A Monday run starting just before midnight used the daily's old clock for the weekly claim.
+  it('does not claim the weekly digest if the daily send crosses local midnight', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+    await record(env, '2026-10-18T12:00:00Z', [star('cli')]);
+    vi.setSystemTime(new Date('2026-10-19T23:59:59Z'));
+    fetchMock.mockImplementationOnce(() => {
+      vi.setSystemTime(new Date('2026-10-20T00:00:01Z'));
+      return Promise.resolve(Response.json({ id: '123' }));
+    });
+    await sendDueDigests(env);
+    expect(postedEmbeds()).toMatchObject([{ title: '📊 Daily pulse · Mon 19 Oct' }]);
+    await expect(env.DB.prepare('SELECT digest_id FROM digest_sends').all()).resolves.toMatchObject(
+      {
+        results: [{ digest_id: 'daily:2026-10-19' }],
+      }
+    );
   });
 
   it('retries the next minute when reading the events fails after the claim', async () => {
@@ -519,7 +709,7 @@ describe('digests', () => {
           ? installationTokenResponse('test-github-token')
           : url === 'https://api.github.com/graphql'
             ? fakeGitHub(init)
-            : new Response(null, { status: 204 })
+            : Response.json({ id: '123' })
       )
     );
     const env = createDigestEnv(app);
@@ -554,7 +744,7 @@ describe('digests', () => {
         return Promise.resolve(installationTokenResponse('test-github-token'));
       }
       if (url !== 'https://api.github.com/graphql') {
-        return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.resolve(Response.json({ id: '123' }));
       }
       queueMicrotask(() => {
         timeout.abort(new DOMException('Timed out', 'TimeoutError'));
@@ -579,7 +769,7 @@ describe('digests', () => {
       Promise.resolve(
         url.startsWith('https://api.github.com/')
           ? new Response('Bad credentials', { status: 401 })
-          : new Response(null, { status: 204 })
+          : Response.json({ id: '123' })
       )
     );
     const env = createDigestEnv(app);

@@ -137,26 +137,33 @@ describe('delivery recovery and ownership', () => {
     });
   });
 
-  it('recovers after a D1 outcome-write failure instead of making a delivery permanently failed', async () => {
-    await enqueue();
+  // A lost outcome reply on the final attempt used to turn an accepted post into a failed delivery.
+  it.each(['rollback', 'lost reply'])('retries only the outcome after a D1 %s', async (fault) => {
+    await enqueue('recovery', 1);
     const dispatcher = new NotificationDispatcher(new Redactor([]));
+    const notify = vi.fn(() => Promise.resolve({ success: true as const, provider: 'discord' }));
     dispatcher.add({
       name: 'discord',
       isConfigured: () => true,
-      notify: () => Promise.resolve({ success: true, provider: 'discord' }),
+      notify,
       notifyDigest: () => Promise.reject(new Error('Not used in this test')),
       notifyAlert: () => Promise.reject(new Error('Not used in this test')),
     });
     const processor = new DurableEventProcessor(ledger, dispatcher, { processingLeaseMs: 1000 });
-    vi.spyOn(db, 'batch').mockRejectedValueOnce(new Error('D1 unavailable'));
-    await expect(processor.drainDueDeliveries()).rejects.toThrow('D1 unavailable');
-    await expect(ledger.getDelivery('recovery')).resolves.toMatchObject({ status: 'processing' });
-    vi.setSystemTime(Date.now() + 1001);
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      if (fault === 'lost reply') await batch(statements);
+      throw new Error('D1 unavailable');
+    });
     await processor.drainDueDeliveries();
+    vi.setSystemTime(Date.now() + 1001);
+    await processor.drainDueDeliveries({ runMaintenance: true });
     await expect(ledger.getDelivery('recovery')).resolves.toMatchObject({
       status: 'succeeded',
-      processingAttempts: 2,
+      processingAttempts: 1,
+      providerAttemptCount: 1,
     });
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('lists newest deliveries deterministically with per-delivery counts and multiple status filters', async () => {

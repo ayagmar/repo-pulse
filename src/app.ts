@@ -23,6 +23,7 @@ import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
 import { GitHubAppAuth, READ_TOKEN } from './providers/github/app-auth.js';
 import { GitHubInsights } from './providers/github/github-insights.js';
+import { recoverWebhooks } from './providers/github/webhook-recovery.js';
 
 function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime'] {
   const config = createConfig(env);
@@ -92,11 +93,17 @@ export function createApp(): Hono<HttpEnv> {
 export async function drainDueDeliveries(
   env: HttpEnv['Bindings'],
   options: {
-    pruneSucceededDeliveries?: boolean;
+    runMaintenance?: boolean;
+    batchLimit?: number;
   } = {}
 ): Promise<void> {
   const runtime = buildRuntime(env);
   await runtime.eventProcessor.drainDueDeliveries(options);
+}
+
+export async function recoverGitHubWebhooks(env: HttpEnv['Bindings']): Promise<void> {
+  const { config, eventProcessor } = buildRuntime(env);
+  if (eventProcessor.hasHandlers()) await recoverWebhooks(env.DB, config.github.app);
 }
 
 /**
@@ -121,7 +128,7 @@ function createInsights({ config, redactor }: HttpEnv['Variables']['runtime']): 
 
 export async function sendDueDigests(
   env: HttpEnv['Bindings'],
-  now: Date,
+  now?: Date,
   insights = new InvocationInsights()
 ): Promise<void> {
   const runtime = buildRuntime(env);
@@ -132,7 +139,7 @@ export async function sendDueDigests(
     { ...runtime.config.digest, ignoredLogins: runtime.config.people.ignoredLogins },
     insights.get(runtime)
   );
-  await sender.sendDueDigests(now);
+  await sender.sendDueDigests(() => now ?? new Date(Date.now()));
 }
 
 export async function checkMomentum(

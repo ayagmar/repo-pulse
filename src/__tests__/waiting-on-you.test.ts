@@ -222,7 +222,7 @@ describe('waiting on you', () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })));
     vi.stubGlobal('fetch', fetchMock);
     const database = createTempDatabasePath();
     cleanups.push(database.cleanup);

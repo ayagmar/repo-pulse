@@ -143,7 +143,8 @@ describe('DurableEventProcessor', () => {
     });
   });
 
-  it('completes an interrupted delivery without reposting when every provider already succeeded', async () => {
+  // Legacy code could mark a confirmed send failed if its final status write failed at the attempt limit.
+  it('completes an interrupted last attempt when every provider already succeeded', async () => {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);
 
@@ -159,7 +160,7 @@ describe('DurableEventProcessor', () => {
       sourceEventType: 'star',
       repository: event.repository.fullName,
       event,
-      maxAttempts: 5,
+      maxAttempts: 1,
     });
     // The Worker posted and recorded the attempt, then stopped before marking success.
     await ledger.claimNextPendingDelivery(new Date(), 0);
@@ -170,7 +171,9 @@ describe('DurableEventProcessor', () => {
     const notify = vi.fn();
     const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add(createNotifier(notify));
-    await new DurableEventProcessor(ledger, dispatcher).drainDueDeliveries();
+    await new DurableEventProcessor(ledger, dispatcher).drainDueDeliveries({
+      runMaintenance: true,
+    });
 
     expect(notify).not.toHaveBeenCalled();
     await expect(ledger.getDelivery('delivery-interrupted')).resolves.toMatchObject({
@@ -268,7 +271,7 @@ describe('DurableEventProcessor', () => {
       succeededRetentionDays: 7,
     });
 
-    await processor.drainDueDeliveries({ pruneSucceededDeliveries: true });
+    await processor.drainDueDeliveries({ runMaintenance: true });
 
     await expect(ledger.getDelivery('delivery-old-succeeded')).resolves.toBeNull();
     await expect(ledger.getDelivery('delivery-recent-succeeded')).resolves.not.toBeNull();

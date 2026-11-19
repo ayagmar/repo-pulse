@@ -31,15 +31,16 @@ interface QueryCounter {
 
 /**
  * Counts every D1 query and batch, as Workers counts them against the limit. A query
- * containing `failing.query` rejects after being counted, and so does the first batch
- * with a statement containing `failing.batch`.
+ * containing `failing.query` rejects after being counted, as do the first two batches
+ * with a statement containing `failing.batch` (the write and its retry).
  */
 function countQueries(
   db: D1DatabaseLike,
-  failing: { query?: string; batch?: string } = {}
+  failing: { query?: string; batch?: string; sentMarkers?: boolean; staleRadar?: boolean } = {}
 ): QueryCounter {
   let queries = 0;
-  let batchFailed = false;
+  let batchesFailed = 0;
+  let markersFailed = 0;
   const sql: string[] = [];
   const inner = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
   const texts = new WeakMap<D1PreparedStatementLike, string>();
@@ -54,14 +55,37 @@ function countQueries(
         count();
         return statement.first();
       },
-      all: () => {
+      all: async <Row>() => {
         count();
-        return failing.query !== undefined && text.includes(failing.query)
-          ? Promise.reject(new Error('D1 unavailable'))
-          : statement.all();
+        if (failing.query !== undefined && text.includes(failing.query))
+          throw new Error('D1 unavailable');
+        const results = await statement.all<Row>();
+        if (failing.staleRadar === true && text.includes('LEFT JOIN radar_alerts')) {
+          // Other invocations win the claims after our snapshot. Their calls do not
+          // count toward this invocation's budget.
+          expect(results.results.length).toBeGreaterThan(5);
+          await db
+            .prepare(`INSERT INTO radar_alerts (alert_id, claimed_at)
+            SELECT 'stars:' || value, ? FROM json_each(?)`)
+            .bind(
+              new Date().toISOString(),
+              JSON.stringify(
+                (results.results as { repository: string }[]).map(({ repository }) => repository)
+              )
+            )
+            .run();
+        }
+        return results;
       },
       run: () => {
         count();
+        if (
+          failing.sentMarkers === true &&
+          text.includes('UPDATE digest_sends') &&
+          markersFailed++ % 2 === 0
+        ) {
+          return Promise.reject(new Error('D1 unavailable'));
+        }
         return statement.run();
       },
     };
@@ -76,11 +100,11 @@ function countQueries(
       const batchSql = statements.map((statement) => texts.get(statement) ?? '');
       sql.push(...batchSql);
       if (
-        !batchFailed &&
+        batchesFailed < 2 &&
         failing.batch !== undefined &&
         batchSql.some((text) => text.includes(failing.batch ?? ''))
       ) {
-        batchFailed = true;
+        batchesFailed += 1;
         return Promise.reject(new Error('D1 unavailable'));
       }
       return db.batch(statements.map((statement) => inner.get(statement) ?? statement));
@@ -258,6 +282,8 @@ describe('one scheduled invocation', () => {
   interface RunResult {
     subrequests: number;
     tokenRequests: number;
+    recoveryRequests: number;
+    radarClaims: number;
     githubRequests: number;
     discordPosts: number;
     digestFields: string[][];
@@ -276,7 +302,7 @@ describe('one scheduled invocation', () => {
    * acceptance, a daily and a weekly digest
    * (which read the week's threads and when each of the week's stargazers was first
    * seen), a star alert, and no cached App token. `discordFailure` makes Discord answer
-   * 503 to the comment and review alerts; `outcomeWriteFailure` makes D1 fail to record
+   * 500 to the comment and review alerts; `outcomeWriteFailure` makes D1 fail to record
    * the first provider attempt. `rerunAt` runs the cron again at each of those times.
    */
   async function runWorstCase(
@@ -285,6 +311,9 @@ describe('one scheduled invocation', () => {
       failThreadRead?: boolean;
       discordFailure?: boolean;
       outcomeWriteFailure?: boolean;
+      staleRadar?: boolean;
+      recoverWebhooks?: boolean;
+      firstAt?: string;
       rerunAt?: string[];
     } = {}
   ): Promise<RunResult & { reruns: RunResult[] }> {
@@ -365,17 +394,51 @@ describe('one scheduled invocation', () => {
       });
     }
 
+    if (options.staleRadar === true) {
+      for (let index = 0; index < 30; index += 1) {
+        const name = `other-${String(Math.floor(index / 5))}`;
+        const source = star(`outside-${String(index)}`, 500 + index);
+        await ledger.persistAcceptedDelivery({
+          deliveryId: `other-${String(index)}`,
+          sourceEventType: 'star',
+          repository: `myorg/${name}`,
+          event: {
+            ...source,
+            alert: false,
+            repository: { ...source.repository, name, fullName: `myorg/${name}` },
+          },
+          maxAttempts: 5,
+        });
+      }
+    }
+
     const isConversationAlert = (init: RequestInit): boolean =>
       /"title":"(💬|🛑)/.test(init.body as string);
-    const fetchMock = vi.fn((url: string, init: RequestInit) =>
-      Promise.resolve(
+    const fetchMock = vi.fn((url: string, init: RequestInit) => {
+      if (url.startsWith('https://api.github.com/app/hook/deliveries')) {
+        return Promise.resolve(
+          init.method === 'GET'
+            ? Response.json(
+                Array.from({ length: 6 }, (_, i) => ({
+                  id: i + 1,
+                  guid: `missing-${String(i)}`,
+                  delivered_at: '2026-10-26T08:55:00Z',
+                  redelivery: false,
+                  status: 'failed',
+                  status_code: 500,
+                }))
+              )
+            : new Response(null, { status: 202 })
+        );
+      }
+      return Promise.resolve(
         url.startsWith('https://api.github.com/')
           ? fakeGitHub(url, init, options.failMint === true)
           : options.discordFailure === true && isConversationAlert(init)
-            ? new Response(null, { status: 503 })
-            : new Response(null, { status: 204 })
-      )
-    );
+            ? new Response(null, { status: 429 })
+            : Response.json({ id: '123' })
+      );
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const run = async (
@@ -437,16 +500,26 @@ describe('one scheduled invocation', () => {
         deliveries: deliveries.results,
         subrequests: counted.queries() + urls.length,
         tokenRequests: urls.filter((url) => url.endsWith('/access_tokens')).length,
+        recoveryRequests: urls.filter((url) => url.endsWith('/attempts')).length,
+        radarClaims: counted.sql.filter((text) => text.includes('INSERT INTO radar_alerts')).length,
         githubRequests: urls.filter((url) => url.startsWith('https://api.github.com/')).length,
         discordPosts: urls.filter((url) => url.startsWith('https://discord.com/')).length,
       };
     };
 
     // Monday 26 October 2026, 09:05 UTC.
-    const first = await run('2026-10-26T09:05:00Z', {
-      ...(options.failThreadRead === true ? { query: 'feature_activations' } : {}),
-      ...(options.outcomeWriteFailure === true ? { batch: 'INSERT INTO provider_attempts' } : {}),
-    });
+    const first = await run(
+      options.firstAt ??
+        (options.recoverWebhooks === true ? '2026-10-26T09:00:00Z' : '2026-10-26T09:05:00Z'),
+      {
+        ...(options.recoverWebhooks === true || options.staleRadar === true
+          ? { sentMarkers: true }
+          : {}),
+        ...(options.staleRadar === true ? { staleRadar: true } : {}),
+        ...(options.failThreadRead === true ? { query: 'feature_activations' } : {}),
+        ...(options.outcomeWriteFailure === true ? { batch: 'INSERT INTO provider_attempts' } : {}),
+      }
+    );
     const reruns: RunResult[] = [];
     for (const at of options.rerunAt ?? []) {
       reruns.push(await run(at, {}));
@@ -473,6 +546,50 @@ describe('one scheduled invocation', () => {
       ['⏳ Waiting on you', '🚢 Not released yet'],
       ['⏳ Waiting on you', '⏱️ Response times', "👥 Who's showing up"],
     ]);
+    expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
+  });
+
+  // Adding recovery to a busy Monday without a separate slot and drain cap can exhaust Workers' budget.
+  it('drains four deliveries, posts both digests and requests five redeliveries within 50 subrequests', async () => {
+    const run = await runWorstCase({ recoverWebhooks: true });
+    expect(run).toMatchObject({
+      tokenRequests: 1,
+      recoveryRequests: 5,
+      githubRequests: 9,
+      discordPosts: 6,
+      sentDigests: ['daily:2026-10-26', 'weekly:2026-10-26'],
+      rejectedTasks: 0,
+    });
+    expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
+  });
+
+  // Catch-ups must not spend extra D1 round trips deciding whether to wait, even at the cutoff.
+  it.each([
+    ['2026-10-26T09:20:00Z', 4, []],
+    ['2026-10-26T23:00:00Z', 6, ['daily:2026-10-26', 'weekly:2026-10-26']],
+  ] as const)(
+    'keeps Monday recovery and catch-up within 50 requests at %s',
+    async (firstAt, discordPosts, sentDigests) => {
+      const run = await runWorstCase({ recoverWebhooks: true, firstAt });
+      expect(run).toMatchObject({
+        discordPosts,
+        sentDigests,
+        recoveryRequests: 5,
+        rejectedTasks: 0,
+      });
+      expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
+    }
+  );
+
+  // Overlapping checks could spend a D1 request on every candidate in a stale snapshot.
+  it('counts one lost radar claim on a busy Monday, without trying the rest', async () => {
+    const run = await runWorstCase({ staleRadar: true });
+    expect(run).toMatchObject({
+      radarClaims: 1,
+      discordPosts: 7,
+      sentDigests: ['daily:2026-10-26', 'weekly:2026-10-26'],
+      rejectedTasks: 0,
+    });
     expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
   });
 

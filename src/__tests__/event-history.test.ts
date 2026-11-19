@@ -64,7 +64,10 @@ describe('event history', () => {
   const cleanups: (() => void)[] = [];
 
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })))
+    );
   });
 
   afterEach(() => {
@@ -130,7 +133,7 @@ describe('event history', () => {
     await third.waitForBackground();
 
     vi.setSystemTime(new Date('2026-10-20T00:00:00.000Z'));
-    await drainDueDeliveries(env, { pruneSucceededDeliveries: true });
+    await drainDueDeliveries(env, { runMaintenance: true });
 
     const deliveries = await app.fetch(
       adminGet('/deliveries'),

@@ -132,6 +132,7 @@ export class NotificationDispatcher {
         provider: entry.notifier.name,
         error,
         failureClassification: FAILURE_CLASSIFICATIONS.PERMANENT,
+        acceptanceUnknown: true,
       };
     });
   }

@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { APP_ERROR_CODES, AppError } from '../../core/errors/app-error.js';
 import { logger } from '../../core/services/logger.js';
 import { EventMappingError, mapGitHubEvent } from '../../providers/github/event-mapper.js';
+import { optionalTimestamp } from '../../providers/github/mappers/validation.js';
+import { originalWebhookTime } from '../../providers/github/webhook-recovery.js';
 import {
   checkGitHubWebhookHeaders,
   extractGitHubRepositoryFullName,
@@ -176,6 +178,19 @@ export function createWebhookRoutes(): Hono<HttpEnv> {
           'No notification providers configured'
         )
       );
+    }
+
+    // GitHub reuses the delivery GUID and sends no redelivery header. The recovery
+    // reservation is made before asking GitHub to send this GUID again.
+    const originalAt = await originalWebhookTime(c.env.DB, inbound.deliveryId);
+    if (originalAt !== null) {
+      const occurredAt =
+        event.occurredAt ??
+        optionalTimestamp(
+          inbound.payload.release?.published_at ?? inbound.payload.forkee?.created_at
+        );
+      event.activityAt =
+        occurredAt !== undefined && occurredAt <= originalAt ? occurredAt : originalAt;
     }
 
     const enqueueResult = await eventProcessor.enqueue(event, {
