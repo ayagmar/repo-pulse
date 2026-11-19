@@ -36,7 +36,7 @@ interface QueryCounter {
  */
 function countQueries(
   db: D1DatabaseLike,
-  failing: { query?: string; batch?: string; sentMarkers?: boolean } = {}
+  failing: { query?: string; batch?: string; sentMarkers?: boolean; staleRadar?: boolean } = {}
 ): QueryCounter {
   let queries = 0;
   let batchesFailed = 0;
@@ -55,11 +55,27 @@ function countQueries(
         count();
         return statement.first();
       },
-      all: () => {
+      all: async <Row>() => {
         count();
-        return failing.query !== undefined && text.includes(failing.query)
-          ? Promise.reject(new Error('D1 unavailable'))
-          : statement.all();
+        if (failing.query !== undefined && text.includes(failing.query))
+          throw new Error('D1 unavailable');
+        const results = await statement.all<Row>();
+        if (failing.staleRadar === true && text.includes('LEFT JOIN radar_alerts')) {
+          // Other invocations win the claims after our snapshot. Their calls do not
+          // count toward this invocation's budget.
+          expect(results.results.length).toBeGreaterThan(5);
+          await db
+            .prepare(`INSERT INTO radar_alerts (alert_id, claimed_at)
+            SELECT 'stars:' || value, ? FROM json_each(?)`)
+            .bind(
+              new Date().toISOString(),
+              JSON.stringify(
+                (results.results as { repository: string }[]).map(({ repository }) => repository)
+              )
+            )
+            .run();
+        }
+        return results;
       },
       run: () => {
         count();
@@ -267,6 +283,7 @@ describe('one scheduled invocation', () => {
     subrequests: number;
     tokenRequests: number;
     recoveryRequests: number;
+    radarClaims: number;
     githubRequests: number;
     discordPosts: number;
     digestFields: string[][];
@@ -294,6 +311,7 @@ describe('one scheduled invocation', () => {
       failThreadRead?: boolean;
       discordFailure?: boolean;
       outcomeWriteFailure?: boolean;
+      staleRadar?: boolean;
       recoverWebhooks?: boolean;
       firstAt?: string;
       rerunAt?: string[];
@@ -374,6 +392,24 @@ describe('one scheduled invocation', () => {
         repository: 'myorg/cli',
         sourceEventType: 'star',
       });
+    }
+
+    if (options.staleRadar === true) {
+      for (let index = 0; index < 30; index += 1) {
+        const name = `other-${String(Math.floor(index / 5))}`;
+        const source = star(`outside-${String(index)}`, 500 + index);
+        await ledger.persistAcceptedDelivery({
+          deliveryId: `other-${String(index)}`,
+          sourceEventType: 'star',
+          repository: `myorg/${name}`,
+          event: {
+            ...source,
+            alert: false,
+            repository: { ...source.repository, name, fullName: `myorg/${name}` },
+          },
+          maxAttempts: 5,
+        });
+      }
     }
 
     const isConversationAlert = (init: RequestInit): boolean =>
@@ -465,6 +501,7 @@ describe('one scheduled invocation', () => {
         subrequests: counted.queries() + urls.length,
         tokenRequests: urls.filter((url) => url.endsWith('/access_tokens')).length,
         recoveryRequests: urls.filter((url) => url.endsWith('/attempts')).length,
+        radarClaims: counted.sql.filter((text) => text.includes('INSERT INTO radar_alerts')).length,
         githubRequests: urls.filter((url) => url.startsWith('https://api.github.com/')).length,
         discordPosts: urls.filter((url) => url.startsWith('https://discord.com/')).length,
       };
@@ -475,7 +512,10 @@ describe('one scheduled invocation', () => {
       options.firstAt ??
         (options.recoverWebhooks === true ? '2026-10-26T09:00:00Z' : '2026-10-26T09:05:00Z'),
       {
-        ...(options.recoverWebhooks === true ? { sentMarkers: true } : {}),
+        ...(options.recoverWebhooks === true || options.staleRadar === true
+          ? { sentMarkers: true }
+          : {}),
+        ...(options.staleRadar === true ? { staleRadar: true } : {}),
         ...(options.failThreadRead === true ? { query: 'feature_activations' } : {}),
         ...(options.outcomeWriteFailure === true ? { batch: 'INSERT INTO provider_attempts' } : {}),
       }
@@ -540,6 +580,18 @@ describe('one scheduled invocation', () => {
       expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
     }
   );
+
+  // Overlapping checks could spend a D1 request on every candidate in a stale snapshot.
+  it('counts one lost radar claim on a busy Monday, without trying the rest', async () => {
+    const run = await runWorstCase({ staleRadar: true });
+    expect(run).toMatchObject({
+      radarClaims: 1,
+      discordPosts: 7,
+      sentDigests: ['daily:2026-10-26', 'weekly:2026-10-26'],
+      rejectedTasks: 0,
+    });
+    expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
+  });
 
   it('stays within 50 subrequests and still posts both digests when threads cannot be read', async () => {
     const run = await runWorstCase({ failThreadRead: true });

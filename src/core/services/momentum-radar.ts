@@ -111,13 +111,16 @@ export class MomentumRadar {
       limits: ALERT_LIMITS,
     });
 
-    for (const spike of findStarSpikes(counts)) {
+    // Try only the strongest candidate. If another run wins its claim, a new check
+    // will consider the remaining candidates without an unbounded series of writes.
+    const [spike] = findStarSpikes(counts);
+    if (spike !== undefined) {
       const alertId = `${ALERT_PREFIX}${spike.repository}`;
       // Claim with the current time, not the cron's scheduled time, so a late check
       // does not shorten its own lease.
       const claimedAt = await this.radarLog.claim(alertId, new Date(), ALERT_LIMITS);
       if (claimedAt === null) {
-        continue;
+        return;
       }
 
       let alert: MomentumAlert;
@@ -149,9 +152,7 @@ export class MomentumRadar {
         expectedStars: spike.expectedStars,
         sent,
       });
-      // One alert per check keeps the run within the Workers Free plan's 50
-      // subrequests. Other spikes are sent by the next checks.
-      return;
+      // Other spikes are eligible at the next check.
     }
   }
 
