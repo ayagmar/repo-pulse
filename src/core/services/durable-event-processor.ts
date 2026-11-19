@@ -36,6 +36,7 @@ interface PeopleOptions {
 
 interface DrainDueDeliveriesOptions {
   pruneSucceededDeliveries?: boolean;
+  batchLimit?: number;
 }
 
 function summarizeFailures(failures: readonly NotificationFailureResult[]): string {
@@ -127,7 +128,9 @@ export class DurableEventProcessor {
       alert &&
       isOutsidePerson(event.sender, event.repository.owner, ignoredLogins);
     const starMilestone =
-      event.type === REPO_EVENT_TYPES.STAR_CREATED || event.type === REPO_EVENT_TYPES.STAR_DELETED;
+      event.activityAt === undefined &&
+      (event.type === REPO_EVENT_TYPES.STAR_CREATED ||
+        event.type === REPO_EVENT_TYPES.STAR_DELETED);
     if (!(senderHistory || starMilestone)) {
       return this.ledger.persistAcceptedDelivery(input);
     }
@@ -175,7 +178,8 @@ export class DurableEventProcessor {
       await this.pruneSucceededDeliveries();
     }
 
-    for (let index = 0; index < this.drainBatchSize; index += 1) {
+    const batchSize = Math.min(this.drainBatchSize, options.batchLimit ?? this.drainBatchSize);
+    for (let index = 0; index < batchSize; index += 1) {
       const delivery = await this.ledger.claimNextPendingDelivery(
         new Date(),
         this.processingLeaseMs

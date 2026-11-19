@@ -542,9 +542,11 @@ describe('Workers runtime integration', () => {
     // wrangler.jsonc sets the digest to 09:00 Africa/Casablanca, which is UTC+0 since
     // 20 September 2026.
     const context = createExecutionContext();
+    const scheduledTime = new Date('2026-10-15T09:00:00.000Z');
+    vi.spyOn(Date, 'now').mockReturnValue(scheduledTime.getTime());
     worker.scheduled(
       createScheduledController({
-        scheduledTime: new Date('2026-10-15T09:00:00.000Z'),
+        scheduledTime,
         cron: '* * * * *',
       }),
       { ...env, DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/0/test-only' } as typeof env,

@@ -3,8 +3,10 @@ import {
   createApp,
   drainDueDeliveries,
   InvocationInsights,
+  recoverGitHubWebhooks,
   sendDueDigests,
 } from './app.js';
+import { isWebhookRecoveryDue } from './providers/github/webhook-recovery.js';
 
 const app = createApp();
 
@@ -13,11 +15,21 @@ const worker = {
     return app.fetch(request, env, executionCtx);
   },
   scheduled(controller: ScheduledController, env: Env, executionCtx: ExecutionContext): void {
-    executionCtx.waitUntil(drainDueDeliveries(env, { pruneSucceededDeliveries: true }));
     const now = new Date(controller.scheduledTime);
+    const recovering = isWebhookRecoveryDue(now);
+    executionCtx.waitUntil(
+      drainDueDeliveries(env, {
+        pruneSucceededDeliveries: true,
+        batchLimit: recovering ? 4 : 5,
+      })
+    );
+    if (recovering) executionCtx.waitUntil(recoverGitHubWebhooks(env));
     // Digest and radar share one GitHub token acquisition.
     const insights = new InvocationInsights();
-    executionCtx.waitUntil(sendDueDigests(env, now, insights));
+    // A delayed invocation must not start yesterday's digest after local midnight.
+    executionCtx.waitUntil(
+      sendDueDigests(env, new Date(Math.max(now.getTime(), Date.now())), insights)
+    );
     executionCtx.waitUntil(checkMomentum(env, now, insights));
   },
 } satisfies ExportedHandler<Env>;

@@ -23,6 +23,7 @@ import { createWebhookRoutes } from './http/routes/webhook.js';
 import { createDiscordNotifier } from './providers/discord/discord-notifier.js';
 import { GitHubAppAuth, READ_TOKEN } from './providers/github/app-auth.js';
 import { GitHubInsights } from './providers/github/github-insights.js';
+import { recoverWebhooks } from './providers/github/webhook-recovery.js';
 
 function buildRuntime(env: HttpEnv['Bindings']): HttpEnv['Variables']['runtime'] {
   const config = createConfig(env);
@@ -93,10 +94,16 @@ export async function drainDueDeliveries(
   env: HttpEnv['Bindings'],
   options: {
     pruneSucceededDeliveries?: boolean;
+    batchLimit?: number;
   } = {}
 ): Promise<void> {
   const runtime = buildRuntime(env);
   await runtime.eventProcessor.drainDueDeliveries(options);
+}
+
+export async function recoverGitHubWebhooks(env: HttpEnv['Bindings']): Promise<void> {
+  const { config, eventProcessor } = buildRuntime(env);
+  if (eventProcessor.hasHandlers()) await recoverWebhooks(env.DB, config.github.app);
 }
 
 /**

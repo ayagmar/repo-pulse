@@ -25,7 +25,7 @@ Repo Pulse has one runtime path and one package-manager path:
 - Dedupe by the permanent history: a GitHub delivery ID already recorded in `events` does not enqueue new work, before or after its delivery row is pruned.
 - Keep the route thin: it talks directly to `DurableEventProcessor`.
 - Reuse Hono routes and matchers across requests. Build configuration and binding-dependent services per request so binding-only deployments do not retain stale secrets or database clients.
-- Keep background work recoverable: `waitUntil()` starts immediate processing; cron recovers expired leases and retries from D1.
+- Keep background work recoverable: `waitUntil()` starts immediate processing; cron recovers expired leases and retries from D1. A separate cron step probes D1 and scans the GitHub App's delivery list with an App JWT. It reserves lost GUIDs before requesting redelivery, and indexes recovered events by their original activity time.
 - Fence delivery outcomes by processing attempt: a stale processor cannot overwrite a newer claim. Admin retries atomically transition only failed rows.
 - Write provider attempts and the delivery outcome atomically. Retry a failed outcome write once without sending again. Expired leases count toward the retry budget unless D1 already has success on record for every configured provider.
 - Retry per provider: a retry resends only to the providers that have not accepted the delivery, so one failing provider does not repeat posts on the others.

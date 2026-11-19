@@ -90,6 +90,7 @@ interface GitHubReview {
 }
 
 export interface GitHubFork {
+  created_at?: string;
   full_name: string;
   html_url: string;
   default_branch: string;
@@ -107,6 +108,7 @@ export interface GitHubCommit {
 }
 
 export interface GitHubRelease {
+  published_at?: string | null;
   tag_name: string;
   name: string | null;
   html_url: string;

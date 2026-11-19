@@ -264,6 +264,8 @@ interface BaseRepoEvent<TType extends RepoEventType, TAction extends string> {
   sender: User;
   /** When the event was accepted: receipt time, not GitHub's. */
   timestamp: Date;
+  /** Activity time for a recovered webhook: payload action time or original GitHub attempt. */
+  activityAt?: string;
   /**
    * When it happened on GitHub, ISO 8601, for star, issue, pull request, comment and
    * review events whose payload has a valid time for it. Absent on events stored before it was

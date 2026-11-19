@@ -36,10 +36,11 @@ interface QueryCounter {
  */
 function countQueries(
   db: D1DatabaseLike,
-  failing: { query?: string; batch?: string } = {}
+  failing: { query?: string; batch?: string; sentMarkers?: boolean } = {}
 ): QueryCounter {
   let queries = 0;
   let batchesFailed = 0;
+  let markersFailed = 0;
   const sql: string[] = [];
   const inner = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
   const texts = new WeakMap<D1PreparedStatementLike, string>();
@@ -62,6 +63,13 @@ function countQueries(
       },
       run: () => {
         count();
+        if (
+          failing.sentMarkers === true &&
+          text.includes('UPDATE digest_sends') &&
+          markersFailed++ % 2 === 0
+        ) {
+          return Promise.reject(new Error('D1 unavailable'));
+        }
         return statement.run();
       },
     };
@@ -258,6 +266,7 @@ describe('one scheduled invocation', () => {
   interface RunResult {
     subrequests: number;
     tokenRequests: number;
+    recoveryRequests: number;
     githubRequests: number;
     discordPosts: number;
     digestFields: string[][];
@@ -285,6 +294,7 @@ describe('one scheduled invocation', () => {
       failThreadRead?: boolean;
       discordFailure?: boolean;
       outcomeWriteFailure?: boolean;
+      recoverWebhooks?: boolean;
       rerunAt?: string[];
     } = {}
   ): Promise<RunResult & { reruns: RunResult[] }> {
@@ -367,15 +377,31 @@ describe('one scheduled invocation', () => {
 
     const isConversationAlert = (init: RequestInit): boolean =>
       /"title":"(💬|🛑)/.test(init.body as string);
-    const fetchMock = vi.fn((url: string, init: RequestInit) =>
-      Promise.resolve(
+    const fetchMock = vi.fn((url: string, init: RequestInit) => {
+      if (url.startsWith('https://api.github.com/app/hook/deliveries')) {
+        return Promise.resolve(
+          init.method === 'GET'
+            ? Response.json(
+                Array.from({ length: 6 }, (_, i) => ({
+                  id: i + 1,
+                  guid: `missing-${String(i)}`,
+                  delivered_at: '2026-10-26T08:55:00Z',
+                  redelivery: false,
+                  status: 'failed',
+                  status_code: 500,
+                }))
+              )
+            : new Response(null, { status: 202 })
+        );
+      }
+      return Promise.resolve(
         url.startsWith('https://api.github.com/')
           ? fakeGitHub(url, init, options.failMint === true)
           : options.discordFailure === true && isConversationAlert(init)
             ? new Response(null, { status: 503 })
             : new Response(null, { status: 204 })
-      )
-    );
+      );
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const run = async (
@@ -437,16 +463,21 @@ describe('one scheduled invocation', () => {
         deliveries: deliveries.results,
         subrequests: counted.queries() + urls.length,
         tokenRequests: urls.filter((url) => url.endsWith('/access_tokens')).length,
+        recoveryRequests: urls.filter((url) => url.endsWith('/attempts')).length,
         githubRequests: urls.filter((url) => url.startsWith('https://api.github.com/')).length,
         discordPosts: urls.filter((url) => url.startsWith('https://discord.com/')).length,
       };
     };
 
     // Monday 26 October 2026, 09:05 UTC.
-    const first = await run('2026-10-26T09:05:00Z', {
-      ...(options.failThreadRead === true ? { query: 'feature_activations' } : {}),
-      ...(options.outcomeWriteFailure === true ? { batch: 'INSERT INTO provider_attempts' } : {}),
-    });
+    const first = await run(
+      options.recoverWebhooks === true ? '2026-10-26T09:00:00Z' : '2026-10-26T09:05:00Z',
+      {
+        ...(options.recoverWebhooks === true ? { sentMarkers: true } : {}),
+        ...(options.failThreadRead === true ? { query: 'feature_activations' } : {}),
+        ...(options.outcomeWriteFailure === true ? { batch: 'INSERT INTO provider_attempts' } : {}),
+      }
+    );
     const reruns: RunResult[] = [];
     for (const at of options.rerunAt ?? []) {
       reruns.push(await run(at, {}));
@@ -473,6 +504,20 @@ describe('one scheduled invocation', () => {
       ['⏳ Waiting on you', '🚢 Not released yet'],
       ['⏳ Waiting on you', '⏱️ Response times', "👥 Who's showing up"],
     ]);
+    expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
+  });
+
+  // Adding recovery to a busy Monday without a separate slot and drain cap can exhaust Workers' budget.
+  it('drains four deliveries, posts both digests and requests five redeliveries within 50 subrequests', async () => {
+    const run = await runWorstCase({ recoverWebhooks: true });
+    expect(run).toMatchObject({
+      tokenRequests: 1,
+      recoveryRequests: 5,
+      githubRequests: 9,
+      discordPosts: 6,
+      sentDigests: ['daily:2026-10-26', 'weekly:2026-10-26'],
+      rejectedTasks: 0,
+    });
     expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
   });
 

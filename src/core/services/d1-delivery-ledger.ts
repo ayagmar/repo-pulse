@@ -227,7 +227,7 @@ export class D1DeliveryLedger {
           deliveryId: input.deliveryId,
           repository: input.repository,
           event,
-          receivedAt: acceptedAt,
+          receivedAt: event.activityAt ?? acceptedAt,
           ...(input.rememberSenderId !== undefined
             ? { rememberSenderId: input.rememberSenderId }
             : {}),

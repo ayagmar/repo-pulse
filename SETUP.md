@@ -89,7 +89,7 @@ settings to reach production.
 
 Repo Pulse receives events only from a GitHub App. One App, installed on all your
 repositories, covers new ones without setup, and its short-lived installation token
-reads what digests and alerts add.
+reads what digests and alerts add. The same App key lets cron request redelivery of missing webhooks after a D1 outage. This uses an App JWT and needs no extra permission or secret; apply migration `0013` before deploying the recovery code.
 
 1. Open **Settings → Developer settings → GitHub Apps → New GitHub App**.
    - Webhook URL: `https://<your-worker>.workers.dev/webhook`
@@ -238,7 +238,7 @@ URL directly in a browser without an authentication header will return `401`.
 - **Webhook 401:** check the shared secret and exact request-body signature.
 - **Webhook 400:** check required headers and supported event payload fields.
 - **No notification providers:** configure a valid Discord webhook URL.
-- **No retries:** check the every-minute cron trigger and delivery statuses.
+- **No retries:** check the every-minute cron trigger and delivery statuses. For webhooks that never reached D1, see [Recovering failed webhook deliveries](docs/operations.md#recovering-failed-webhook-deliveries).
 - **Repeated sends after interruption:** provider sends are at-least-once; see
   [architecture guarantees](ARCHITECTURE.md).
 

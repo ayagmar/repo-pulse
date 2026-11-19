@@ -110,6 +110,7 @@ GitHub webhook -> verify signature -> map RepoEvent -> persist in D1 -> return 2
 - deduplicates using the GitHub delivery ID
 - dispatches Discord notifications asynchronously with `waitUntil()`
 - recovers retries and stale processing via cron-backed drains
+- asks GitHub to redeliver missing App webhooks from the last three days once D1 can write again; recovered events keep their original activity time
 
 ## Supported events
 

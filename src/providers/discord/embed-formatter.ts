@@ -202,7 +202,7 @@ function createEmbed(
         ...embed,
         ...(description !== undefined ? { description } : {}),
         title: truncate(embed.title, TITLE_LIMIT),
-        timestamp: event.timestamp.toISOString(),
+        timestamp: event.activityAt ?? event.timestamp.toISOString(),
         ...(options.footer !== undefined
           ? { footer: { text: truncate(options.footer, TITLE_LIMIT) } }
           : {}),
