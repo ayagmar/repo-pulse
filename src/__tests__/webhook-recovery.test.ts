@@ -114,7 +114,7 @@ describe('scheduled webhook recovery', () => {
 
   // A day of write refusal lost unaccepted deliveries. A naive sweep either asked for them while
   // D1 was down or replayed pruned, leased, acknowledged and already re-requested GUIDs.
-  it('waits for writes, walks pages across invocations, and makes one request per missing GUID', async () => {
+  it('waits for writes, walks pages across invocations, and does not immediately retry a GUID', async () => {
     vi.setSystemTime(Date.parse('2026-11-18T22:00:00Z'));
     const posts: string[] = [];
     const lists: (string | null)[] = [];
@@ -128,7 +128,7 @@ describe('scheduled webhook recovery', () => {
       );
       if (init.method === 'POST') {
         posts.push(url.pathname);
-        // An ambiguous timeout must not cause a second request for the same original.
+        // An ambiguous timeout must not cause a second request before the wait has elapsed.
         if (url.pathname.endsWith('/6/attempts'))
           return Promise.reject(new DOMException('timeout', 'TimeoutError'));
         return Promise.resolve(new Response(null, { status: 202 }));
@@ -189,8 +189,8 @@ describe('scheduled webhook recovery', () => {
     expect(posts).toEqual(['/app/hook/deliveries/6/attempts', '/app/hook/deliveries/8/attempts']);
   });
 
-  // A rejected request must not spend the only replay or ignore a Retry-After across cron runs.
-  it('resumes after an explicit GitHub rate limit and handles an empty page', async () => {
+  // GitHub's header-bearing throttle must stop requests across runs, without losing the delivery.
+  it('honors Retry-After and retries the missing delivery after an hour', async () => {
     let lists = 0;
     let posts = 0;
     vi.stubGlobal(
@@ -199,7 +199,7 @@ describe('scheduled webhook recovery', () => {
         if (!address.startsWith(LIST)) throw new Error('Unexpected external request');
         if (init.method === 'GET') {
           lists += 1;
-          return Promise.resolve(Response.json(lists < 3 ? [delivery(1, 'rate-limited')] : []));
+          return Promise.resolve(Response.json(lists < 4 ? [delivery(1, 'rate-limited')] : []));
         }
         posts += 1;
         return Promise.resolve(
@@ -213,8 +213,117 @@ describe('scheduled webhook recovery', () => {
     await cron('2026-11-20T00:10:00Z');
     expect([lists, posts]).toEqual([1, 1]);
     await cron('2026-11-20T00:20:00Z');
-    await cron('2026-11-20T00:30:00Z');
-    expect([lists, posts]).toEqual([3, 2]);
+    expect([lists, posts]).toEqual([2, 1]);
+    await cron('2026-11-20T01:00:00Z');
+    await cron('2026-11-20T01:10:00Z');
+    expect([lists, posts]).toEqual([4, 2]);
+  });
+
+  // A lost reservation reply or a 202 followed by a failed callback used to lose the event permanently.
+  it('retries unresolved reservations at most three times, preserving the first activity time', async () => {
+    let postCount = 0;
+    let listCount = 0;
+    const timeout = new DOMException('timeout', 'TimeoutError');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((address: string, init: RequestInit) => {
+        if (address.startsWith('https://discord.com/'))
+          return Promise.resolve(new Response(null, { status: 204 }));
+        if (init.method === 'GET' && address.startsWith(LIST)) {
+          listCount += 1;
+          return Promise.resolve(
+            Response.json([
+              delivery(
+                1,
+                'lost-reply',
+                listCount > 1 ? { delivered_at: '2026-11-19T13:00:00Z' } : {}
+              ),
+              delivery(2, 'lost-reply', { redelivery: true, delivered_at: '2026-11-20T01:01:00Z' }),
+            ])
+          );
+        }
+        if (!address.endsWith('/1/attempts')) throw new Error('Unexpected external request');
+        postCount += 1;
+        return postCount === 1
+          ? Promise.resolve(new Response(null, { status: 202 }))
+          : Promise.reject(timeout);
+      })
+    );
+    const prepare = env.DB.prepare.bind(env.DB);
+    const lostReply = vi.spyOn(env.DB, 'prepare').mockImplementation((query) => {
+      const statement = prepare(query);
+      if (query.includes('request_count = webhook_recovery_attempts.request_count + 1')) {
+        const bind = statement.bind.bind(statement);
+        vi.spyOn(statement, 'bind').mockImplementation((...values) => {
+          const bound = bind(...values);
+          const first = bound.first.bind(bound);
+          vi.spyOn(bound, 'first').mockImplementation(async () => {
+            await first();
+            throw timeout;
+          });
+          return bound;
+        });
+      }
+      return statement;
+    });
+    await cron('2026-11-20T00:00:00Z');
+    expect(postCount).toBe(0);
+    lostReply.mockRestore();
+    await cron('2026-11-20T00:50:00Z');
+    expect(postCount).toBe(0);
+    await cron('2026-11-20T01:00:00Z');
+    expect(postCount).toBe(1);
+    const failedCallback = vi
+      .spyOn(env.DB, 'batch')
+      .mockRejectedValue(new Error('D1 now refuses writes'));
+    expect(await webhook('lost-reply', star(100))).toBe(500);
+    failedCallback.mockRestore();
+    await cron('2026-11-20T01:50:00Z');
+    expect(postCount).toBe(1);
+    await cron('2026-11-20T02:00:00Z');
+    await cron('2026-11-20T03:00:00Z');
+    expect(postCount).toBe(2);
+    expect(await webhook('lost-reply', star(100))).toBe(202);
+    expect(await webhook('lost-reply', star(100))).toBe(200);
+    await expect(new D1DeliveryLedger(env.DB).getDelivery('lost-reply')).resolves.toMatchObject({
+      event: { activityAt: '2026-11-19T12:00:00.000Z' },
+    });
+  });
+
+  // A headerless secondary limit on either endpoint must stop the scan rather than spending the batch.
+  it('stops on headerless GitHub throttles and preserves the per-GUID retry interval', async () => {
+    const limited = (): Response =>
+      Response.json(
+        { message: 'You have exceeded a secondary rate limit.' },
+        { status: 403, headers: { 'X-RateLimit-Remaining': '42' } }
+      );
+    const posts: string[] = [];
+    let listCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((address: string, init: RequestInit) => {
+        if (init.method === 'GET') {
+          listCount += 1;
+          return Promise.resolve(
+            listCount === 1
+              ? limited()
+              : Response.json([delivery(1, 'limited'), delivery(2, 'next')])
+          );
+        }
+        posts.push(address);
+        return Promise.resolve(
+          posts.length === 1 ? limited() : new Response(null, { status: 202 })
+        );
+      })
+    );
+    await cron('2026-11-20T00:00:00Z');
+    expect(posts).toEqual([]);
+    await cron('2026-11-20T00:10:00Z');
+    expect(posts).toEqual([`${LIST}/1/attempts`]);
+    await cron('2026-11-20T00:20:00Z');
+    expect(posts).toEqual([`${LIST}/1/attempts`, `${LIST}/2/attempts`]);
+    await cron('2026-11-20T01:10:00Z');
+    expect(posts).toEqual([`${LIST}/1/attempts`, `${LIST}/2/attempts`, `${LIST}/1/attempts`]);
   });
 
   // A burst of old star payloads with high historical counts used to look like a current spike,

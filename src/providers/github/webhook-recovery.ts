@@ -7,6 +7,8 @@ const LIST_URL = 'https://api.github.com/app/hook/deliveries';
 const PAGE_SIZE = 100;
 const MAX_REQUESTS = 5;
 const MINUTE_MS = 60_000;
+const RETRY_INTERVAL_MS = 60 * MINUTE_MS;
+const MAX_ATTEMPTS = 3;
 const RETENTION_MS = 3 * 24 * 60 * MINUTE_MS;
 
 interface DeliveryAttempt {
@@ -64,11 +66,24 @@ function nextCursor(link: string | null): string | null {
   return cursor;
 }
 
-function rateLimitedUntil(response: Response): number | null {
+async function rateLimitedUntil(response: Response): Promise<number | null> {
   const retry = response.headers.get('retry-after');
   const exhausted = response.headers.get('x-ratelimit-remaining') === '0';
-  if (!(response.status === 429 || (response.status === 403 && (retry !== null || exhausted))))
+  if (response.status === 403 && retry === null && !exhausted) {
+    const body: unknown = await response.json().catch(() => null);
+    if (
+      !(
+        typeof body === 'object' &&
+        body !== null &&
+        'message' in body &&
+        typeof body.message === 'string' &&
+        /secondary rate limit/i.test(body.message)
+      )
+    )
+      return null;
+  } else if (response.status !== 429 && response.status !== 403) {
     return null;
+  }
   const now = Date.now();
   const after =
     retry === null ? now : /^\d+$/.test(retry) ? now + Number(retry) * 1000 : Date.parse(retry);
@@ -102,7 +117,7 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
     const now = Date.now();
     const lease = now + 5 * MINUTE_MS;
     const scan = await db
-      .prepare(`INSERT INTO webhook_recovery_scan VALUES (1, NULL, ?)
+      .prepare(`INSERT INTO webhook_recovery_scan (singleton, next_scan_at) VALUES (1, ?)
        ON CONFLICT (singleton) DO UPDATE SET next_scan_at = excluded.next_scan_at
        WHERE webhook_recovery_scan.next_scan_at <= ?
        RETURNING cursor`)
@@ -142,7 +157,7 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         step,
         status: page.status,
       });
-      const limitedUntil = rateLimitedUntil(page);
+      const limitedUntil = await rateLimitedUntil(page);
       // A cursor can expire while D1 is down. A bad request with a cursor restarts the walk.
       if (limitedUntil !== null) {
         await delayScan(limitedUntil).run();
@@ -159,14 +174,12 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
     const body: unknown = await page.json();
     const attempts = parsePage(body, Date.now());
     const next = nextCursor(page.headers.get('link'));
-    const observed = new Set(
-      attempts
-        .filter((attempt) => attempt.redelivery || attempt.succeeded)
-        .map((attempt) => attempt.guid)
+    const succeeded = new Set(
+      attempts.filter((attempt) => attempt.succeeded).map((attempt) => attempt.guid)
     );
     const originals = new Map(
       attempts
-        .filter((attempt) => !observed.has(attempt.guid))
+        .filter((attempt) => !(attempt.redelivery || succeeded.has(attempt.guid)))
         .map((attempt) => [attempt.guid, attempt])
     );
 
@@ -177,11 +190,17 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         : (
             await db
               .prepare(`SELECT guid.value AS guid FROM json_each(?) AS guid
-       WHERE NOT EXISTS (SELECT 1 FROM webhook_recovery_attempts AS a WHERE a.guid = guid.value)
+       WHERE NOT EXISTS (SELECT 1 FROM webhook_recovery_attempts AS a
+         WHERE a.guid = guid.value AND (a.delivered = 1 OR a.request_count >= ? OR a.last_requested_at > ?))
          AND NOT EXISTS (SELECT 1 FROM events WHERE delivery_id = guid.value)
          AND NOT EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = guid.value)
        ORDER BY guid.key LIMIT ?`)
-              .bind(JSON.stringify([...originals.keys()]), MAX_REQUESTS + 1)
+              .bind(
+                JSON.stringify([...originals.keys()]),
+                MAX_ATTEMPTS,
+                Date.now() - RETRY_INTERVAL_MS,
+                MAX_REQUESTS + 1
+              )
               .all<{ guid: string }>()
           ).results;
 
@@ -190,20 +209,30 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
       const original = originals.get(guid);
       if (!original) continue;
       step = 'reserve';
+      const requestedAt = Date.now();
       const reservation = await db
-        .prepare(`INSERT OR IGNORE INTO webhook_recovery_attempts (guid, original_at, expires_at)
-         SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM webhook_recovery_scan WHERE singleton = 1 AND next_scan_at = ?)
+        .prepare(`INSERT INTO webhook_recovery_attempts (guid, original_at, expires_at, request_count, last_requested_at)
+         SELECT ?, ?, ?, 1, ? WHERE EXISTS (SELECT 1 FROM webhook_recovery_scan WHERE singleton = 1 AND next_scan_at = ?)
            AND NOT EXISTS (SELECT 1 FROM events WHERE delivery_id = ?)
            AND NOT EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = ?)
+         ON CONFLICT (guid) DO UPDATE SET
+           request_count = webhook_recovery_attempts.request_count + 1,
+           last_requested_at = excluded.last_requested_at,
+           expires_at = excluded.expires_at
+         WHERE webhook_recovery_attempts.delivered = 0 AND webhook_recovery_attempts.request_count < ?
+           AND webhook_recovery_attempts.last_requested_at <= ?
          RETURNING guid`)
         .bind(
           guid,
           original.originalAt,
           // Keep the time marker even if a callback arrives just after GitHub's retention cutoff.
-          now + RETENTION_MS,
+          requestedAt + RETENTION_MS,
+          requestedAt,
           lease,
           guid,
-          guid
+          guid,
+          MAX_ATTEMPTS,
+          requestedAt - RETRY_INTERVAL_MS
         )
         .first<{ guid: string }>();
       if (!reservation) continue;
@@ -215,33 +244,29 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
           step,
           status: response.status,
         });
-        const limitedUntil = rateLimitedUntil(response);
+        const limitedUntil = await rateLimitedUntil(response);
         if (limitedUntil !== null) {
-          // This reply explicitly rejected the request. Do not spend the GUID's one try.
-          await db.batch([
-            db
-              .prepare(`DELETE FROM webhook_recovery_attempts WHERE guid = ? AND EXISTS (
-              SELECT 1 FROM webhook_recovery_scan WHERE singleton = 1 AND next_scan_at = ?)`)
-              .bind(guid, lease),
-            delayScan(limitedUntil),
-          ]);
+          await delayScan(limitedUntil).run();
+          return;
         }
-        return;
+        continue;
       }
       requested += 1;
     }
 
     step = 'checkpoint';
-    // Remember manual redeliveries too: they are newer than their originals and may
-    // be on an earlier page. The exclusions and page advance commit together.
-    const redelivered = attempts
-      .filter((attempt) => attempt.redelivery)
+    // A successful redelivery (including a manual one) may be on a different page
+    // from its original. A failed one is not evidence of acceptance.
+    const delivered = attempts
+      .filter((attempt) => attempt.redelivery && attempt.succeeded)
       .map((attempt) => attempt.guid);
     await db.batch([
       db
-        .prepare(`INSERT OR IGNORE INTO webhook_recovery_attempts (guid, original_at, expires_at)
-         SELECT value, NULL, ? FROM json_each(?)`)
-        .bind(now + RETENTION_MS, JSON.stringify(redelivered)),
+        .prepare(`INSERT INTO webhook_recovery_attempts (guid, expires_at, delivered)
+         SELECT value, ?, 1 FROM json_each(?) WHERE true
+         ON CONFLICT (guid) DO UPDATE SET delivered = 1, expires_at = excluded.expires_at
+         WHERE webhook_recovery_attempts.delivered = 0`)
+        .bind(now + RETENTION_MS, JSON.stringify(delivered)),
       db
         .prepare(`DELETE FROM webhook_recovery_attempts WHERE guid IN (
          SELECT guid FROM webhook_recovery_attempts WHERE expires_at < ? ORDER BY expires_at LIMIT ?)`)
