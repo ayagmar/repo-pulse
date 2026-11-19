@@ -209,6 +209,72 @@ describe('digest schedule', () => {
     }
   );
 
+  // Sampling only scheduled instants missed wrong IDs and moving bounds during the catch-up hours.
+  it('keeps the same window across repeated, skipped and spilling hours until the cutoff', () => {
+    const assertWindow = (
+      zone: string,
+      hour: number,
+      ticks: string[],
+      date: string,
+      start: string,
+      end: string
+    ): void => {
+      for (const tick of ticks) {
+        expect(dueDigestWindow(new Date(tick), zone, hour)).toEqual({
+          period: 'daily',
+          date,
+          start: new Date(start),
+          end: new Date(end),
+        });
+      }
+    };
+    const ny = 'America/New_York';
+    assertWindow(
+      ny,
+      1,
+      [
+        '2026-11-01T05:00Z',
+        '2026-11-01T05:59Z',
+        '2026-11-01T06:00Z',
+        '2026-11-01T06:59Z',
+        '2026-11-02T04:59Z',
+      ],
+      '2026-11-01',
+      '2026-10-31T05:00Z',
+      '2026-11-01T05:00Z'
+    );
+    expect(dueDigestWindow(new Date('2026-11-02T05:00Z'), ny, 1)).toBeNull();
+    expect(dueDigestWindow(new Date('2026-03-08T06:59Z'), ny, 2)).toBeNull();
+    assertWindow(
+      ny,
+      2,
+      ['2026-03-08T07:00Z', '2026-03-08T07:59Z', '2026-03-09T03:59Z'],
+      '2026-03-08',
+      '2026-03-07T07:00Z',
+      '2026-03-08T07:00Z'
+    );
+    expect(dueDigestWindow(new Date('2026-03-09T04:00Z'), ny, 2)).toBeNull();
+    const nuuk = 'America/Nuuk';
+    expect(dueDigestWindow(new Date('2026-03-29T00:59Z'), nuuk, 23)).toBeNull();
+    assertWindow(
+      nuuk,
+      23,
+      ['2026-03-29T01:00Z', '2026-03-29T01:59Z', '2026-03-29T23:59Z'],
+      '2026-03-28',
+      '2026-03-28T01:00Z',
+      '2026-03-29T01:00Z'
+    );
+    assertWindow(
+      nuuk,
+      23,
+      ['2026-03-30T00:00Z'],
+      '2026-03-29',
+      '2026-03-29T01:00Z',
+      '2026-03-30T00:00Z'
+    );
+    expect(dueDigestWindow(new Date('2026-03-30T01:00Z'), nuuk, 23)).toBeNull();
+  });
+
   it.each([
     ['Africa/Casablanca', 1],
     ['Africa/Casablanca', 2],
@@ -394,7 +460,11 @@ describe('digests', () => {
       await sendDueDigests(env, new Date());
     };
     await run('2026-11-02T22:00:00Z');
-    await run('2026-11-02T22:01:00Z');
+    await run('2026-11-02T22:19:00Z');
+    // The scan is unavailable: the 20-minute fallback still allows both sends.
+    expect(postedEmbeds()).toHaveLength(0);
+    await run('2026-11-02T22:20:00Z');
+    await run('2026-11-02T22:21:00Z');
     expect(postedEmbeds()).toMatchObject([
       {
         title: '📊 Daily pulse · Mon 2 Nov',
@@ -410,6 +480,24 @@ describe('digests', () => {
     // Another missed day is no longer due at the first minute of the following local day.
     await run('2026-11-04T05:00:00Z');
     expect(postedEmbeds()).toHaveLength(2);
+  });
+
+  // A Monday run starting just before midnight used the daily's old clock for the weekly claim.
+  it('does not claim the weekly digest if the daily send crosses local midnight', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+    await record(env, '2026-10-18T12:00:00Z', [star('cli')]);
+    vi.setSystemTime(new Date('2026-10-19T23:59:59Z'));
+    fetchMock.mockImplementationOnce(() => {
+      vi.setSystemTime(new Date('2026-10-20T00:00:01Z'));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    await sendDueDigests(env);
+    expect(postedEmbeds()).toMatchObject([{ title: '📊 Daily pulse · Mon 19 Oct' }]);
+    await expect(env.DB.prepare('SELECT digest_id FROM digest_sends').all()).resolves.toMatchObject(
+      {
+        results: [{ digest_id: 'daily:2026-10-19' }],
+      }
+    );
   });
 
   it('retries the next minute when reading the events fails after the claim', async () => {

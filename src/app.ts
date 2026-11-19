@@ -128,7 +128,7 @@ function createInsights({ config, redactor }: HttpEnv['Variables']['runtime']): 
 
 export async function sendDueDigests(
   env: HttpEnv['Bindings'],
-  now: Date,
+  now?: Date,
   insights = new InvocationInsights()
 ): Promise<void> {
   const runtime = buildRuntime(env);
@@ -139,7 +139,7 @@ export async function sendDueDigests(
     { ...runtime.config.digest, ignoredLogins: runtime.config.people.ignoredLogins },
     insights.get(runtime)
   );
-  await sender.sendDueDigests(now);
+  await sender.sendDueDigests(() => now ?? new Date(Date.now()));
 }
 
 export async function checkMomentum(

@@ -21,6 +21,9 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 
 /** Space out replays of an ambiguous send, even across Worker restarts. */
 const DIGEST_CLAIM_LEASE_MS = 60 * MINUTE_MS;
+const ON_TIME_MS = 10 * MINUTE_MS;
+const RECOVERY_GRACE_MS = 20 * MINUTE_MS;
+const RECOVERY_CUTOFF_MS = 60 * MINUTE_MS;
 
 const MONDAY = 1;
 
@@ -312,21 +315,18 @@ export class DigestSender {
     private readonly insights: RepositoryInsights | null = null
   ) {}
 
-  /** Send every digest due at `now`: the daily one, and on Mondays the weekly one too. */
-  async sendDueDigests(now: Date): Promise<void> {
+  /** Send each digest still due when its turn comes. */
+  async sendDueDigests(clock: () => Date): Promise<void> {
     if (!this.dispatcher.hasNotifiers()) {
       return;
     }
 
     const errors: unknown[] = [];
     for (const period of PERIODS) {
-      const window = dueDigestWindow(now, this.options.timeZone, this.options.hour, period);
-      if (window) {
-        try {
-          await this.sendDigest(window);
-        } catch (error) {
-          errors.push(error);
-        }
+      try {
+        await this.sendDigest(period, clock);
+      } catch (error) {
+        errors.push(error);
       }
     }
     if (errors.length === 1) throw errors[0];
@@ -430,8 +430,18 @@ export class DigestSender {
     }
   }
 
-  private async sendDigest(window: DigestWindow): Promise<void> {
-    const digestId = `${window.period}:${window.date}`;
+  private async sendDigest(period: DigestPeriod, clock: () => Date): Promise<void> {
+    const { timeZone, hour } = this.options;
+    const now = clock();
+    const window = dueDigestWindow(now, timeZone, hour, period);
+    if (window === null) return;
+    const digestId = `${period}:${window.date}`;
+    const catchUp = now.getTime() - window.end.getTime() > ON_TIME_MS;
+    const waitForRecovery =
+      catchUp &&
+      now.getTime() <
+        localHourInstant(shiftDate(localDateTime(now, timeZone).date, 1), 0, timeZone).getTime() -
+          RECOVERY_CUTOFF_MS;
     /** Provider name to the time of its claim. */
     const claimedProviders = new Map<string, string>();
     for (const notifier of this.dispatcher.getNotifiers()) {
@@ -441,8 +451,9 @@ export class DigestSender {
       const claimedAt = await this.digestLog.claim(
         digestId,
         notifier.name,
-        new Date(),
-        DIGEST_CLAIM_LEASE_MS
+        now,
+        DIGEST_CLAIM_LEASE_MS,
+        waitForRecovery ? RECOVERY_GRACE_MS : 0
       );
       if (claimedAt !== null) {
         claimedProviders.set(notifier.name, claimedAt);
@@ -492,6 +503,10 @@ export class DigestSender {
         .map((notifier) => notifier.name)
         .filter((name) => !claimedProviders.has(name))
     );
+    if (dueDigestWindow(clock(), timeZone, hour, period)?.date !== window.date) {
+      await this.releaseClaims(digestId, claimedProviders);
+      return;
+    }
     const results = await this.dispatcher.dispatchDigest(digest, {
       skipProviders: unclaimedProviders,
     });

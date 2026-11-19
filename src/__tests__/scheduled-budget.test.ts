@@ -295,6 +295,7 @@ describe('one scheduled invocation', () => {
       discordFailure?: boolean;
       outcomeWriteFailure?: boolean;
       recoverWebhooks?: boolean;
+      firstAt?: string;
       rerunAt?: string[];
     } = {}
   ): Promise<RunResult & { reruns: RunResult[] }> {
@@ -471,7 +472,8 @@ describe('one scheduled invocation', () => {
 
     // Monday 26 October 2026, 09:05 UTC.
     const first = await run(
-      options.recoverWebhooks === true ? '2026-10-26T09:00:00Z' : '2026-10-26T09:05:00Z',
+      options.firstAt ??
+        (options.recoverWebhooks === true ? '2026-10-26T09:00:00Z' : '2026-10-26T09:05:00Z'),
       {
         ...(options.recoverWebhooks === true ? { sentMarkers: true } : {}),
         ...(options.failThreadRead === true ? { query: 'feature_activations' } : {}),
@@ -520,6 +522,24 @@ describe('one scheduled invocation', () => {
     });
     expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
   });
+
+  // Catch-ups must not spend extra D1 round trips deciding whether to wait, even at the cutoff.
+  it.each([
+    ['2026-10-26T09:20:00Z', 4, []],
+    ['2026-10-26T23:00:00Z', 6, ['daily:2026-10-26', 'weekly:2026-10-26']],
+  ] as const)(
+    'keeps Monday recovery and catch-up within 50 requests at %s',
+    async (firstAt, discordPosts, sentDigests) => {
+      const run = await runWorstCase({ recoverWebhooks: true, firstAt });
+      expect(run).toMatchObject({
+        discordPosts,
+        sentDigests,
+        recoveryRequests: 5,
+        rejectedTasks: 0,
+      });
+      expect(run.subrequests).toBeLessThanOrEqual(SUBREQUEST_LIMIT);
+    }
+  );
 
   it('stays within 50 subrequests and still posts both digests when threads cannot be read', async () => {
     const run = await runWorstCase({ failThreadRead: true });

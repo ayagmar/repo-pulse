@@ -326,6 +326,80 @@ describe('scheduled webhook recovery', () => {
     expect(posts).toEqual([`${LIST}/1/attempts`, `${LIST}/2/attempts`, `${LIST}/1/attempts`]);
   });
 
+  // A late digest used to seal its window before a successful replay POST's callback arrived.
+  it('holds a catch-up until a scan checkpoints and asynchronous callbacks have had time to arrive', async () => {
+    const digests: string[] = [];
+    let replayRequests = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((address: string, init: RequestInit) => {
+        if (address.startsWith('https://discord.com/')) {
+          const embed = (
+            JSON.parse(init.body as string) as { embeds: [{ title: string; description: string }] }
+          ).embeds[0];
+          if (embed.title.includes('Daily pulse')) digests.push(embed.description);
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+        if (address.startsWith(LIST) && init.method === 'GET') {
+          return Promise.resolve(
+            Response.json(replayRequests === 0 ? [delivery(1, 'callback')] : [])
+          );
+        }
+        if (address.startsWith(LIST)) {
+          replayRequests += 1;
+          return Promise.resolve(new Response(null, { status: 202 }));
+        }
+        if (address.endsWith('/access_tokens'))
+          return Promise.resolve(new Response(null, { status: 503 }));
+        throw new Error('Unexpected external request');
+      })
+    );
+    vi.setSystemTime(new Date('2026-11-19T10:00:00Z'));
+    expect(await webhook('already-present', star(80))).toBe(202);
+    await cron('2026-11-20T09:59:00Z');
+    expect(digests).toEqual([]);
+    await cron('2026-11-20T10:00:00Z');
+    expect(replayRequests).toBe(1);
+    await cron('2026-11-20T10:01:00Z');
+    expect(digests).toEqual([]);
+    expect(await webhook('callback', star(81))).toBe(202);
+    await cron('2026-11-20T10:19:00Z');
+    expect(digests).toEqual([]);
+    await cron('2026-11-20T10:20:00Z');
+    expect(digests).toEqual(['2 new stars\n\n**[myorg/cli](https://github.com/myorg/cli)** ⭐ +2']);
+    await cron('2026-11-20T10:21:00Z');
+    expect(digests).toHaveLength(1);
+  });
+
+  // An idle recovery page should release a waiting digest before the fallback timer ends.
+  it('sends after a newer checkpoint when there was no recent replay', async () => {
+    const digests: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((address: string, init: RequestInit) => {
+        if (address.startsWith('https://discord.com/')) {
+          const embed = (JSON.parse(init.body as string) as { embeds: [{ title: string }] })
+            .embeds[0];
+          if (embed.title.includes('Daily pulse')) digests.push(embed.title);
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+        if (address.startsWith(LIST) && init.method === 'GET')
+          return Promise.resolve(Response.json([]));
+        if (address.endsWith('/access_tokens'))
+          return Promise.resolve(new Response(null, { status: 503 }));
+        throw new Error('Unexpected external request');
+      })
+    );
+    vi.setSystemTime(new Date('2026-11-19T10:00:00Z'));
+    expect(await webhook('already-present', star(80))).toBe(202);
+    await cron('2026-11-20T09:58:00Z');
+    await cron('2026-11-20T09:59:00Z');
+    expect(digests).toEqual([]);
+    await cron('2026-11-20T10:00:00Z');
+    await cron('2026-11-20T10:01:00Z');
+    expect(digests).toEqual(['📊 Daily pulse · Fri 20 Nov']);
+  });
+
   // A burst of old star payloads with high historical counts used to look like a current spike,
   // claim a milestone and move the stars into yesterday's wrong digest bucket.
   it('posts recovered stars plainly, with their original activity time', async () => {

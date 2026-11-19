@@ -273,9 +273,9 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         .bind(now, PAGE_SIZE),
       db
         .prepare(
-          'UPDATE webhook_recovery_scan SET cursor = ? WHERE singleton = 1 AND next_scan_at = ?'
+          'UPDATE webhook_recovery_scan SET cursor = ?, checkpoint_at = ? WHERE singleton = 1 AND next_scan_at = ?'
         )
-        .bind(missing.length > MAX_REQUESTS ? scan.cursor : next, lease),
+        .bind(missing.length > MAX_REQUESTS ? scan.cursor : next, Date.now(), lease),
     ]);
     if (requested > 0)
       logger.info('webhook_recovery.requested', {

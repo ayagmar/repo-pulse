@@ -1,7 +1,8 @@
 CREATE TABLE webhook_recovery_scan (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   cursor TEXT,
-  next_scan_at INTEGER NOT NULL
+  next_scan_at INTEGER NOT NULL,
+  checkpoint_at INTEGER
 );
 
 CREATE TABLE webhook_recovery_attempts (
@@ -14,3 +15,6 @@ CREATE TABLE webhook_recovery_attempts (
 );
 
 CREATE INDEX idx_webhook_recovery_expiry ON webhook_recovery_attempts (expires_at);
+CREATE INDEX idx_webhook_recovery_requested ON webhook_recovery_attempts (last_requested_at);
+
+ALTER TABLE digest_sends ADD COLUMN recovery_wait_at INTEGER;

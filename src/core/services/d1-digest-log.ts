@@ -10,29 +10,53 @@ export class D1DigestLog {
   /**
    * Claim a digest for a provider. Returns the claim's time, which `release` takes to
    * give up only this claim. Returns null when the provider was
-   * already sent the digest, or another run claimed it less than `leaseMs` ago and
-   * may still be posting.
+   * already sent the digest, another run still has the send lease, or a catch-up
+   * is waiting for webhook recovery. Waiting does not start the send lease.
    */
   async claim(
     digestId: string,
     provider: string,
     now: Date,
-    leaseMs: number
+    leaseMs: number,
+    recoveryGraceMs = 0
   ): Promise<string | null> {
     const claimedAt = now.toISOString();
     const claimed = await this.db
       .prepare(
-        `INSERT INTO digest_sends (digest_id, provider_name, claimed_at, sent_at)
-         VALUES (?, ?, ?, NULL)
+        `WITH input(digest_id, provider_name, claimed_at, now_ms, recent_since) AS (VALUES (?, ?, ?, ?, ?)),
+         readiness AS MATERIALIZED (
+           SELECT input.*, CASE WHEN recent_since IS NOT NULL AND (
+             EXISTS (SELECT 1 FROM webhook_recovery_attempts WHERE last_requested_at > recent_since)
+             OR (previous.recovery_wait_at IS NULL OR (
+               previous.recovery_wait_at > recent_since AND NOT EXISTS (
+                 SELECT 1 FROM webhook_recovery_scan WHERE singleton = 1
+                   AND checkpoint_at > previous.recovery_wait_at
+               )
+             ))
+           ) THEN COALESCE(previous.recovery_wait_at, now_ms) END AS wait_at
+           FROM input LEFT JOIN digest_sends AS previous USING (digest_id, provider_name)
+         )
+         INSERT INTO digest_sends (digest_id, provider_name, claimed_at, recovery_wait_at)
+         SELECT digest_id, provider_name, claimed_at, wait_at FROM readiness WHERE true
          ON CONFLICT (digest_id, provider_name) DO UPDATE
-           SET claimed_at = excluded.claimed_at
-           WHERE digest_sends.sent_at IS NULL AND digest_sends.claimed_at <= ?
-         RETURNING provider_name`
+           SET claimed_at = excluded.claimed_at, recovery_wait_at = excluded.recovery_wait_at
+           WHERE digest_sends.sent_at IS NULL AND (
+             (digest_sends.recovery_wait_at IS NOT NULL AND excluded.recovery_wait_at IS NULL)
+             OR (digest_sends.recovery_wait_at IS NULL AND digest_sends.claimed_at <= ?)
+           )
+         RETURNING recovery_wait_at AS waitAt`
       )
-      .bind(digestId, provider, claimedAt, new Date(now.getTime() - leaseMs).toISOString())
-      .first<{ provider_name: string }>();
+      .bind(
+        digestId,
+        provider,
+        claimedAt,
+        now.getTime(),
+        recoveryGraceMs > 0 ? now.getTime() - recoveryGraceMs : null,
+        new Date(now.getTime() - leaseMs).toISOString()
+      )
+      .first<{ waitAt: number | null }>();
 
-    return claimed === null ? null : claimedAt;
+    return claimed?.waitAt === null ? claimedAt : null;
   }
 
   /**

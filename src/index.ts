@@ -26,10 +26,7 @@ const worker = {
     if (recovering) executionCtx.waitUntil(recoverGitHubWebhooks(env));
     // Digest and radar share one GitHub token acquisition.
     const insights = new InvocationInsights();
-    // A delayed invocation must not start yesterday's digest after local midnight.
-    executionCtx.waitUntil(
-      sendDueDigests(env, new Date(Math.max(now.getTime(), Date.now())), insights)
-    );
+    executionCtx.waitUntil(sendDueDigests(env, undefined, insights));
     executionCtx.waitUntil(checkMomentum(env, now, insights));
   },
 } satisfies ExportedHandler<Env>;
