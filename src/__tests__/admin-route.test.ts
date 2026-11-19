@@ -13,14 +13,7 @@ describe('admin routes', () => {
   const cleanups: (() => void)[] = [];
 
   beforeEach(() => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(null, {
-          status: 204,
-        })
-      )
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ id: '123' })));
   });
 
   afterEach(() => {
@@ -279,14 +272,7 @@ describe('admin routes', () => {
       env.DB.close();
     });
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(null, {
-          status: 204,
-        })
-      )
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ id: '123' })));
 
     const app = createApp();
     const ledger = new D1DeliveryLedger(env.DB);

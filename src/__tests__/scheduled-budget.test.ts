@@ -400,7 +400,7 @@ describe('one scheduled invocation', () => {
           ? fakeGitHub(url, init, options.failMint === true)
           : options.discordFailure === true && isConversationAlert(init)
             ? new Response(null, { status: 503 })
-            : new Response(null, { status: 204 })
+            : Response.json({ id: '123' })
       );
     });
     vi.stubGlobal('fetch', fetchMock);

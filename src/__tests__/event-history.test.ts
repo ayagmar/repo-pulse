@@ -64,7 +64,10 @@ describe('event history', () => {
   const cleanups: (() => void)[] = [];
 
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })))
+    );
   });
 
   afterEach(() => {

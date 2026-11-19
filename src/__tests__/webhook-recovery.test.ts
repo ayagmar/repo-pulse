@@ -120,7 +120,7 @@ describe('scheduled webhook recovery', () => {
     const lists: (string | null)[] = [];
     const fetchMock = vi.fn((address: string, init: RequestInit) => {
       if (address.startsWith('https://discord.com/'))
-        return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.resolve(Response.json({ id: '123' }));
       const url = new URL(address);
       expect(address.startsWith(LIST)).toBe(true);
       expect(new Headers(init.headers).get('Authorization')).toMatch(
@@ -228,7 +228,7 @@ describe('scheduled webhook recovery', () => {
       'fetch',
       vi.fn((address: string, init: RequestInit) => {
         if (address.startsWith('https://discord.com/'))
-          return Promise.resolve(new Response(null, { status: 204 }));
+          return Promise.resolve(Response.json({ id: '123' }));
         if (init.method === 'GET' && address.startsWith(LIST)) {
           listCount += 1;
           return Promise.resolve(
@@ -338,7 +338,7 @@ describe('scheduled webhook recovery', () => {
             JSON.parse(init.body as string) as { embeds: [{ title: string; description: string }] }
           ).embeds[0];
           if (embed.title.includes('Daily pulse')) digests.push(embed.description);
-          return Promise.resolve(new Response(null, { status: 204 }));
+          return Promise.resolve(Response.json({ id: '123' }));
         }
         if (address.startsWith(LIST) && init.method === 'GET') {
           return Promise.resolve(
@@ -381,7 +381,7 @@ describe('scheduled webhook recovery', () => {
           const embed = (JSON.parse(init.body as string) as { embeds: [{ title: string }] })
             .embeds[0];
           if (embed.title.includes('Daily pulse')) digests.push(embed.title);
-          return Promise.resolve(new Response(null, { status: 204 }));
+          return Promise.resolve(Response.json({ id: '123' }));
         }
         if (address.startsWith(LIST) && init.method === 'GET')
           return Promise.resolve(Response.json([]));
@@ -407,7 +407,7 @@ describe('scheduled webhook recovery', () => {
     const fetchMock = vi.fn((address: string, init: RequestInit) => {
       if (address.startsWith('https://discord.com/')) {
         embeds.push(...(JSON.parse(init.body as string) as { embeds: typeof embeds }).embeds);
-        return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.resolve(Response.json({ id: '123' }));
       }
       if (init.method === 'GET' && address.startsWith(LIST)) {
         return Promise.resolve(

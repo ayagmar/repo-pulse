@@ -68,7 +68,7 @@ interface ProviderAttempt {
 type DeliveryOutcome =
   | { status: 'succeeded'; at: Date }
   | {
-      status: 'pending' | 'failed';
+      status: 'pending' | 'failed' | 'processing';
       at: Date;
       error: string;
       classification: FailureClassification;
@@ -371,7 +371,9 @@ export class D1DeliveryLedger {
              fenced
                ? `
            WHERE EXISTS (SELECT 1 FROM deliveries
-             WHERE delivery_id = ? AND status = 'processing' AND processing_attempts = ?)`
+             WHERE delivery_id = ? AND status = 'processing' AND processing_attempts = ?)
+           AND NOT EXISTS (SELECT 1 FROM provider_attempts
+             WHERE delivery_id = ? AND provider_name = ? AND success = ? AND delivery_attempt = ?)`
                : ''
            }`
         )
@@ -382,7 +384,16 @@ export class D1DeliveryLedger {
           attempt.attemptedAt.toISOString(),
           attempt.success ? 1 : 0,
           attempt.error ?? null,
-          ...(fenced ? [deliveryId, deliveryAttempt] : [])
+          ...(fenced
+            ? [
+                deliveryId,
+                deliveryAttempt,
+                deliveryId,
+                attempt.provider,
+                attempt.success ? 1 : 0,
+                deliveryAttempt,
+              ]
+            : [])
         )
     );
   }
@@ -466,7 +477,7 @@ export class D1DeliveryLedger {
              next_attempt_at = ?,
              processing_started_at = CASE WHEN ? = 'pending' THEN NULL ELSE processing_started_at END,
              processing_finished_at = ?,
-             lease_expires_at = NULL,
+             lease_expires_at = CASE WHEN ? = 'processing' THEN MAX(lease_expires_at, ?) END,
              last_error = ?,
              last_failure_classification = ?
          WHERE delivery_id = ? AND status = 'processing' AND processing_attempts = ?`
@@ -475,7 +486,11 @@ export class D1DeliveryLedger {
         outcome.status,
         outcome.status === 'pending' ? outcome.at.toISOString() : null,
         outcome.status,
-        outcome.status === 'pending' ? null : outcome.at.toISOString(),
+        outcome.status === 'pending' || outcome.status === 'processing'
+          ? null
+          : outcome.at.toISOString(),
+        outcome.status,
+        outcome.at.toISOString(),
         outcome.status === 'succeeded' ? null : outcome.error,
         outcome.status === 'succeeded' ? null : outcome.classification,
         deliveryId,

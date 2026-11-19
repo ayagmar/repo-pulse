@@ -531,7 +531,7 @@ describe('Workers runtime integration', () => {
     // A stubbed Discord: this suite makes no outbound requests.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(null, { status: 204 }));
+      .mockImplementation(() => Promise.resolve(Response.json({ id: '123' })));
     await env.DB.prepare(
       `INSERT INTO events (delivery_id, event_type, repository, received_at, event_json)
        VALUES ('digest-star', 'star.created', 'myorg/repo', '2026-10-14T12:00:00.000Z', ?)`

@@ -140,8 +140,42 @@ describe('createDiscordNotifier', () => {
     });
   });
 
+  // A successful HTTP status without the created message used to become a terminal receipt.
+  it('requires a created message ID, keeping unconfirmed responses retryable', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ id: 123 }))
+      .mockResolvedValueOnce(new Response('{', { status: 200 }))
+      .mockResolvedValueOnce(Response.json({ id: '123' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const notifier = createDiscordNotifier(
+      'https://discord.com/api/webhooks/0/test-only?thread_id=42&wait=false',
+      new Redactor([])
+    );
+    if (!notifier) throw new Error('Expected Discord notifier');
+    for (let index = 0; index < 3; index += 1) {
+      await expect(notifier.notify(createTestRepoEvent())).resolves.toMatchObject({
+        success: false,
+        acceptanceUnknown: true,
+        failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+      });
+    }
+    await expect(notifier.notify(createTestRepoEvent())).resolves.toEqual({
+      success: true,
+      provider: 'discord',
+    });
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(
+      Array.from(
+        { length: 4 },
+        () => 'https://discord.com/api/webhooks/0/test-only?thread_id=42&wait=true'
+      )
+    );
+  });
+
   describe('issue actions', () => {
     const webhookUrl = 'https://discord.com/api/webhooks/0/test-only';
+    const executeUrl = `${webhookUrl}?wait=true`;
     const deliveryId = '0b5a3a0e-1f6b-4c49-9d3c-6f2b0a1d2e3f';
     const star = createTestRepoEvent();
     const issue = createRepoEvent(REPO_EVENT_TYPES.ISSUE_OPENED, {
@@ -196,18 +230,24 @@ describe('createDiscordNotifier', () => {
     }
 
     it('posts exactly the plain payloads while actions are off', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })))
+      );
       const notifier = createDiscordNotifier(webhookUrl, new Redactor([]));
 
       await notifier?.notify(issue, deliveryId);
 
       expect(posts()).toEqual([
-        { url: webhookUrl, body: { ...formatDiscordEmbed(issue), ...sender } },
+        { url: executeUrl, body: { ...formatDiscordEmbed(issue), ...sender } },
       ]);
     });
 
     it('adds Close and Label to issue-opened alerts only, asking Discord to keep them', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })))
+      );
       const notifier = createDiscordNotifier(webhookUrl, new Redactor([]), { actions: true });
 
       await notifier?.notify(issue, deliveryId);
@@ -218,7 +258,7 @@ describe('createDiscordNotifier', () => {
 
       expect(posts()).toEqual([
         {
-          url: `${webhookUrl}?with_components=true`,
+          url: `${executeUrl}&with_components=true`,
           body: {
             ...formatDiscordEmbed(issue),
             ...sender,
@@ -233,10 +273,10 @@ describe('createDiscordNotifier', () => {
             ],
           },
         },
-        { url: webhookUrl, body: { ...formatDiscordEmbed(issue), ...sender } },
-        { url: webhookUrl, body: { ...formatDiscordEmbed(pullRequest), ...sender } },
-        { url: webhookUrl, body: { ...formatDiscordEmbed(star), ...sender } },
-        { url: webhookUrl, body: { ...formatDiscordDigest(digest), ...sender } },
+        { url: executeUrl, body: { ...formatDiscordEmbed(issue), ...sender } },
+        { url: executeUrl, body: { ...formatDiscordEmbed(pullRequest), ...sender } },
+        { url: executeUrl, body: { ...formatDiscordEmbed(star), ...sender } },
+        { url: executeUrl, body: { ...formatDiscordDigest(digest), ...sender } },
       ]);
     });
   });

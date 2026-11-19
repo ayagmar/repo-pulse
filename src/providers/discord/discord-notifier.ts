@@ -87,13 +87,12 @@ class DiscordNotifier implements Notifier {
     return this.post(formatDiscordAlert(alert));
   }
 
-  /** Discord drops components unless asked to keep them. */
   private webhookUrl(payload: DiscordWebhookPayload): string {
-    if (payload.components === undefined) {
-      return this.cfg.webhookUrl;
-    }
     const url = new URL(this.cfg.webhookUrl);
-    url.searchParams.set('with_components', 'true');
+    url.searchParams.set('wait', 'true');
+    if (payload.components !== undefined) {
+      url.searchParams.set('with_components', 'true');
+    }
     return url.toString();
   }
 
@@ -115,22 +114,26 @@ class DiscordNotifier implements Notifier {
         },
         body: JSON.stringify(payload),
       });
+      if (response.ok) {
+        const message: unknown = await response.json();
+        if (
+          typeof message === 'object' &&
+          message !== null &&
+          'id' in message &&
+          typeof message.id === 'string' &&
+          /^[1-9]\d{0,19}$/.test(message.id)
+        ) {
+          return { success: true, provider: this.name };
+        }
+        return this.unconfirmed('Discord response did not confirm a created message');
+      }
     } catch (error) {
-      // The exception can quote the webhook URL, so only its kind is kept.
-      return {
-        success: false,
-        provider: this.name,
-        error: transportFailure('Discord request', error),
-        failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
-        acceptanceUnknown: true,
-      };
-    }
-
-    if (response.ok) {
-      return {
-        success: true,
-        provider: this.name,
-      };
+      // The exception can quote the webhook URL or response body, so only its kind is kept.
+      return this.unconfirmed(
+        error instanceof SyntaxError
+          ? 'Discord response did not confirm a created message'
+          : transportFailure('Discord request', error)
+      );
     }
 
     const errorText = await response.text().catch(() => '');
@@ -152,6 +155,16 @@ class DiscordNotifier implements Notifier {
       provider: this.name,
       error,
       failureClassification: FAILURE_CLASSIFICATIONS.PERMANENT,
+    };
+  }
+
+  private unconfirmed(error: string): NotificationResult {
+    return {
+      success: false,
+      provider: this.name,
+      error,
+      failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+      acceptanceUnknown: true,
     };
   }
 }

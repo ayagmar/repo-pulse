@@ -85,7 +85,7 @@ describe('momentum radar', () => {
         Promise.resolve(
           url.startsWith('https://api.github.com/')
             ? fakeGitHub(url, init)
-            : new Response(null, { status: 204 })
+            : Response.json({ id: '123' })
         )
       );
     vi.stubGlobal('fetch', fetchMock);
@@ -306,7 +306,7 @@ describe('momentum radar', () => {
       Promise.resolve(
         url.startsWith('https://api.github.com/')
           ? new Response('Bad credentials', { status: 401 })
-          : new Response(null, { status: 204 })
+          : Response.json({ id: '123' })
       )
     );
     const env = createRadarEnv(app);
@@ -356,7 +356,7 @@ describe('momentum radar', () => {
       acceptedPosts += 1;
       return acceptedPosts === 1
         ? Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'))
-        : Promise.resolve(new Response(null, { status: 204 }));
+        : Promise.resolve(Response.json({ id: '123' }));
     });
     for (const minutes of ['05', '15', '25', '35', '45', '55']) {
       await check(env, `2026-10-15T12:${minutes}:00Z`);

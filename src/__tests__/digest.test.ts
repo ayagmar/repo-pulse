@@ -297,7 +297,7 @@ describe('digests', () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
-    fetchMock.mockReset().mockResolvedValue(new Response(null, { status: 204 }));
+    fetchMock.mockReset().mockImplementation(() => Promise.resolve(Response.json({ id: '123' })));
     vi.stubGlobal('fetch', fetchMock);
     vi.useFakeTimers({ toFake: ['Date'] });
   });
@@ -458,7 +458,7 @@ describe('digests', () => {
       acceptedPosts += 1;
       return acceptedPosts === 1
         ? Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'))
-        : Promise.resolve(new Response(null, { status: 204 }));
+        : Promise.resolve(Response.json({ id: '123' }));
     });
     for (const at of ['09:00', '09:01', '09:09', '09:59']) {
       await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
@@ -529,7 +529,7 @@ describe('digests', () => {
     vi.setSystemTime(new Date('2026-10-19T23:59:59Z'));
     fetchMock.mockImplementationOnce(() => {
       vi.setSystemTime(new Date('2026-10-20T00:00:01Z'));
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return Promise.resolve(Response.json({ id: '123' }));
     });
     await sendDueDigests(env);
     expect(postedEmbeds()).toMatchObject([{ title: '📊 Daily pulse · Mon 19 Oct' }]);
@@ -677,7 +677,7 @@ describe('digests', () => {
           ? installationTokenResponse('test-github-token')
           : url === 'https://api.github.com/graphql'
             ? fakeGitHub(init)
-            : new Response(null, { status: 204 })
+            : Response.json({ id: '123' })
       )
     );
     const env = createDigestEnv(app);
@@ -712,7 +712,7 @@ describe('digests', () => {
         return Promise.resolve(installationTokenResponse('test-github-token'));
       }
       if (url !== 'https://api.github.com/graphql') {
-        return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.resolve(Response.json({ id: '123' }));
       }
       queueMicrotask(() => {
         timeout.abort(new DOMException('Timed out', 'TimeoutError'));
@@ -737,7 +737,7 @@ describe('digests', () => {
       Promise.resolve(
         url.startsWith('https://api.github.com/')
           ? new Response('Bad credentials', { status: 401 })
-          : new Response(null, { status: 204 })
+          : Response.json({ id: '123' })
       )
     );
     const env = createDigestEnv(app);

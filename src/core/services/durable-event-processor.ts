@@ -216,23 +216,29 @@ export class DurableEventProcessor {
       const transient = failures.every(
         (failure) => failure.failureClassification === FAILURE_CLASSIFICATIONS.TRANSIENT
       );
+      const holdLease = transient && failures.some((failure) => failure.acceptanceUnknown === true);
       const retry = transient && delivery.processingAttempt < delivery.maxAttempts;
       const outcome =
         failures.length === 0
           ? { status: 'succeeded' as const, at: new Date() }
           : {
-              status: retry ? ('pending' as const) : ('failed' as const),
-              at: retry
-                ? new Date(
-                    Date.now() +
-                      calculateRetryDelayMs(
-                        delivery.processingAttempt,
-                        failures,
-                        this.retryBaseDelayMs,
-                        this.retryMaxDelayMs
-                      )
-                  )
-                : new Date(),
+              status: holdLease
+                ? ('processing' as const)
+                : retry
+                  ? ('pending' as const)
+                  : ('failed' as const),
+              at:
+                retry || holdLease
+                  ? new Date(
+                      Date.now() +
+                        calculateRetryDelayMs(
+                          delivery.processingAttempt,
+                          failures,
+                          this.retryBaseDelayMs,
+                          this.retryMaxDelayMs
+                        )
+                    )
+                  : new Date(),
               error: summarizeFailures(failures),
               classification: transient
                 ? FAILURE_CLASSIFICATIONS.TRANSIENT

@@ -192,7 +192,9 @@ describe('secrets in failures', () => {
   it('keeps them out of logs when the sender history cannot be recorded, and still posts', async () => {
     vi.setSystemTime(new Date('2026-10-30T12:00:00Z'));
     const env = createEnv();
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(Response.json({ id: '123' })));
     vi.stubGlobal('fetch', fetchMock);
     const failingEnv = {
       ...env,
@@ -264,7 +266,9 @@ describe('secrets in failures', () => {
       event: createTestRepoEvent(),
       maxAttempts: 5,
     });
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(Response.json({ id: '123' })));
     vi.stubGlobal('fetch', fetchMock);
     const readFirstSeen = vi
       .spyOn(D1EventHistory.prototype, 'readFirstSeen')
@@ -370,7 +374,7 @@ describe('secrets in failures', () => {
         vi.fn((url: string, init: RequestInit) => {
           if (!url.startsWith('https://api.github.com/')) {
             discordPosts += 1;
-            return Promise.resolve(new Response(null, { status: 204 }));
+            return Promise.resolve(Response.json({ id: '123' }));
           }
           const bearer = (new Headers(init.headers).get('Authorization') ?? '').slice(7);
           if (url.endsWith('/access_tokens')) {
@@ -522,7 +526,7 @@ describe('secrets in failures', () => {
               ? installationTokenResponse('test-github-token')
               : url.startsWith('https://api.github.com/')
                 ? malformedBody()
-                : new Response(null, { status: 204 })
+                : Response.json({ id: '123' })
           )
         )
       );
