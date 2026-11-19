@@ -189,34 +189,38 @@ describe('scheduled webhook recovery', () => {
     expect(posts).toEqual(['/app/hook/deliveries/6/attempts', '/app/hook/deliveries/8/attempts']);
   });
 
-  // GitHub's header-bearing throttle must stop requests across runs, without losing the delivery.
-  it('honors Retry-After and retries the missing delivery after an hour', async () => {
+  // Charging a definite throttle kept this GUID blocked until after GitHub expired it.
+  it('recovers an original about to expire on the next tick after a GitHub throttle', async () => {
     let lists = 0;
     let posts = 0;
     vi.stubGlobal(
       'fetch',
       vi.fn((address: string, init: RequestInit) => {
+        if (address.startsWith('https://discord.com/'))
+          return Promise.resolve(Response.json({ id: '123' }));
         if (!address.startsWith(LIST)) throw new Error('Unexpected external request');
         if (init.method === 'GET') {
           lists += 1;
-          return Promise.resolve(Response.json(lists < 4 ? [delivery(1, 'rate-limited')] : []));
+          return Promise.resolve(
+            Response.json([delivery(1, 'rate-limited', { delivered_at: '2026-11-17T00:15:00Z' })])
+          );
         }
         posts += 1;
         return Promise.resolve(
           posts === 1
-            ? new Response(null, { status: 429, headers: { 'Retry-After': '660' } })
+            ? new Response(null, { status: 429, headers: { 'Retry-After': '60' } })
             : new Response(null, { status: 202 })
         );
       })
     );
     await cron('2026-11-20T00:00:00Z');
-    await cron('2026-11-20T00:10:00Z');
     expect([lists, posts]).toEqual([1, 1]);
-    await cron('2026-11-20T00:20:00Z');
-    expect([lists, posts]).toEqual([2, 1]);
-    await cron('2026-11-20T01:00:00Z');
-    await cron('2026-11-20T01:10:00Z');
-    expect([lists, posts]).toEqual([4, 2]);
+    await cron('2026-11-20T00:10:00Z');
+    expect([lists, posts]).toEqual([2, 2]);
+    expect(await webhook('rate-limited', star(100))).toBe(202);
+    await expect(new D1DeliveryLedger(env.DB).getDelivery('rate-limited')).resolves.toMatchObject({
+      event: { activityAt: '2026-11-17T00:15:00.000Z' },
+    });
   });
 
   // A lost reservation reply or a 202 followed by a failed callback used to lose the event permanently.
@@ -290,8 +294,8 @@ describe('scheduled webhook recovery', () => {
     });
   });
 
-  // A headerless secondary limit on either endpoint must stop the scan rather than spending the batch.
-  it('stops on headerless GitHub throttles and preserves the per-GUID retry interval', async () => {
+  // Three headerless throttles used to exhaust the GUID without ever queuing a replay.
+  it('refunds three definite throttles without refunding the later accepted requests', async () => {
     const limited = (): Response =>
       Response.json(
         { message: 'You have exceeded a secondary rate limit.' },
@@ -305,25 +309,20 @@ describe('scheduled webhook recovery', () => {
         if (init.method === 'GET') {
           listCount += 1;
           return Promise.resolve(
-            listCount === 1
-              ? limited()
-              : Response.json([delivery(1, 'limited'), delivery(2, 'next')])
+            listCount === 1 ? limited() : Response.json([delivery(1, 'limited')])
           );
         }
         posts.push(address);
-        return Promise.resolve(
-          posts.length === 1 ? limited() : new Response(null, { status: 202 })
-        );
+        return Promise.resolve(posts.length <= 3 ? limited() : new Response(null, { status: 202 }));
       })
     );
     await cron('2026-11-20T00:00:00Z');
     expect(posts).toEqual([]);
-    await cron('2026-11-20T00:10:00Z');
-    expect(posts).toEqual([`${LIST}/1/attempts`]);
-    await cron('2026-11-20T00:20:00Z');
-    expect(posts).toEqual([`${LIST}/1/attempts`, `${LIST}/2/attempts`]);
-    await cron('2026-11-20T01:10:00Z');
-    expect(posts).toEqual([`${LIST}/1/attempts`, `${LIST}/2/attempts`, `${LIST}/1/attempts`]);
+    for (const at of ['00:10', '00:20', '00:30']) await cron(`2026-11-20T${at}:00Z`);
+    expect(posts).toEqual(Array.from({ length: 3 }, () => `${LIST}/1/attempts`));
+    for (const at of ['00:40', '00:50', '01:40', '02:40', '03:40'])
+      await cron(`2026-11-20T${at}:00Z`);
+    expect(posts).toEqual(Array.from({ length: 6 }, () => `${LIST}/1/attempts`));
   });
 
   // A late digest used to seal its window before a successful replay POST's callback arrived.

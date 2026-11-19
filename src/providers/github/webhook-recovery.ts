@@ -217,10 +217,11 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
            AND NOT EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = ?)
          ON CONFLICT (guid) DO UPDATE SET
            request_count = webhook_recovery_attempts.request_count + 1,
+           previous_requested_at = webhook_recovery_attempts.last_requested_at,
            last_requested_at = excluded.last_requested_at,
            expires_at = excluded.expires_at
          WHERE webhook_recovery_attempts.delivered = 0 AND webhook_recovery_attempts.request_count < ?
-           AND webhook_recovery_attempts.last_requested_at <= ?
+           AND (webhook_recovery_attempts.last_requested_at IS NULL OR webhook_recovery_attempts.last_requested_at <= ?)
          RETURNING guid`)
         .bind(
           guid,
@@ -246,7 +247,19 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         });
         const limitedUntil = await rateLimitedUntil(response);
         if (limitedUntil !== null) {
-          await delayScan(limitedUntil).run();
+          // GitHub did not queue a replay. Undo only this reservation, and commit
+          // the refund with the backoff so a restart cannot separate them.
+          await db.batch([
+            db
+              .prepare(`UPDATE webhook_recovery_attempts
+              SET request_count = request_count - 1, last_requested_at = previous_requested_at,
+                  previous_requested_at = NULL
+              WHERE guid = ? AND last_requested_at = ? AND EXISTS (
+                SELECT 1 FROM webhook_recovery_scan WHERE singleton = 1 AND next_scan_at = ?
+              )`)
+              .bind(guid, requestedAt, lease),
+            delayScan(limitedUntil),
+          ]);
           return;
         }
         continue;

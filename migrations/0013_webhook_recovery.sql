@@ -11,6 +11,7 @@ CREATE TABLE webhook_recovery_attempts (
   expires_at INTEGER NOT NULL,
   request_count INTEGER NOT NULL DEFAULT 0,
   last_requested_at INTEGER,
+  previous_requested_at INTEGER,
   delivered INTEGER NOT NULL DEFAULT 0
 );
 
