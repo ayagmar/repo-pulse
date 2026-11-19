@@ -38,7 +38,7 @@
     "verify:ci": "run-s check:secrets typegen typecheck lint check:ci test:coverage test:workers knip build"
   },
   "dependencies": {
-    "hono": "^4.13.13"
+    "hono": "^4.13.19"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
