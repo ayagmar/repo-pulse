@@ -206,8 +206,8 @@ The milestones are 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000, 10,000 and ev
 - Persists `processing` leases to recover from interrupted invocations.
 - Reschedules transient failures with backoff.
 - Fences outcome updates by processing attempt and prevents admin retries from resetting active work.
-- Counts interruptions against the retry budget, including exhausted pending rows from previous releases.
-- Leaves processing leases recoverable when a D1 outcome write fails.
+- Writes provider attempts and the outcome in one transaction, fenced by the live processing attempt. On a write error it retries the transaction once, not the post, and ends that drain. If the first transaction committed, the fence makes the retry a no-op.
+- Recovers expired leases and exhausted pending rows. A delivery with recorded success for every configured provider is completed, even if it used its last attempt under an older release. Without that evidence an interruption still counts toward the retry budget; two failed outcome writes leave the lease for cron to recover.
 - Prunes succeeded deliveries based on retention policy.
 
 ### Admin surface

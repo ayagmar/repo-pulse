@@ -31,15 +31,15 @@ interface QueryCounter {
 
 /**
  * Counts every D1 query and batch, as Workers counts them against the limit. A query
- * containing `failing.query` rejects after being counted, and so does the first batch
- * with a statement containing `failing.batch`.
+ * containing `failing.query` rejects after being counted, as do the first two batches
+ * with a statement containing `failing.batch` (the write and its retry).
  */
 function countQueries(
   db: D1DatabaseLike,
   failing: { query?: string; batch?: string } = {}
 ): QueryCounter {
   let queries = 0;
-  let batchFailed = false;
+  let batchesFailed = 0;
   const sql: string[] = [];
   const inner = new WeakMap<D1PreparedStatementLike, D1PreparedStatementLike>();
   const texts = new WeakMap<D1PreparedStatementLike, string>();
@@ -76,11 +76,11 @@ function countQueries(
       const batchSql = statements.map((statement) => texts.get(statement) ?? '');
       sql.push(...batchSql);
       if (
-        !batchFailed &&
+        batchesFailed < 2 &&
         failing.batch !== undefined &&
         batchSql.some((text) => text.includes(failing.batch ?? ''))
       ) {
-        batchFailed = true;
+        batchesFailed += 1;
         return Promise.reject(new Error('D1 unavailable'));
       }
       return db.batch(statements.map((statement) => inner.get(statement) ?? statement));

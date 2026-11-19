@@ -143,7 +143,8 @@ describe('DurableEventProcessor', () => {
     });
   });
 
-  it('completes an interrupted delivery without reposting when every provider already succeeded', async () => {
+  // Legacy code could mark a confirmed send failed if its final status write failed at the attempt limit.
+  it('completes an interrupted last attempt when every provider already succeeded', async () => {
     const tempDatabase = createTempDatabasePath();
     cleanups.push(tempDatabase.cleanup);
 
@@ -159,7 +160,7 @@ describe('DurableEventProcessor', () => {
       sourceEventType: 'star',
       repository: event.repository.fullName,
       event,
-      maxAttempts: 5,
+      maxAttempts: 1,
     });
     // The Worker posted and recorded the attempt, then stopped before marking success.
     await ledger.claimNextPendingDelivery(new Date(), 0);
