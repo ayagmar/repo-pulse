@@ -439,7 +439,7 @@ describe('digests', () => {
   it('retries a failed digest the next minute, then stops once it is posted', async () => {
     const env = createDigestEnv();
     await record(env, '2026-10-14T12:00:00.000Z', [star('cli')]);
-    fetchMock.mockResolvedValueOnce(new Response('upstream error', { status: 500 }));
+    fetchMock.mockResolvedValueOnce(new Response('rate limited', { status: 429 }));
 
     await sendDueDigests(env, new Date('2026-10-15T09:00:00.000Z'));
     await sendDueDigests(env, new Date('2026-10-15T09:01:00.000Z'));
@@ -448,8 +448,9 @@ describe('digests', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  // An accepted Discord post used to repeat on the next tick after a transport or gateway timeout.
-  it.each(['transport timeout', '504'])(
+  // An accepted Discord post used to repeat on the next tick after a transport or gateway
+  // timeout, and a 500 sent after the message was saved was retried within a minute.
+  it.each(['transport timeout', '504', '500'])(
     'holds an accepted digest for the lease after %s',
     async (failure) => {
       const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
@@ -459,8 +460,8 @@ describe('digests', () => {
       fetchMock.mockImplementation(() => {
         acceptedPosts += 1;
         if (acceptedPosts > 1) return Promise.resolve(Response.json({ id: '123' }));
-        return failure === '504'
-          ? Promise.resolve(new Response(null, { status: 504 }))
+        return failure !== 'transport timeout'
+          ? Promise.resolve(new Response(null, { status: Number(failure) }))
           : Promise.reject(new DOMException('Timed out after accepting', 'TimeoutError'));
       });
       for (const at of ['09:00', '09:01', '09:09', '09:59']) {

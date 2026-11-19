@@ -435,7 +435,7 @@ describe('one scheduled invocation', () => {
         url.startsWith('https://api.github.com/')
           ? fakeGitHub(url, init, options.failMint === true)
           : options.discordFailure === true && isConversationAlert(init)
-            ? new Response(null, { status: 500 })
+            ? new Response(null, { status: 429 })
             : Response.json({ id: '123' })
       );
     });

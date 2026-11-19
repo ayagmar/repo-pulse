@@ -59,7 +59,8 @@ describe('createDiscordNotifier', () => {
     });
   });
 
-  it('treats Discord 5xx responses as transient failures', async () => {
+  // A 500 can follow a saved message, so it must not read as a definite rejection.
+  it('treats Discord 5xx responses as transient failures of unknown acceptance', async () => {
     const notifier = createDiscordNotifier(
       'https://discord.com/api/webhooks/0/test-only',
       new Redactor([])
@@ -80,6 +81,7 @@ describe('createDiscordNotifier', () => {
       provider: 'discord',
       error: 'Discord request failed with 500',
       failureClassification: FAILURE_CLASSIFICATIONS.TRANSIENT,
+      acceptanceUnknown: true,
     });
   });
 

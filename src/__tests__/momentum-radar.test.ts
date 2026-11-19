@@ -289,7 +289,7 @@ describe('momentum radar', () => {
       ['a', 'b', 'c', 'd', 'e'],
       5
     );
-    fetchMock.mockResolvedValueOnce(new Response('upstream error', { status: 500 }));
+    fetchMock.mockResolvedValueOnce(new Response('rate limited', { status: 429 }));
 
     await check(env, '2026-10-15T12:05:00.000Z');
     await check(env, '2026-10-15T12:15:00.000Z');
