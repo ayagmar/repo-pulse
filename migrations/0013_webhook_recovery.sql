@@ -19,3 +19,4 @@ CREATE INDEX idx_webhook_recovery_expiry ON webhook_recovery_attempts (expires_a
 CREATE INDEX idx_webhook_recovery_requested ON webhook_recovery_attempts (last_requested_at);
 
 ALTER TABLE digest_sends ADD COLUMN recovery_wait_at INTEGER;
+ALTER TABLE digest_sends ADD COLUMN retry_at INTEGER;

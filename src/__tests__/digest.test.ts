@@ -471,6 +471,33 @@ describe('digests', () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  // A short Discord throttle in the last hour used to block the digest until after midnight.
+  it.each([
+    ['23:05', '5', '23:05:04', '23:06'],
+    ['23:05', '3600', '23:14', '23:15'],
+    ['09:00', '180', '09:02', '09:03'],
+  ])(
+    'retries a 429 at %s after its bounded Retry-After (%s seconds)',
+    async (first, retryAfter, early, due) => {
+      const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });
+      await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
+      fetchMock.mockResolvedValueOnce(
+        new Response(null, { status: 429, headers: { 'Retry-After': retryAfter } })
+      );
+      const at = (time: string): Date =>
+        new Date(`2026-10-15T${time.length === 5 ? `${time}:00` : time}Z`);
+      await sendDueDigests(env, at(first));
+      await sendDueDigests(env, at(early));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await sendDueDigests(env, at(due));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const sent = await env.DB.prepare('SELECT sent_at FROM digest_sends').first<{
+        sent_at: string | null;
+      }>();
+      expect(sent?.sent_at).toBeTruthy();
+    }
+  );
+
   // A revoked webhook used to trigger a full history read every minute until midnight.
   it('does not rebuild a rejected catch-up on each tick', async () => {
     const env = createDigestEnv({ DIGEST_TIME_ZONE: 'UTC' });

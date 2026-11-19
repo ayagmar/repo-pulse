@@ -8,6 +8,7 @@ import type {
   UnreleasedWork,
   WaitingThread,
 } from '../models/digest.js';
+import { FAILURE_CLASSIFICATIONS } from '../models/failure-classification.js';
 import { REPO_EVENT_TYPES } from '../models/repo-event.js';
 import type { D1DigestLog } from './d1-digest-log.js';
 import type { D1EventHistory, EventActivity, ThreadActivityMaterial } from './d1-event-history.js';
@@ -22,6 +23,7 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 /** Space out replays of an ambiguous send, even across Worker restarts. */
 const DIGEST_CLAIM_LEASE_MS = 60 * MINUTE_MS;
 const ON_TIME_MS = 10 * MINUTE_MS;
+const MAX_REJECTION_DELAY_MS = 10 * MINUTE_MS;
 const RECOVERY_GRACE_MS = 20 * MINUTE_MS;
 const RECOVERY_CUTOFF_MS = 60 * MINUTE_MS;
 
@@ -525,12 +527,14 @@ export class DigestSender {
           } catch {
             await this.digestLog.markSent(digestId, result.provider, sentAt);
           }
-        } else if (
-          result.acceptanceUnknown !== true &&
-          clock().getTime() - window.end.getTime() < ON_TIME_MS
-        ) {
-          // Only a definite rejection in the first ten minutes is worth retrying next tick.
-          await this.releaseClaims(digestId, new Map([[result.provider, claimedAt]]));
+        } else if (result.acceptanceUnknown !== true) {
+          const rejectedAt = clock().getTime();
+          if (result.failureClassification === FAILURE_CLASSIFICATIONS.TRANSIENT) {
+            const delay = Math.min(result.retryAfterMs ?? MINUTE_MS, MAX_REJECTION_DELAY_MS);
+            await this.digestLog.defer(digestId, result.provider, claimedAt, rejectedAt + delay);
+          } else if (rejectedAt - window.end.getTime() < ON_TIME_MS) {
+            await this.releaseClaims(digestId, new Map([[result.provider, claimedAt]]));
+          }
         }
       } catch (error) {
         outcomeErrors.push(error);

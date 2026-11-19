@@ -25,7 +25,7 @@ export class D1DigestLog {
       .prepare(
         `WITH input(digest_id, provider_name, claimed_at, now_ms, recent_since) AS (VALUES (?, ?, ?, ?, ?)),
          readiness AS MATERIALIZED (
-           SELECT input.*, CASE WHEN recent_since IS NOT NULL AND (
+           SELECT input.*, CASE WHEN recent_since IS NOT NULL AND previous.retry_at IS NULL AND (
              EXISTS (SELECT 1 FROM webhook_recovery_attempts WHERE last_requested_at > recent_since)
              OR (previous.recovery_wait_at IS NULL OR (
                previous.recovery_wait_at > recent_since AND NOT EXISTS (
@@ -39,10 +39,11 @@ export class D1DigestLog {
          INSERT INTO digest_sends (digest_id, provider_name, claimed_at, recovery_wait_at)
          SELECT digest_id, provider_name, claimed_at, wait_at FROM readiness WHERE true
          ON CONFLICT (digest_id, provider_name) DO UPDATE
-           SET claimed_at = excluded.claimed_at, recovery_wait_at = excluded.recovery_wait_at
+           SET claimed_at = excluded.claimed_at, recovery_wait_at = excluded.recovery_wait_at, retry_at = NULL
            WHERE digest_sends.sent_at IS NULL AND (
              (digest_sends.recovery_wait_at IS NOT NULL AND excluded.recovery_wait_at IS NULL)
-             OR (digest_sends.recovery_wait_at IS NULL AND digest_sends.claimed_at <= ?)
+             OR CASE WHEN digest_sends.retry_at IS NOT NULL THEN digest_sends.retry_at <= (SELECT now_ms FROM input)
+                     ELSE digest_sends.recovery_wait_at IS NULL AND digest_sends.claimed_at <= ? END
            )
          RETURNING recovery_wait_at AS waitAt`
       )
@@ -67,6 +68,20 @@ export class D1DigestLog {
     await this.db
       .prepare('UPDATE digest_sends SET sent_at = ? WHERE digest_id = ? AND provider_name = ?')
       .bind(sentAt.toISOString(), digestId, provider)
+      .run();
+  }
+
+  /** Keep a short retry deadline for a definite transient rejection, without reopening recovery grace. */
+  async defer(
+    digestId: string,
+    provider: string,
+    claimedAt: string,
+    retryAt: number
+  ): Promise<void> {
+    await this.db
+      .prepare(`UPDATE digest_sends SET retry_at = ?
+      WHERE digest_id = ? AND provider_name = ? AND claimed_at = ? AND sent_at IS NULL`)
+      .bind(retryAt, digestId, provider, claimedAt)
       .run();
   }
 
