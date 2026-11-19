@@ -19,7 +19,7 @@ const worker = {
     const recovering = isWebhookRecoveryDue(now);
     executionCtx.waitUntil(
       drainDueDeliveries(env, {
-        pruneSucceededDeliveries: true,
+        runMaintenance: true,
         batchLimit: recovering ? 4 : 5,
       })
     );

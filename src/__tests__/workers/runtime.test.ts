@@ -185,12 +185,19 @@ describe('Workers runtime integration', () => {
     ]);
   });
 
-  /** Real D1, and the rows D1 says the last statement read. */
-  function countingRowsRead(): { db: D1DatabaseLike; rowsRead: () => number } {
+  /** Real D1, with metadata from the last statement or batch. */
+  function countingRowsRead(): {
+    db: D1DatabaseLike;
+    rowsRead: () => number;
+    rowsWritten: () => number;
+  } {
     let rowsRead = Number.NaN;
+    let rowsWritten = Number.NaN;
+    const originals = new WeakMap<D1PreparedStatementLike, D1PreparedStatement>();
     const counted = async <Result extends D1Result>(pending: Promise<Result>): Promise<Result> => {
       const result = await pending;
       rowsRead = result.meta.rows_read;
+      rowsWritten = result.meta.rows_written;
       return result;
     };
     const db = {
@@ -199,15 +206,29 @@ describe('Workers runtime integration', () => {
         return {
           bind: (...values: unknown[]): D1PreparedStatement => {
             const bound = statement.bind(...values);
-            return Object.assign(Object.create(bound) as D1PreparedStatement, {
+            const wrapped = Object.assign(Object.create(bound) as D1PreparedStatement, {
               all: <Row>(): Promise<D1Result<Row>> => counted(bound.all<Row>()),
               run: (): Promise<D1Result> => counted(bound.run()),
             });
+            originals.set(wrapped, bound);
+            return wrapped;
           },
         };
       },
+      batch: async (statements: readonly D1PreparedStatementLike[]): Promise<D1Result[]> => {
+        const results = await env.DB.batch(
+          statements.map((statement) => {
+            const original = originals.get(statement);
+            if (original === undefined) throw new Error('Expected a counted statement');
+            return original;
+          })
+        );
+        rowsRead = results.reduce((sum, result) => sum + result.meta.rows_read, 0);
+        rowsWritten = results.reduce((sum, result) => sum + result.meta.rows_written, 0);
+        return results;
+      },
     } as unknown as D1DatabaseLike;
-    return { db, rowsRead: () => rowsRead };
+    return { db, rowsRead: () => rowsRead, rowsWritten: () => rowsWritten };
   }
 
   /** The digest's thread read on real D1, and the rows D1 says it read. */
@@ -222,7 +243,64 @@ describe('Workers runtime integration', () => {
     return { material, rowsRead: rowsRead() };
   }
 
-  it('prunes expired succeeded deliveries on real D1, reading rows by what expired, not what is kept', async () => {
+  // The old sweep read every pending delivery and could update the entire expired backlog.
+  it('bounds the sweep and rotates past incomplete legacy rows without moving their retries', async () => {
+    const now = new Date('2026-06-01T00:00:00Z');
+    const retry = '2026-06-02T00:00:00.000Z';
+    const insert = `INSERT INTO deliveries (delivery_id, source_event_type, normalized_event_type,
+      repository, normalized_event_json, accepted_at, status, processing_attempts, max_attempts, next_attempt_at, lease_expires_at, last_error)`;
+    await env.DB.batch([
+      env.DB.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 6000)
+        ${insert} SELECT 'fresh-' || i, 'star', 'star.created', 'myorg/repo', '{}', ?, 'pending', 0, 5, ?, NULL, NULL FROM n`).bind(
+        now.toISOString(),
+        retry
+      ),
+      ...['expired', 'exhausted', 'legacy'].map((group) =>
+        env.DB.prepare(`WITH n(i) AS (VALUES (1), (2), (3), (4), (5), (6))
+        ${insert} SELECT ? || i, 'star', 'star.created', 'myorg/repo', '{}', ?, ?, ?, 5, ?, ?, 'Processing interrupted before completion' FROM n`).bind(
+          group,
+          now.toISOString(),
+          group === 'expired' ? 'processing' : 'pending',
+          group === 'exhausted' ? 5 : 1,
+          group === 'expired' ? null : retry,
+          group === 'expired' ? now.toISOString() : null
+        )
+      ),
+      env.DB.prepare(`INSERT INTO provider_attempts (delivery_id, delivery_attempt, provider_name, attempted_at, success)
+        VALUES ('legacy4', 1, 'discord', ?, 1), ('legacy5', 1, 'discord', ?, 1), ('legacy5', 1, 'other', ?, 1)`).bind(
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString()
+      ),
+    ]);
+    const { db, rowsRead, rowsWritten } = countingRowsRead();
+    const counted = new D1DeliveryLedger(db);
+    await expect(
+      counted.requeueExpiredProcessingDeliveries(now, ['discord', 'other'])
+    ).resolves.toBe(8);
+    expect(rowsRead()).toBeLessThanOrEqual(250);
+    expect(rowsWritten()).toBeLessThanOrEqual(109);
+    await expect(ledger.getDelivery('legacy5')).resolves.toMatchObject({ status: 'pending' });
+    // The cursor can encounter freshly requeued IDs first, but a later pass reaches all six legacy rows.
+    for (let pass = 0; pass < 4; pass += 1)
+      await counted.requeueExpiredProcessingDeliveries(now, ['discord', 'other']);
+    await expect(ledger.getDelivery('legacy5')).resolves.toMatchObject({
+      status: 'succeeded',
+      processingAttempts: 1,
+    });
+    for (const id of ['legacy1', 'legacy4']) {
+      await expect(ledger.getDelivery(id)).resolves.toMatchObject({
+        status: 'pending',
+        processingAttempts: 1,
+      });
+      expect((await ledger.getDelivery(id))?.nextAttemptAt?.toISOString()).toBe(retry);
+    }
+    await expect(ledger.getDelivery('exhausted6')).resolves.toMatchObject({ status: 'failed' });
+    await expect(ledger.getDelivery('expired6')).resolves.toMatchObject({ status: 'pending' });
+  });
+
+  // A large receipt history used to be cascaded in one unbounded prune.
+  it('prunes expired succeeded deliveries on real D1 in bounded batches', async () => {
     const insertDelivery = (
       id: string,
       status: string,
@@ -247,11 +325,11 @@ describe('Workers runtime integration', () => {
     )
       .bind(olderThan.toISOString())
       .run();
-    const { db, rowsRead } = countingRowsRead();
+    const { db, rowsRead, rowsWritten } = countingRowsRead();
     const counted = new D1DeliveryLedger(db);
 
     await expect(counted.pruneSucceededDeliveries(olderThan)).resolves.toBe(0);
-    expect(rowsRead()).toBeLessThanOrEqual(1);
+    expect(rowsRead()).toBeLessThanOrEqual(8);
 
     await env.DB.batch([
       insertDelivery('expired-1', 'succeeded', expired),
@@ -262,12 +340,25 @@ describe('Workers runtime integration', () => {
       env.DB.prepare(
         `INSERT INTO provider_attempts (
            delivery_id, delivery_attempt, provider_name, attempted_at, success
-         ) VALUES ('expired-1', 1, 'discord', ?1, 1), ('old-failed', 1, 'discord', ?1, 0)`
+         ) VALUES ('old-failed', 1, 'discord', ?1, 0)`
       ).bind(expired),
+      env.DB.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 19)
+        INSERT INTO provider_attempts (delivery_id, delivery_attempt, provider_name, attempted_at, success)
+        SELECT 'expired-1', i, 'discord', ?, 1 FROM n`).bind(expired),
     ]);
 
-    await counted.pruneSucceededDeliveries(olderThan);
-    expect(rowsRead()).toBeLessThan(20);
+    // A single delivery can have more receipts than the whole prune budget.
+    await expect(counted.pruneSucceededDeliveries(olderThan)).resolves.toBe(1);
+    expect(rowsRead()).toBeLessThanOrEqual(100);
+    expect(rowsWritten()).toBeLessThanOrEqual(60);
+    const receipts = (): Promise<number | null> =>
+      env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM provider_attempts WHERE delivery_id = 'expired-1'"
+      ).first<number>('count');
+    expect(await receipts()).toBe(11);
+    await expect(counted.pruneSucceededDeliveries(olderThan)).resolves.toBe(0);
+    expect(await receipts()).toBe(3);
+    await expect(counted.pruneSucceededDeliveries(olderThan)).resolves.toBe(1);
 
     const left = await env.DB.prepare(
       `SELECT delivery_id AS id FROM deliveries WHERE delivery_id NOT LIKE 'kept-%' ORDER BY id`

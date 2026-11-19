@@ -171,7 +171,9 @@ describe('DurableEventProcessor', () => {
     const notify = vi.fn();
     const dispatcher = new NotificationDispatcher(new Redactor([]));
     dispatcher.add(createNotifier(notify));
-    await new DurableEventProcessor(ledger, dispatcher).drainDueDeliveries();
+    await new DurableEventProcessor(ledger, dispatcher).drainDueDeliveries({
+      runMaintenance: true,
+    });
 
     expect(notify).not.toHaveBeenCalled();
     await expect(ledger.getDelivery('delivery-interrupted')).resolves.toMatchObject({
@@ -269,7 +271,7 @@ describe('DurableEventProcessor', () => {
       succeededRetentionDays: 7,
     });
 
-    await processor.drainDueDeliveries({ pruneSucceededDeliveries: true });
+    await processor.drainDueDeliveries({ runMaintenance: true });
 
     await expect(ledger.getDelivery('delivery-old-succeeded')).resolves.toBeNull();
     await expect(ledger.getDelivery('delivery-recent-succeeded')).resolves.not.toBeNull();

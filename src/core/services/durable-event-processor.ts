@@ -35,7 +35,7 @@ interface PeopleOptions {
 }
 
 interface DrainDueDeliveriesOptions {
-  pruneSucceededDeliveries?: boolean;
+  runMaintenance?: boolean;
   batchLimit?: number;
 }
 
@@ -163,18 +163,18 @@ export class DurableEventProcessor {
       return;
     }
 
-    const recoveredCount = await this.ledger.requeueExpiredProcessingDeliveries(
-      new Date(),
-      this.dispatcher.getNotifiers().map((notifier) => notifier.name)
-    );
-    if (recoveredCount > 0) {
-      logger.warn('event_processor.interrupted_deliveries_recovered', {
-        component: 'event_processor',
-        recoveredCount,
-      });
-    }
-
-    if (options.pruneSucceededDeliveries === true) {
+    const providers = this.dispatcher.getNotifiers().map((notifier) => notifier.name);
+    if (options.runMaintenance === true) {
+      const recoveredCount = await this.ledger.requeueExpiredProcessingDeliveries(
+        new Date(),
+        providers
+      );
+      if (recoveredCount > 0) {
+        logger.warn('event_processor.interrupted_deliveries_recovered', {
+          component: 'event_processor',
+          recoveredCount,
+        });
+      }
       await this.pruneSucceededDeliveries();
     }
 
@@ -188,7 +188,7 @@ export class DurableEventProcessor {
         return;
       }
 
-      if (await this.processDelivery(delivery)) {
+      if (await this.processDelivery(delivery, providers)) {
         // Bound the extra write to one per drain and leave other work for the next run.
         return;
       }
@@ -196,10 +196,16 @@ export class DurableEventProcessor {
   }
 
   /** Returns true when an outcome write needed a retry. */
-  private async processDelivery(delivery: ClaimedDelivery): Promise<boolean> {
+  private async processDelivery(
+    delivery: ClaimedDelivery,
+    providers: readonly string[]
+  ): Promise<boolean> {
     try {
       // A retry resends only to the providers that have not accepted this delivery yet.
-      const deliveredProviders = await this.ledger.listSucceededProviders(delivery.deliveryId);
+      const deliveredProviders = await this.ledger.listSucceededProviders(
+        delivery.deliveryId,
+        providers
+      );
       const attemptedAt = new Date();
       const results = await this.dispatcher.dispatch(delivery.event, {
         deliveryId: delivery.deliveryId,

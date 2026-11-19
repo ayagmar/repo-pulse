@@ -133,7 +133,7 @@ describe('event history', () => {
     await third.waitForBackground();
 
     vi.setSystemTime(new Date('2026-10-20T00:00:00.000Z'));
-    await drainDueDeliveries(env, { pruneSucceededDeliveries: true });
+    await drainDueDeliveries(env, { runMaintenance: true });
 
     const deliveries = await app.fetch(
       adminGet('/deliveries'),

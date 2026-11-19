@@ -89,7 +89,7 @@ settings to reach production.
 
 Repo Pulse receives events only from a GitHub App. One App, installed on all your
 repositories, covers new ones without setup, and its short-lived installation token
-reads what digests and alerts add. The same App key lets cron request redelivery of missing webhooks after a D1 outage. This uses an App JWT and needs no extra permission or secret; apply migration `0013` before deploying the recovery code.
+reads what digests and alerts add. The same App key lets cron request redelivery of missing webhooks after a D1 outage. This uses an App JWT and needs no extra permission or secret; apply migrations `0013` and `0014` before deploying the recovery code.
 
 1. Open **Settings → Developer settings → GitHub Apps → New GitHub App**.
    - Webhook URL: `https://<your-worker>.workers.dev/webhook`

@@ -93,7 +93,7 @@ export function createApp(): Hono<HttpEnv> {
 export async function drainDueDeliveries(
   env: HttpEnv['Bindings'],
   options: {
-    pruneSucceededDeliveries?: boolean;
+    runMaintenance?: boolean;
     batchLimit?: number;
   } = {}
 ): Promise<void> {

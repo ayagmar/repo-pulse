@@ -157,7 +157,7 @@ describe('delivery recovery and ownership', () => {
     });
     await processor.drainDueDeliveries();
     vi.setSystemTime(Date.now() + 1001);
-    await processor.drainDueDeliveries();
+    await processor.drainDueDeliveries({ runMaintenance: true });
     await expect(ledger.getDelivery('recovery')).resolves.toMatchObject({
       status: 'succeeded',
       processingAttempts: 1,
