@@ -19,17 +19,8 @@ import { summarizeThreadActivity } from './thread-activity.js';
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 
-/**
- * The digest is due during the first minutes after its local hour. The cron runs every
- * minute, so a failed send is retried until this window closes.
- */
-const SEND_WINDOW_MINUTES = 10;
-
-/**
- * How long a claimed digest is left to the run that claimed it. A run that stopped
- * after posting but before recording it causes one repeat post once this passes.
- */
-const DIGEST_CLAIM_LEASE_MS = 5 * MINUTE_MS;
+/** Space out replays of an ambiguous send, even across Worker restarts. */
+const DIGEST_CLAIM_LEASE_MS = 60 * MINUTE_MS;
 
 const MONDAY = 1;
 
@@ -154,8 +145,7 @@ export function dueDigestWindow(
       continue;
     }
     const end = localHourInstant(date, hour, timeZone);
-    const elapsed = now.getTime() - end.getTime();
-    if (elapsed >= 0 && elapsed < SEND_WINDOW_MINUTES * MINUTE_MS) {
+    if (now >= end && (date === today || localDateTime(end, timeZone).date === today)) {
       const startDate = shiftDate(date, period === 'weekly' ? -7 : -1);
       return { period, date, start: localHourInstant(startDate, hour, timeZone), end };
     }
@@ -328,12 +318,19 @@ export class DigestSender {
       return;
     }
 
+    const errors: unknown[] = [];
     for (const period of PERIODS) {
       const window = dueDigestWindow(now, this.options.timeZone, this.options.hour, period);
       if (window) {
-        await this.sendDigest(window);
+        try {
+          await this.sendDigest(window);
+        } catch (error) {
+          errors.push(error);
+        }
       }
     }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Digests could not finish');
   }
 
   /** Unreleased work in recently active repositories, or none when GitHub cannot say. */
@@ -470,7 +467,9 @@ export class DigestSender {
     const hasResponseTimes =
       responseTimes !== null && (responseTimes.merge !== null || responseTimes.firstReply !== null);
     if (events.length === 0 && waiting.length === 0 && !hasResponseTimes) {
-      await this.releaseClaims(digestId, claimedProviders);
+      // A truly empty window does not need to be read every minute. Keep it eligible
+      // after the lease in case recovery fills it; a failed thread read retries sooner.
+      if (threads === null) await this.releaseClaims(digestId, claimedProviders);
       return;
     }
 
@@ -497,17 +496,29 @@ export class DigestSender {
       skipProviders: unclaimedProviders,
     });
 
+    const outcomeErrors: unknown[] = [];
     for (const result of results) {
       const claimedAt = claimedProviders.get(result.provider);
       if (claimedAt === undefined) {
         continue;
       }
-      if (result.success) {
-        await this.digestLog.markSent(digestId, result.provider, new Date());
-      } else {
-        await this.digestLog.release(digestId, result.provider, claimedAt);
+      try {
+        if (result.success) {
+          const sentAt = new Date();
+          try {
+            await this.digestLog.markSent(digestId, result.provider, sentAt);
+          } catch {
+            await this.digestLog.markSent(digestId, result.provider, sentAt);
+          }
+        } else {
+          await this.releaseClaims(digestId, new Map([[result.provider, claimedAt]]));
+        }
+      } catch (error) {
+        outcomeErrors.push(error);
       }
     }
+    if (outcomeErrors.length > 0)
+      throw new AggregateError(outcomeErrors, 'Digest outcome not recorded');
 
     logger.info('digest.dispatched', {
       component: 'digest',

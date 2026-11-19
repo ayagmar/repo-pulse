@@ -29,8 +29,8 @@ const MIN_SPIKE_STARS = 5;
 const SPIKE_FACTOR = 4;
 /** An alert is sent at most once in this long per repository. */
 const ALERT_COOLDOWN_MS = DAY_MS;
-/** A claimed alert never marked sent or released, after a crash, can be retried after this. */
-const ALERT_CLAIM_LEASE_MS = 5 * 60_000;
+/** Space out replays of an ambiguous send, even across Worker restarts. */
+const ALERT_CLAIM_LEASE_MS = HOUR_MS;
 const ALERT_LIMITS = { cooldownMs: ALERT_COOLDOWN_MS, leaseMs: ALERT_CLAIM_LEASE_MS };
 const ALERT_PREFIX = 'stars:';
 
@@ -120,13 +120,25 @@ export class MomentumRadar {
         continue;
       }
 
-      // If this check fails before marking the alert sent or releasing it, the claim's
-      // lease runs out before the next check, which retries the alert.
-      const alert = await this.buildAlert(spike, now, recentStart);
+      let alert: MomentumAlert;
+      try {
+        alert = await this.buildAlert(spike, now, recentStart);
+      } catch (error) {
+        // No post was attempted, so the next check can retry without waiting an hour.
+        await this.radarLog.release(alertId, claimedAt).catch(() => {
+          logger.warn('radar.release_failed', { component: 'radar', alertId });
+        });
+        throw error;
+      }
       const results = await this.dispatcher.dispatchAlert(alert);
       const sent = results.some((result) => result.success);
       if (sent) {
-        await this.radarLog.markSent(alertId, new Date());
+        const sentAt = new Date();
+        try {
+          await this.radarLog.markSent(alertId, sentAt);
+        } catch {
+          await this.radarLog.markSent(alertId, sentAt);
+        }
       } else {
         await this.radarLog.release(alertId, claimedAt);
       }

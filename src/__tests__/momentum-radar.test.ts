@@ -341,10 +341,28 @@ describe('momentum radar', () => {
 
     await expect(check(env, '2026-10-15T12:05:00.000Z')).rejects.toThrow('D1_ERROR');
     const claims = await env.DB.prepare('SELECT alert_id FROM radar_alerts').all();
-    expect(claims.results).toEqual([{ alert_id: 'stars:myorg/cli' }]);
+    expect(claims.results).toEqual([]);
     await check(env, '2026-10-15T12:15:00.000Z');
 
     expect(postedEmbeds()).toHaveLength(1);
+  });
+
+  // An accepted post with no sent marker used to be repeated at every radar check.
+  it('holds an ambiguous post across checks and only retries after the long lease', async () => {
+    const env = createRadarEnv();
+    await recordStars(env, 'cli', new Date('2026-10-15T12:05:00Z'), ['a', 'b', 'c', 'd', 'e'], 5);
+    const mark = vi.spyOn(D1RadarLog.prototype, 'markSent');
+    mark
+      .mockRejectedValueOnce(new Error('D1 unavailable'))
+      .mockRejectedValueOnce(new Error('D1 unavailable'));
+    await expect(check(env, '2026-10-15T12:05:00Z')).rejects.toThrow('D1 unavailable');
+    for (const minutes of ['15', '25', '35', '45', '55']) {
+      await check(env, `2026-10-15T12:${minutes}:00Z`);
+    }
+    expect(postedEmbeds()).toHaveLength(1);
+    await check(env, '2026-10-15T13:05:00Z');
+    await check(env, '2026-10-15T13:15:00Z');
+    expect(postedEmbeds()).toHaveLength(2);
   });
 
   it('lets a check take over an abandoned claim, and holds a sent alert for a day', async () => {

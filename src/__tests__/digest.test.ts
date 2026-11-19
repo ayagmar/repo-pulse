@@ -152,7 +152,7 @@ describe('digest schedule', () => {
       time += 30 * 60_000
     ) {
       const window = dueDigestWindow(new Date(time), timeZone, hour, period);
-      if (window) {
+      if (window?.end.getTime() === time) {
         windows.push(window);
       }
     }
@@ -380,6 +380,36 @@ describe('digests', () => {
     await sendDueDigests(env, new Date('2026-10-15T09:02:00.000Z'));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // A quota outage left a legacy daily claim and prevented the weekly claim entirely.
+  it('catches up the same local day without moving either window or repeating either post', async () => {
+    const env = createDigestEnv({ DIGEST_TIME_ZONE: 'America/New_York' });
+    await record(env, '2026-11-01T20:00:00Z', [star('before')]);
+    await record(env, '2026-11-02T14:01:00Z', [star('after')]);
+    const log = new D1DigestLog(env.DB);
+    await log.claim('daily:2026-11-02', 'discord', new Date('2026-11-02T14:05:00Z'), 300_000);
+    const run = async (at: string): Promise<void> => {
+      vi.setSystemTime(new Date(at));
+      await sendDueDigests(env, new Date());
+    };
+    await run('2026-11-02T22:00:00Z');
+    await run('2026-11-02T22:01:00Z');
+    expect(postedEmbeds()).toMatchObject([
+      {
+        title: '📊 Daily pulse · Mon 2 Nov',
+        footer: { text: '1 Nov, 09:00 to 2 Nov, 09:00 · America/New_York' },
+      },
+      { title: '📦 Weekly pulse · Mon 26 Oct to Sun 1 Nov' },
+    ]);
+    expect(
+      postedEmbeds().every(
+        ({ description }) => description.includes('/before') && !description.includes('/after')
+      )
+    ).toBe(true);
+    // Another missed day is no longer due at the first minute of the following local day.
+    await run('2026-11-04T05:00:00Z');
+    expect(postedEmbeds()).toHaveLength(2);
   });
 
   it('retries the next minute when reading the events fails after the claim', async () => {
