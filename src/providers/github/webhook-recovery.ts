@@ -117,11 +117,12 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
     const now = Date.now();
     const lease = now + 5 * MINUTE_MS;
     const scan = await db
-      .prepare(`INSERT INTO webhook_recovery_scan (singleton, next_scan_at) VALUES (1, ?)
-       ON CONFLICT (singleton) DO UPDATE SET next_scan_at = excluded.next_scan_at
+      .prepare(`INSERT INTO webhook_recovery_scan (singleton, next_scan_at, walk_started_at) VALUES (1, ?, ?)
+       ON CONFLICT (singleton) DO UPDATE SET next_scan_at = excluded.next_scan_at,
+         walk_started_at = COALESCE(webhook_recovery_scan.walk_started_at, excluded.walk_started_at)
        WHERE webhook_recovery_scan.next_scan_at <= ?
        RETURNING cursor`)
-      .bind(lease, now)
+      .bind(lease, now, now)
       .first<{ cursor: string | null }>();
     if (!scan) return;
 
@@ -164,7 +165,7 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
       } else if (scan.cursor !== null && (page.status === 400 || page.status === 422)) {
         await db
           .prepare(
-            'UPDATE webhook_recovery_scan SET cursor = NULL WHERE singleton = 1 AND next_scan_at = ?'
+            'UPDATE webhook_recovery_scan SET cursor = NULL, walk_started_at = NULL WHERE singleton = 1 AND next_scan_at = ?'
           )
           .bind(lease)
           .run();
@@ -284,11 +285,24 @@ export async function recoverWebhooks(db: D1DatabaseLike, app: GitHubAppConfig):
         .prepare(`DELETE FROM webhook_recovery_attempts WHERE guid IN (
          SELECT guid FROM webhook_recovery_attempts WHERE expires_at < ? ORDER BY expires_at LIMIT ?)`)
         .bind(now, PAGE_SIZE),
-      db
-        .prepare(
-          'UPDATE webhook_recovery_scan SET cursor = ?, checkpoint_at = ? WHERE singleton = 1 AND next_scan_at = ?'
-        )
-        .bind(missing.length > MAX_REQUESTS ? scan.cursor : next, Date.now(), lease),
+      // If we still owe this page another pass, a null cursor is not a finished walk.
+      missing.length > MAX_REQUESTS
+        ? db
+            .prepare(
+              'UPDATE webhook_recovery_scan SET cursor = ? WHERE singleton = 1 AND next_scan_at = ?'
+            )
+            .bind(scan.cursor, lease)
+        : next === null
+          ? db
+              .prepare(`UPDATE webhook_recovery_scan SET cursor = NULL,
+              completed_walk_started_at = walk_started_at, walk_started_at = NULL
+              WHERE singleton = 1 AND next_scan_at = ?`)
+              .bind(lease)
+          : db
+              .prepare(
+                'UPDATE webhook_recovery_scan SET cursor = ? WHERE singleton = 1 AND next_scan_at = ?'
+              )
+              .bind(next, lease),
     ]);
     if (requested > 0)
       logger.info('webhook_recovery.requested', {

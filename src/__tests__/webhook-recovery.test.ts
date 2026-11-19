@@ -355,8 +355,8 @@ describe('scheduled webhook recovery', () => {
     });
   });
 
-  // A late digest used to seal its window before a successful replay POST's callback arrived.
-  it('holds a catch-up until a scan checkpoints and asynchronous callbacks have had time to arrive', async () => {
+  // A clean head page used to release the digest before the next page's missing event arrived.
+  it('holds a catch-up through a clean first page and includes the recovered second-page event', async () => {
     const digests: string[] = [];
     let replayRequests = 0;
     vi.stubGlobal(
@@ -370,8 +370,13 @@ describe('scheduled webhook recovery', () => {
           return Promise.resolve(Response.json({ id: '123' }));
         }
         if (address.startsWith(LIST) && init.method === 'GET') {
+          if (new URL(address).searchParams.get('cursor') === 'p2') {
+            return Promise.resolve(Response.json([delivery(1, 'callback')]));
+          }
           return Promise.resolve(
-            Response.json(replayRequests === 0 ? [delivery(1, 'callback')] : [])
+            Response.json([delivery(2, 'already-present', { status: 'OK', status_code: 200 })], {
+              headers: { Link: `<${LIST}?cursor=p2>; rel="next"` },
+            })
           );
         }
         if (address.startsWith(LIST)) {
@@ -388,20 +393,24 @@ describe('scheduled webhook recovery', () => {
     await cron('2026-11-20T09:59:00Z');
     expect(digests).toEqual([]);
     await cron('2026-11-20T10:00:00Z');
-    expect(replayRequests).toBe(1);
+    expect(replayRequests).toBe(0);
     await cron('2026-11-20T10:01:00Z');
     expect(digests).toEqual([]);
-    expect(await webhook('callback', star(81))).toBe(202);
-    await cron('2026-11-20T10:19:00Z');
+    await cron('2026-11-20T10:10:00Z');
+    expect(replayRequests).toBe(1);
+    await cron('2026-11-20T10:11:00Z');
     expect(digests).toEqual([]);
-    await cron('2026-11-20T10:20:00Z');
+    expect(await webhook('callback', star(81))).toBe(202);
+    await cron('2026-11-20T10:29:00Z');
+    expect(digests).toEqual([]);
+    await cron('2026-11-20T10:30:00Z');
     expect(digests).toEqual(['2 new stars\n\n**[myorg/cli](https://github.com/myorg/cli)** ⭐ +2']);
-    await cron('2026-11-20T10:21:00Z');
+    await cron('2026-11-20T10:31:00Z');
     expect(digests).toHaveLength(1);
   });
 
-  // An idle recovery page should release a waiting digest before the fallback timer ends.
-  it('sends after a newer checkpoint when there was no recent replay', async () => {
+  // Finishing a walk begun before the digest started waiting is not enough to release it.
+  it('sends early only after a whole walk that started after the wait', async () => {
     const digests: string[] = [];
     vi.stubGlobal(
       'fetch',
@@ -412,8 +421,12 @@ describe('scheduled webhook recovery', () => {
           if (embed.title.includes('Daily pulse')) digests.push(embed.title);
           return Promise.resolve(Response.json({ id: '123' }));
         }
-        if (address.startsWith(LIST) && init.method === 'GET')
-          return Promise.resolve(Response.json([]));
+        if (address.startsWith(LIST) && init.method === 'GET') {
+          const headers = new URL(address).searchParams.has('cursor')
+            ? {}
+            : { Link: `<${LIST}?cursor=p2>; rel="next"` };
+          return Promise.resolve(Response.json([], { headers }));
+        }
         if (address.endsWith('/access_tokens'))
           return Promise.resolve(new Response(null, { status: 503 }));
         throw new Error('Unexpected external request');
@@ -421,11 +434,14 @@ describe('scheduled webhook recovery', () => {
     );
     vi.setSystemTime(new Date('2026-11-19T10:00:00Z'));
     expect(await webhook('already-present', star(80))).toBe(202);
-    await cron('2026-11-20T09:58:00Z');
+    await cron('2026-11-20T09:50:00Z');
     await cron('2026-11-20T09:59:00Z');
-    expect(digests).toEqual([]);
     await cron('2026-11-20T10:00:00Z');
     await cron('2026-11-20T10:01:00Z');
+    expect(digests).toEqual([]);
+    await cron('2026-11-20T10:10:00Z');
+    await cron('2026-11-20T10:20:00Z');
+    await cron('2026-11-20T10:21:00Z');
     expect(digests).toEqual(['📊 Daily pulse · Fri 20 Nov']);
   });
 

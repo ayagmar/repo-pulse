@@ -1,5 +1,7 @@
 import type { D1DatabaseLike } from './d1-types.js';
 
+const RECENT_RECOVERY_MS = 20 * 60_000;
+
 /**
  * Records which providers were sent each digest. A provider claims a digest before
  * posting it, so two overlapping cron runs cannot both post.
@@ -23,14 +25,14 @@ export class D1DigestLog {
     const claimedAt = now.toISOString();
     const claimed = await this.db
       .prepare(
-        `WITH input(digest_id, provider_name, claimed_at, now_ms, recent_since) AS (VALUES (?, ?, ?, ?, ?)),
+        `WITH input(digest_id, provider_name, claimed_at, now_ms, recent_since, wait_since) AS (VALUES (?, ?, ?, ?, ?, ?)),
          readiness AS MATERIALIZED (
            SELECT input.*, CASE WHEN recent_since IS NOT NULL AND previous.retry_at IS NULL AND (
              EXISTS (SELECT 1 FROM webhook_recovery_attempts WHERE last_requested_at > recent_since)
              OR (previous.recovery_wait_at IS NULL OR (
-               previous.recovery_wait_at > recent_since AND NOT EXISTS (
+               previous.recovery_wait_at > wait_since AND NOT EXISTS (
                  SELECT 1 FROM webhook_recovery_scan WHERE singleton = 1
-                   AND checkpoint_at > previous.recovery_wait_at
+                   AND completed_walk_started_at > previous.recovery_wait_at
                )
              ))
            ) THEN COALESCE(previous.recovery_wait_at, now_ms) END AS wait_at
@@ -52,7 +54,8 @@ export class D1DigestLog {
         provider,
         claimedAt,
         now.getTime(),
-        recoveryGraceMs > 0 ? now.getTime() - recoveryGraceMs : null,
+        recoveryGraceMs > 0 ? now.getTime() - RECENT_RECOVERY_MS : null,
+        now.getTime() - recoveryGraceMs,
         new Date(now.getTime() - leaseMs).toISOString()
       )
       .first<{ waitAt: number | null }>();

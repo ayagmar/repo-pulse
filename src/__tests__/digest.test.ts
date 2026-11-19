@@ -469,7 +469,7 @@ describe('digests', () => {
       expect(acceptedPosts).toBe(1);
       expect(read).toHaveBeenCalledTimes(1);
       await sendDueDigests(env, new Date('2026-10-15T10:00:00Z'));
-      await sendDueDigests(env, new Date('2026-10-15T10:20:00Z'));
+      await sendDueDigests(env, new Date('2026-10-15T11:00:00Z'));
       expect(acceptedPosts).toBe(2);
       expect(read).toHaveBeenCalledTimes(2);
     }
@@ -508,7 +508,7 @@ describe('digests', () => {
     await record(env, '2026-10-14T12:00:00Z', [star('cli')]);
     const read = vi.spyOn(D1EventHistory.prototype, 'listActivityBetween');
     fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
-    for (const at of ['21:40', '22:00', '22:01', '22:10', '22:59']) {
+    for (const at of ['21:00', '22:00', '22:01', '22:10', '22:59']) {
       await sendDueDigests(env, new Date(`2026-10-15T${at}:00Z`));
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -531,11 +531,11 @@ describe('digests', () => {
       await sendDueDigests(env, new Date());
     };
     await run('2026-11-02T22:00:00Z');
-    await run('2026-11-02T22:19:00Z');
-    // The scan is unavailable: the 20-minute fallback still allows both sends.
+    await run('2026-11-02T22:59:00Z');
+    // The scan is unavailable: the one-hour fallback still allows both sends.
     expect(postedEmbeds()).toHaveLength(0);
-    await run('2026-11-02T22:20:00Z');
-    await run('2026-11-02T22:21:00Z');
+    await run('2026-11-02T23:00:00Z');
+    await run('2026-11-02T23:01:00Z');
     expect(postedEmbeds()).toMatchObject([
       {
         title: '📊 Daily pulse · Mon 2 Nov',

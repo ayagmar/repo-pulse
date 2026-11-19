@@ -2,7 +2,8 @@ CREATE TABLE webhook_recovery_scan (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   cursor TEXT,
   next_scan_at INTEGER NOT NULL,
-  checkpoint_at INTEGER
+  walk_started_at INTEGER,
+  completed_walk_started_at INTEGER
 );
 
 CREATE TABLE webhook_recovery_attempts (
